@@ -2,7 +2,17 @@
 "use strict";
 
 const $app = document.getElementById("app");
-let serverCaps = {};   // 서버가 지원하는 기능 (안드로이드 앱: MEGA, 출연자 프로필 등)
+let serverCaps = {};
+let typingSearch = false;   // 검색어 입력 때문에 화면을 다시 그리는 중인지
+
+/** 검색어를 입력하던 중에만 검색창에 커서를 되돌림 (탭을 열 때 키보드가 저절로 뜨지 않게) */
+function keepTypingFocus(input) {
+  if (!typingSearch) return;
+  typingSearch = false;
+  input.focus({ preventScroll: true });
+  const n = input.value.length;
+  try { input.setSelectionRange(n, n); } catch (e) {}
+}   // 서버가 지원하는 기능 (안드로이드 앱: MEGA, 출연자 프로필 등)
 
 // ---------------------------------------------------------------- helpers
 function h(tag, attrs, ...kids) {
@@ -158,7 +168,7 @@ async function renderLibrary(params) {
   let searchTimer;
   const search = h("input", { type: "search", class: "search", placeholder: "제목, 태그, 출연자, 경로 검색",
     value: params.get("q") || "",
-    oninput: (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => update({ q: e.target.value }), 400); } });
+    oninput: (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 400); } });
   const sortSel = h("select", { onchange: (e) => update({ sort: e.target.value, order: null }) },
     SORT_OPTIONS.map(([v, l]) => h("option", { value: v, selected: v === sort }, l)));
   const orderBtn = h("button", { class: "btn", title: "정렬 방향", hidden: sort === "random",
@@ -203,7 +213,7 @@ async function renderLibrary(params) {
       : "");
   }
   await load();
-  search.focus({ preventScroll: true });
+  keepTypingFocus(search);
 }
 
 // ---------------------------------------------------------------- 보기 방식 (그리드 / 이미지 벽)
@@ -267,7 +277,7 @@ async function renderPhotos(params) {
   }
   let t;
   const search = h("input", { type: "search", class: "search", placeholder: "이름, 출연자, 폴더 검색", value: params.get("q") || "",
-    oninput: (e) => { clearTimeout(t); t = setTimeout(() => update({ q: e.target.value }), 400); } });
+    oninput: (e) => { clearTimeout(t); t = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 400); } });
   const sortSel = h("select", { "aria-label": "정렬", onchange: (e) => update({ sort: e.target.value, order: null }) },
     PHOTO_SORTS.map(([v, l]) => h("option", { value: v, selected: v === sort }, l)));
   const orderBtn = sort === "random" ? h("button", { class: "btn", onclick: () => update({ seed: Date.now() % 100000 }) }, "🔀 섞기")
@@ -313,6 +323,7 @@ async function renderPhotos(params) {
     const shown = (page - 1) * data.per + data.items.length;
     more.replaceChildren(...(shown < data.total ? [h("button", { class: "btn", onclick: () => { page++; load(); } }, `더 보기 (${shown}/${data.total})`)] : []));
   }
+  keepTypingFocus(search);
   await load();
 }
 
