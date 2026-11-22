@@ -879,6 +879,11 @@ public class Library implements HttpServer.Handler {
         return items.size();
     }
 
+    /** 직접 정한 영상 썸네일 파일 (앱 데이터 폴더, 지워지지 않음) */
+    private File coverFile(Video v) {
+        return new File(new File(ctx.getFilesDir(), "covers"), Long.toHexString(v.key.hashCode() & 0xFFFFFFFFL) + "-" + v.key.length() + ".jpg");
+    }
+
     static boolean canManageMedia(Context ctx) {
         return android.os.Build.VERSION.SDK_INT >= 31 && MediaStore.canManageMedia(ctx);
     }
@@ -1249,7 +1254,9 @@ public class Library implements HttpServer.Handler {
         o.put("rating", m.optInt("rating", 0));
         o.put("favorite", m.optBoolean("favorite", false) ? 1 : 0);
         o.put("play_count", m.optInt("play_count", 0));
-        o.put("thumbs", v.node != null ? (megaHasThumb(v.node) ? 1 : 0) : v.item != null ? 1 : N_FRAMES);
+        int thumbs = v.node != null ? (megaHasThumb(v.node) ? 1 : 0) : v.item != null ? 1 : N_FRAMES;
+        if (thumbs == 0 && coverFile(v).length() > 0) thumbs = 1;   // 직접 정한 썸네일
+        o.put("thumbs", thumbs);
         o.put("missing", 0);
         o.put("resume_pos", m.optDouble("resume_pos", 0));
         o.put("added_at", added(v));
@@ -1649,6 +1656,11 @@ public class Library implements HttpServer.Handler {
                 v = byId.get(parseLong(p.length > 2 ? p[2] : "", -1));
             }
             if (v == null) { res.error(404, "not found"); return; }
+            if (path.startsWith("/thumbs/") && (p.length <= 3 || p[3].startsWith("0.")) && coverFile(v).length() > 0) {   // 직접 정한 썸네일
+                res.header("Cache-Control", "no-cache");
+                res.send(200, "image/jpeg", readAll(new FileInputStream(coverFile(v))));
+                return;
+            }
             if (path.startsWith("/media/") && v.item != null) icloudStream(v, r, res, "1".equals(r.param("dl")));
             else if (v.item != null) icloudThumb(v, r, res);
             else if (path.startsWith("/media/") && v.node != null) megaStream(v.link, v.node, v.mime, r, res, "1".equals(r.param("dl")));
@@ -1747,6 +1759,31 @@ public class Library implements HttpServer.Handler {
                     meta.put("resume_pos", pb.optDouble("pos", 0));
                     if (pb.optDouble("duration", 0) > 0) meta.put("duration", pb.optDouble("duration"));
                     if (pb.optInt("width", 0) > 0 && pb.optInt("height", 0) > 0) { meta.put("width", pb.optInt("width")); meta.put("height", pb.optInt("height")); }
+                    save();
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
+                if (action.equals("cover")) {   // 영상 썸네일 직접 정하기 (화면에서 고른 장면 JPEG) / 되돌리기
+                    File f = coverFile(v);
+                    if (m.equals("DELETE")) {
+                        f.delete();
+                        meta.remove("cover_at");
+                        save();
+                        res.json(200, "{\"ok\":true}");
+                        return;
+                    }
+                    String img = body(r).optString("image", "");
+                    int comma = img.indexOf(',');
+                    byte[] jpg;
+                    try {
+                        jpg = android.util.Base64.decode(comma >= 0 ? img.substring(comma + 1) : img, android.util.Base64.DEFAULT);
+                    } catch (IllegalArgumentException e) {
+                        jpg = new byte[0];
+                    }
+                    if (jpg.length < 100) { res.error(400, "이미지를 받지 못했습니다"); return; }
+                    f.getParentFile().mkdirs();
+                    try (FileOutputStream o = new FileOutputStream(f)) { o.write(jpg); }
+                    meta.put("cover_at", System.currentTimeMillis() / 1000);
                     save();
                     res.json(200, "{\"ok\":true}");
                     return;

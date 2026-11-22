@@ -795,3 +795,47 @@ body.selecting .yt .yt-thumb::before { opacity: 1; }
 .sq.sel img, .tile.sel img, .yt.sel .yt-thumb img { transform: scale(.93); border-radius: 10px; transition: transform .2s var(--ease), border-radius .2s ease; }
 .yt.sel .yt-thumb { border-radius: 14px; }
 .yt .yt-thumb { transition: border-radius .2s ease; }
+
+/* ---------- 영상 정보 상자가 영상을 가리지 않게 ---------- */
+.vcard { margin-top: 12px !important; }
+
+/* ---------- 영상 재생 조작부 (처음엔 숨김, 누르면 나타남) ---------- */
+.player.vp { position: relative; background: #000; }
+.player.vp video { display: block; width: 100%; }
+.vp-ui { position: absolute; inset: 0; opacity: 0; pointer-events: none; transition: opacity .22s ease; }
+.player.vp.ui-on .vp-ui { opacity: 1; pointer-events: auto; }
+.vp-ui::before { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 70px; background: linear-gradient(transparent, rgba(0,0,0,.55)); pointer-events: none; }
+.vp-center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 54px; height: 54px; border-radius: 27px; border: 0;
+  background: rgba(0,0,0,.45); color: #fff; display: grid; place-items: center; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.vp-center .ico { width: 24px; height: 24px; }
+.vp-bottom { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 8px; padding: 6px 8px 8px; color: #fff; }
+.vp-btn { width: 36px; height: 36px; border: 0; background: none; color: #fff; display: grid; place-items: center; flex: none; }
+.vp-btn .ico { width: 20px; height: 20px; }
+.vp-time { font-size: 12px; font-variant-numeric: tabular-nums; flex: none; }
+.vp-track { flex: 1; height: 28px; display: flex; align-items: center; position: relative; touch-action: none; cursor: pointer; }
+.vp-rail { position: relative; width: 100%; height: 4px; border-radius: 2px; background: rgba(255,255,255,.3); }
+.vp-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 2px; background: var(--accent); }
+.vp-fill::after { content: ""; position: absolute; right: -7px; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 7px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+.vp-track.dragging .vp-rail { height: 6px; }
+.player.vp:fullscreen { display: flex; align-items: center; justify-content: center; width: 100vw; height: 100vh; }
+.player.vp:fullscreen video { max-height: 100vh; width: 100%; height: 100%; object-fit: contain; }
+
+/* ---------- 끄는 위치 미리보기 ---------- */
+.scrub { touch-action: none; }
+.scrub-bubble { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; gap: 4px;
+  pointer-events: none; z-index: 5; }
+.scrub.dragging .scrub-bubble { display: flex; }
+.scrub-bubble canvas { width: 176px; height: auto; max-height: 220px; border-radius: 10px; background: #111; border: 2px solid #fff; box-shadow: 0 6px 20px rgba(0,0,0,.45); display: none; }
+.scrub-bubble.has-img canvas { display: block; }
+.scrub-time { color: #fff; font-size: 13px; font-weight: 700; background: rgba(0,0,0,.6); padding: 2px 8px; border-radius: 8px; font-variant-numeric: tabular-nums; }
+
+/* 숏폼 아래 막대: 손가락으로 잡기 쉽게 높이를 키움 */
+.short .sbar-wrap { height: 26px !important; background: none !important; display: flex; align-items: center; }
+.short .sbar-wrap::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1.5px; background: rgba(255,255,255,.25); border-radius: 2px; }
+.short .sbar { position: relative; height: 3px; border-radius: 2px; transition: height .15s ease; }
+.short .sbar-wrap.dragging .sbar, .short .sbar-wrap.dragging::before { height: 6px; }
+.short .sbar-wrap .sbar::after { content: ""; position: absolute; right: -6px; top: 50%; width: 12px; height: 12px; margin-top: -6px; border-radius: 6px; background: #fff; opacity: 0; transition: opacity .15s ease; }
+.short .sbar-wrap.dragging .sbar::after { opacity: 1; }
+.vp-track .scrub-bubble canvas { width: 144px; }
+.player.vp { overflow: visible; }
+.player.vp video { border-radius: inherit; }

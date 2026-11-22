@@ -119,6 +119,72 @@ document.addEventListener("click", (e) => {
 try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme); } catch (e) {}
 applyTheme();
 
+/** 막대를 끌어서 재생 위치를 옮기고, 끄는 동안 그 위치의 장면을 미리 보여 줌.
+ *  미리보기는 같은 영상을 보이지 않게 하나 더 열어 그 위치로 옮긴 뒤 그림으로 그림 (기기·MEGA·iCloud 모두). */
+function attachScrub(track, fill, { duration, onSeek, previewSrc, onDrag }) {
+  track.classList.add("scrub");
+  const canvas = h("canvas", { width: 176, height: 99 });
+  const label = h("span", { class: "scrub-time" });
+  const bubble = h("div", { class: "scrub-bubble", "aria-hidden": "true" }, canvas, label);
+  track.append(bubble);
+  let pv = null, want = null, busy = false, dragging = false, lastT = 0;
+  const draw = () => {
+    if (!pv || !pv.videoWidth) return;
+    const w = 176, hgt = Math.round(Math.min(220, (w * pv.videoHeight) / pv.videoWidth));
+    if (canvas.height !== hgt) canvas.height = hgt;
+    try { canvas.getContext("2d").drawImage(pv, 0, 0, w, hgt); bubble.classList.add("has-img"); } catch (e) {}
+  };
+  const seekPreview = (t) => {
+    const src = previewSrc && previewSrc();
+    if (!src) return;
+    if (!pv) {
+      pv = document.createElement("video");
+      pv.muted = true; pv.preload = "auto"; pv.playsInline = true; pv.src = src;
+      pv.addEventListener("seeked", () => { busy = false; draw(); if (want != null && Math.abs(want - pv.currentTime) > 0.5) { const t2 = want; want = null; seekPreview(t2); } });
+      pv.addEventListener("loadeddata", draw);
+    }
+    if (busy) { want = t; return; }   // 앞의 장면을 그리는 중이면 마지막 위치만 기억
+    busy = true; want = null;
+    try { pv.currentTime = t; } catch (e) { busy = false; }
+    setTimeout(() => { busy = false; }, 1500);
+  };
+  const at = (clientX) => {
+    const r = track.getBoundingClientRect();
+    const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    const d = duration() || 0;
+    return { f, t: f * d, x: f * r.width, w: r.width };
+  };
+  const move = (clientX) => {
+    const { f, t, x, w } = at(clientX);
+    lastT = t;
+    fill.style.width = `${f * 100}%`;
+    label.textContent = fmtDur(t);
+    bubble.style.left = `${Math.min(w - 92, Math.max(92, x))}px`;
+    seekPreview(t);
+    if (onDrag) onDrag(t);
+  };
+  track.addEventListener("pointerdown", (e) => {
+    if (!(duration() > 0)) return;
+    e.preventDefault(); e.stopPropagation();
+    dragging = true;
+    try { track.setPointerCapture(e.pointerId); } catch (er) {}
+    track.classList.add("dragging");
+    move(e.clientX);
+  });
+  track.addEventListener("pointermove", (e) => { if (dragging) { e.preventDefault(); move(e.clientX); } });
+  const end = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    track.classList.remove("dragging");
+    bubble.classList.remove("has-img");
+    onSeek(lastT);
+  };
+  track.addEventListener("pointerup", end);
+  track.addEventListener("pointercancel", end);
+  track.addEventListener("click", (e) => e.stopPropagation());
+  return { isDragging: () => dragging };
+}
+
 /** 아래에서 올라오는 창 (뒤로 가기로 닫힘). 돌려주는 close() 로 닫음 */
 function openSheet(title, body, foot) {
   const sheet = h("section", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title },
@@ -411,7 +477,7 @@ function finishTabSwipe() {
   let sx = 0, sy = 0, t0 = 0, mode = null, from = null, dx = 0;
   const W = () => window.innerWidth;
   const blocked = (tgt) => {
-    if (tgt.closest("input, textarea, select, .sheet, .viewer, .modal")) return true;
+    if (tgt.closest("input, textarea, select, .sheet, .viewer, .modal, .scrub")) return true;
     for (let n = tgt; n && n !== document.body; n = n.parentElement) {   // 가로로 스크롤되는 줄은 그 줄이 먼저
       if (n.scrollWidth > n.clientWidth + 4) { const ox = getComputedStyle(n).overflowX; if (ox === "auto" || ox === "scroll") return true; }
     }
@@ -1278,7 +1344,7 @@ async function renderVideo(id, params) {
   let mode = v.direct_play || !canTranscode ? "direct" : "transcode";
   let offset = 0;           // 호환 모드에서 스트림 시작 지점
   let counted = false;
-  const video = h("video", { controls: true, playsinline: true, preload: "metadata", poster: v.thumbs ? thumbUrl(v.id, 0, v.thumbs) : null });
+  const video = h("video", { playsinline: true, preload: "metadata", poster: v.thumbs ? thumbUrl(v.id, 0, v.thumbs) : null });
   player = video;
   const seek = h("input", { type: "range", min: 0, max: Math.floor(v.duration || 0), step: 1, value: 0 });
   const seekLabel = h("span", { class: "meta" }, "0:00");
@@ -1290,6 +1356,7 @@ async function renderVideo(id, params) {
   } });
 
   const currentTime = () => (mode === "transcode" ? offset : 0) + (video.currentTime || 0);
+  let onAutoplayBlocked = () => {};   // 자동 재생이 막히면 조작부를 보여 줌 (아래에서 정함)
   function setMode(m, t = 0, autoplay = false) {
     mode = m;
     if (m === "direct") {
@@ -1303,7 +1370,7 @@ async function renderVideo(id, params) {
     seekRow.hidden = m !== "transcode";
     modeNote.textContent = m === "direct" ? "원본 재생" : "호환 모드 (실시간 변환 · 아래 막대로 이동)";
     modeBtn.textContent = m === "direct" ? "재생이 안 되면: 호환 모드" : "원본으로 재생";
-    if (autoplay) video.play().catch(() => {});
+    if (autoplay) video.play().catch(() => onAutoplayBlocked());
   }
   function seekTo(t, play = true) {
     if (mode === "transcode") setMode("transcode", t, play);
@@ -1352,6 +1419,56 @@ async function renderVideo(id, params) {
   const resume = v.resume_pos > 5 && !params.get("t")
     ? h("button", { class: "btn sm", onclick: (e) => { e.target.remove(); seekTo(v.resume_pos); } }, `▶ ${fmtDur(v.resume_pos)}부터 이어보기`)
     : null;
+
+  // --- 재생 조작부: 처음에는 아무것도 가리지 않고, 화면을 누르면 나타났다가 잠시 뒤 사라짐
+  const svgIco = (d) => { const sp = document.createElement("span"); sp.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`; return sp.firstChild; };
+  const PLAY = '<path d="M7 4.5l13 7.5-13 7.5z" fill="currentColor" stroke="none"/>', PAUSE = '<rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/>';
+  const centerBtn = h("button", { class: "vp-center", "aria-label": "재생/일시정지" });
+  const playBtn = h("button", { class: "vp-btn", "aria-label": "재생/일시정지" });
+  const timeEl = h("span", { class: "vp-time" }, "0:00");
+  const fill = h("div", { class: "vp-fill" });
+  const track = h("div", { class: "vp-track" }, h("div", { class: "vp-rail" }, fill));
+  const fsBtn = h("button", { class: "vp-btn", "aria-label": "전체 화면" }, svgIco('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'));
+  const ui = h("div", { class: "vp-ui" }, centerBtn, h("div", { class: "vp-bottom" }, playBtn, timeEl, track, fsBtn));
+  const playerBox = h("div", { class: "player vp" }, video, ui);
+  const dur = () => v.duration || (isFinite(video.duration) ? video.duration : 0);
+  const drawPlay = () => {
+    const d = video.paused ? PLAY : PAUSE;
+    centerBtn.replaceChildren(svgIco(d)); playBtn.replaceChildren(svgIco(d));
+    playerBox.classList.toggle("paused", video.paused);
+  };
+  let hideTimer;
+  const showUi = (stay) => {
+    playerBox.classList.add("ui-on");
+    clearTimeout(hideTimer);
+    if (!stay && !video.paused) hideTimer = setTimeout(() => { if (!scrub.isDragging()) playerBox.classList.remove("ui-on"); }, 2800);
+  };
+  const togglePlay = () => { if (video.paused) video.play().catch(() => {}); else video.pause(); showUi(); };
+  centerBtn.onclick = (e) => { e.stopPropagation(); togglePlay(); };
+  playBtn.onclick = (e) => { e.stopPropagation(); togglePlay(); };
+  fsBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else if (playerBox.requestFullscreen) playerBox.requestFullscreen().catch(() => video.webkitEnterFullscreen && video.webkitEnterFullscreen());
+    else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+  };
+  playerBox.addEventListener("click", () => { if (playerBox.classList.contains("ui-on")) { playerBox.classList.remove("ui-on"); clearTimeout(hideTimer); } else showUi(); });
+  video.addEventListener("play", () => { drawPlay(); if (playerBox.classList.contains("ui-on")) showUi(); });
+  video.addEventListener("pause", () => { drawPlay(); showUi(true); });
+  video.addEventListener("timeupdate", () => {
+    if (scrub.isDragging()) return;
+    const d = dur(), t = currentTime();
+    fill.style.width = d ? `${Math.min(100, (t / d) * 100)}%` : "0";
+    timeEl.textContent = `${fmtDur(t)} / ${fmtDur(d)}`;
+  });
+  const scrub = attachScrub(track, fill, {
+    duration: dur,
+    onSeek: (t) => { seekTo(t, !video.paused); showUi(); },
+    previewSrc: () => (mode === "direct" ? `/media/${v.id}` : null),
+    onDrag: () => showUi(true),
+  });
+  drawPlay();
+  onAutoplayBlocked = () => { drawPlay(); showUi(true); };
 
   // --- 아래 정보: 평소에는 간단히, ‘수정’을 누르면 고칠 수 있게
   let editing = false;
@@ -1456,12 +1573,29 @@ async function renderVideo(id, params) {
       if (!confirm(`파일을 휴대폰에서 완전히 삭제합니다.\n${v.filename}\n\n되돌릴 수 없습니다. 계속할까요?`)) return;
       await api(`videos/${v.id}?file=1`, { method: "DELETE" }); toast("파일을 삭제했습니다"); location.hash = "#/";
     } }, "파일 삭제");
+    const coverBtn = h("button", { class: "btn sm", onclick: async () => {   // 지금 보이는 장면을 썸네일로
+      if (!video.videoWidth) { toast("영상이 재생되기 시작한 뒤에 눌러 주세요"); return; }
+      const w = Math.min(1280, video.videoWidth), hh = Math.round((w * video.videoHeight) / video.videoWidth);
+      const cv = h("canvas", { width: w, height: hh });
+      try {
+        cv.getContext("2d").drawImage(video, 0, 0, w, hh);
+        await api(`videos/${v.id}/cover`, { method: "POST", body: { image: cv.toDataURL("image/jpeg", 0.88) } });
+        video.poster = cv.toDataURL("image/jpeg", 0.6);
+        toast(`${fmtDur(currentTime())} 장면을 썸네일로 정했습니다`);
+      } catch (e) { toast("썸네일을 만들지 못했습니다: " + e.message); }
+    } }, "🖼 지금 장면을 썸네일로");
+    const coverResetBtn = h("button", { class: "btn sm", onclick: async () => {
+      await api(`videos/${v.id}/cover`, { method: "DELETE" }); toast("기본 썸네일로 되돌렸습니다");
+    } }, "기본 썸네일로");
     const regenBtn = h("button", { class: "btn sm", onclick: async () => {
       await api(`videos/${v.id}/thumbs`, { method: "POST" }); toast("미리보기를 다시 만듭니다");
     } }, "미리보기 다시 만들기");
     return [
       h("div", { class: "vhead" }, h("h2", { style: "margin:0;font-size:17px" }, "영상 정보 수정"),
         h("button", { class: "btn sm primary", onclick: () => setEditing(false) }, "완료")),
+      h("div", { class: "panel" }, h("h3", {}, "썸네일"),
+        h("p", { class: "meta", style: "margin-top:0" }, "영상을 원하는 장면에서 멈춘 뒤 누르세요. 목록과 홈에 그 장면이 썸네일로 나옵니다."),
+        h("div", { class: "row" }, coverBtn, coverResetBtn)),
       h("div", { class: "panel" }, h("h3", {}, "제목"), titleIn,
         h("div", { class: "actions", style: "margin-top:10px" }, stars, favBtn())),
       editor("performers", allPerformers, "출연자", ""),
@@ -1476,7 +1610,7 @@ async function renderVideo(id, params) {
   function drawInfo() { infoBox.replaceChildren(...(editing ? editView() : readView()).filter(Boolean)); }
 
   $app.replaceChildren(h("div", { class: "watch1" },
-    h("div", { class: "player" }, video),
+    playerBox,
     seekRow,
     h("div", { class: "player-note" }, canTranscode ? modeNote : null, canTranscode ? modeBtn : null, resume),
     infoBox));
@@ -2057,14 +2191,20 @@ async function renderShorts(params) {
       icon.classList.remove("show");
       if (!counted) { counted = true; api(`videos/${v.id}/play`, { method: "POST" }).catch(() => {}); }
     });
-    video.addEventListener("timeupdate", () => { if (video.duration) bar.style.width = `${(video.currentTime / video.duration) * 100}%`; });
+    video.addEventListener("timeupdate", () => { if (video.duration && !el.querySelector(".scrub.dragging")) bar.style.width = `${(video.currentTime / video.duration) * 100}%`; });
+    const sbarWrap = h("div", { class: "sbar-wrap" }, bar);
+    attachScrub(sbarWrap, bar, {
+      duration: () => (isFinite(video.duration) ? video.duration : 0),
+      onSeek: (t) => { video.currentTime = t; },
+      previewSrc: () => `/media/${v.id}`,
+    });
     const el = h("section", { class: "short" }, video, h("div", { class: "sshade", "aria-hidden": "true" }), icon,
       h("div", { class: "sinfo" },
         h("a", { class: "stitle", href: `#/v/${v.id}` }, v.title),
         v.performers && v.performers.length ? h("div", { class: "sperf" }, v.performers.join(", ")) : null),
       h("div", { class: "sside" }, muteBtn,
         h("a", { class: "sbtn", href: `#/v/${v.id}`, "aria-label": "자세히" }, "ⓘ")),
-      h("div", { class: "sbar-wrap" }, bar));
+      sbarWrap);
     // 누르면 재생/일시정지
     el.addEventListener("click", (e) => {
       if (e.target.closest("a, button")) return;
