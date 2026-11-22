@@ -327,6 +327,18 @@ public class MainActivity extends Activity {
         @android.webkit.JavascriptInterface
         public void setDark(boolean dark) { ui.post(() -> applyBars(dark)); }
 
+        /** 살짝 진동 (숏폼 더블탭 하트 등) */
+        @android.webkit.JavascriptInterface
+        public void haptic() {
+            try {
+                android.os.Vibrator vib = (android.os.Vibrator) getSystemService(VIBRATOR_SERVICE);
+                if (vib == null || !vib.hasVibrator()) return;
+                if (Build.VERSION.SDK_INT >= 29) vib.vibrate(android.os.VibrationEffect.createPredefined(android.os.VibrationEffect.EFFECT_CLICK));
+                else vib.vibrate(android.os.VibrationEffect.createOneShot(25, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+            } catch (Exception ignored) {
+            }
+        }
+
         /** 웹 화면에서 재생할 수 없는 영상을 앱 내장 플레이어(ExoPlayer)로 재생 */
         @android.webkit.JavascriptInterface
         public void playNative(String id, String title, double pos) {

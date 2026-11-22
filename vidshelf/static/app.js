@@ -1752,17 +1752,10 @@ async function renderEntities(ep, label, filterKey) {
     }));
   };
   const editBtn = filterKey === "tag" && items.length ? h("button", { class: "btn" + (editing ? " primary" : ""), onclick: () => { editing = !editing; editBtn.className = "btn" + (editing ? " primary" : ""); editBtn.textContent = editing ? "완료" : "✎ 수정"; draw(); } }, editing ? "완료" : "✎ 수정") : null;
-  const autoBtn = ep === "performers" && items.some((e) => e.group !== undefined) || ep === "performers" && serverCaps.performer_info
-    ? h("button", { class: "btn", onclick: async (ev) => {
-        ev.currentTarget.disabled = true;
-        const r = await api("performers/auto", { method: "POST" });
-        toast(`영상 ${r.assigned || 0}개에 출연자를 지정했습니다. 출연자 정보는 백그라운드에서 찾습니다.`);
-        route();
-      } }, "MEGA 폴더 이름으로 출연자 지정") : null;
   $app.replaceChildren(
     h("div", { class: "toolbar" },
       h("input", { type: "search", class: "search", placeholder: `${label} 검색`, oninput: (e) => { filter = e.target.value; draw(); } }),
-      autoBtn, editBtn,
+      editBtn,
       h("span", { class: "meta" }, `${items.length}개`)),
     items.length ? grid : h("div", { class: "empty" }, `${label}이(가) 없습니다. 영상 화면에서 ${label}을(를) 추가해 보세요.`));
   draw();
@@ -2290,18 +2283,89 @@ async function renderShorts(params) {
       if (v.source === "mega" || v.source === "icloud") api("status").then((st) => show(megaQuotaText(st) || "이 영상은 여기서 바로 재생할 수 없는 형식입니다.")).catch(() => show("재생하지 못했습니다."));
       else show("이 영상은 여기서 바로 재생할 수 없는 형식입니다.");
     });
+    // 하트(즐겨찾기)와 삭제
+    const HEART = '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>';
+    const svg = (d, cls) => { const sp = document.createElement("span"); sp.innerHTML = `<svg class="ico ${cls || ""}" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`; return sp.firstChild; };
+    const favBtn = h("button", { class: "sbtn sfav", "aria-label": "즐겨찾기" }, svg(HEART));
+    const drawFav = () => { favBtn.classList.toggle("on", !!v.favorite); favBtn.setAttribute("aria-pressed", v.favorite ? "true" : "false"); };
+    const setFav = async (on) => {
+      if (!!v.favorite === on) return;
+      v.favorite = on ? 1 : 0; drawFav();
+      favBtn.classList.remove("pop"); void favBtn.offsetWidth; if (on) favBtn.classList.add("pop");
+      try { await api(`videos/${v.id}`, { method: "PATCH", body: { favorite: on } }); }
+      catch (e) { v.favorite = on ? 0 : 1; drawFav(); toast(e.message); }
+    };
+    favBtn.onclick = (e) => { e.stopPropagation(); setFav(!v.favorite); };
+    drawFav();
+    const delBtn = h("button", { class: "sbtn", "aria-label": "삭제", onclick: (e) => { e.stopPropagation(); askDelete(); } },
+      svg('<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5"/>'));
+    function askDelete() {
+      const cloud = v.source && v.source !== "local";
+      const run = async (mode) => {
+        try {
+          await api("batch", { method: "POST", body: { items: [{ kind: "video", id: v.id }], delete: mode } });
+          toast(cloud ? "목록에서 숨겼습니다" : mode === "trash" ? "휴지통으로 옮깁니다. 확인 창에서 허용하세요." : "영구 삭제합니다. 확인 창에서 허용하세요.");
+          removeItem();
+        } catch (e) { toast(e.message); }
+      };
+      const close = openSheet("이 영상 삭제", cloud ? [
+        h("p", { class: "meta", style: "margin:0" }, "MEGA·iCloud 영상은 공유 링크라 지울 수 없어서, 이 앱 목록에서만 숨깁니다 (설정 → 정리 → 숨긴 영상에서 되돌릴 수 있음)."),
+        h("button", { class: "del-opt danger", onclick: () => close(() => run("trash")) }, h("b", {}, "목록에서 숨기기")),
+      ] : [
+        h("p", { class: "meta", style: "margin:0" }, "휴대폰의 실제 파일을 지웁니다. 안드로이드가 한 번 더 확인합니다."),
+        h("button", { class: "del-opt", onclick: () => close(() => run("trash")) },
+          h("b", {}, "휴지통으로 옮기기"), h("span", { class: "meta" }, "갤러리 휴지통에서 약 30일 동안 되살릴 수 있습니다.")),
+        h("button", { class: "del-opt danger", onclick: () => { if (confirm("이 영상을 영구 삭제할까요? 되돌릴 수 없습니다.")) close(() => run("delete")); } },
+          h("b", {}, "영구 삭제"), h("span", { class: "meta" }, "바로 지워지고 되돌릴 수 없습니다.")),
+      ], [h("button", { class: "btn", style: "grid-column: 1 / -1", onclick: () => close() }, "취소")]);
+    }
+    function removeItem() {   // 지운 영상은 접히듯 사라지고 다음 영상이 올라옴
+      const k = items.findIndex((x) => x.el === el);
+      video.pause();
+      el.classList.add("gone");
+      setTimeout(() => {
+        watch.unobserve(el);
+        if (k >= 0) items.splice(k, 1);
+        setSrc({ video, v }, false);
+        el.remove();
+        active = -1;
+        const next = Math.min(Math.max(0, k), items.length - 1);
+        if (next >= 0) { items[next].el.scrollIntoView({ block: "start" }); activate(next); }
+      }, 260);
+    }
+
     const el = h("section", { class: "short" }, video, h("div", { class: "sshade", "aria-hidden": "true" }), icon, errBox,
       h("div", { class: "sinfo" },
         h("a", { class: "stitle", href: `#/v/${v.id}` }, v.title),
         v.performers && v.performers.length ? h("div", { class: "sperf" }, v.performers.join(", ")) : null),
-      h("div", { class: "sside" }, muteBtn,
+      h("div", { class: "sside" }, favBtn, delBtn, muteBtn,
         h("a", { class: "sbtn", href: `#/v/${v.id}`, "aria-label": "자세히" }, "ⓘ")),
       sbarWrap);
-    // 누르면 재생/일시정지
+    // 한 번 누르면 재생/일시정지, 두 번 빠르게 누르면 하트 (인스타처럼)
+    let tapTimer = null, lastTap = 0;
     el.addEventListener("click", (e) => {
-      if (e.target.closest("a, button")) return;
-      if (video.paused) video.play().catch(() => {}); else { video.pause(); icon.classList.add("show"); }
+      if (e.target.closest("a, button, .serr, .sbar-wrap")) return;
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        clearTimeout(tapTimer); tapTimer = null; lastTap = 0;
+        burstHeart(e.clientX, e.clientY);
+        setFav(true);
+        return;
+      }
+      lastTap = now;
+      tapTimer = setTimeout(() => {
+        tapTimer = null;
+        if (video.paused) video.play().catch(() => {}); else { video.pause(); icon.classList.add("show"); }
+      }, 260);
     });
+    function burstHeart(x, y) {
+      const r = el.getBoundingClientRect();
+      const tilt = Math.round(Math.random() * 30 - 15);
+      const big = h("div", { class: "heart-burst", "aria-hidden": "true", style: `left:${x - r.left}px;top:${y - r.top}px;--tilt:${tilt}deg` }, svg(HEART));
+      el.append(big);
+      setTimeout(() => big.remove(), 900);
+      try { if (window.VidShelfApp && VidShelfApp.haptic) VidShelfApp.haptic(); else if (navigator.vibrate) navigator.vibrate(25); } catch (er) {}
+    }
     return { v, el, video, bar, mute: muteBtn };
   }
 

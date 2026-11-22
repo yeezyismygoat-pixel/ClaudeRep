@@ -874,3 +874,22 @@ body:not(.selecting) .media-bar-row { animation: fadeIn .25s ease; }
 .serr { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; color: #fff; background: rgba(0,0,0,.55); z-index: 3; }
 .serr[hidden] { display: none; }
 .serr p { margin: 0; font-size: 15px; line-height: 1.5; }
+
+/* 숏폼: 하트 · 삭제 */
+.sbtn .ico { width: 24px; height: 24px; }
+.sfav.on { color: #ff3b5c; }
+.sfav.on .ico { fill: currentColor; }
+.sfav.pop .ico { animation: favPop .35s cubic-bezier(.3,1.6,.5,1); }
+@keyframes favPop { 0% { transform: scale(.6); } 60% { transform: scale(1.25); } 100% { transform: scale(1); } }
+.heart-burst { position: absolute; z-index: 4; width: 110px; height: 110px; margin: -55px 0 0 -55px; pointer-events: none; color: #ff3b5c;
+  filter: drop-shadow(0 4px 14px rgba(0,0,0,.35)); animation: heartBurst .85s cubic-bezier(.2,.9,.3,1) both; }
+.heart-burst .ico { width: 100%; height: 100%; fill: currentColor; stroke: none; }
+@keyframes heartBurst {
+  0% { opacity: 0; transform: rotate(var(--tilt)) scale(.2); }
+  15% { opacity: 1; transform: rotate(var(--tilt)) scale(1.15); }
+  30% { transform: rotate(var(--tilt)) scale(.95); }
+  45% { transform: rotate(var(--tilt)) scale(1); }
+  75% { opacity: 1; transform: rotate(var(--tilt)) translateY(-10px) scale(1); }
+  100% { opacity: 0; transform: rotate(var(--tilt)) translateY(-70px) scale(.7); }
+}
+.short.gone { transition: opacity .25s ease, transform .25s ease; opacity: 0; transform: scale(.94); }

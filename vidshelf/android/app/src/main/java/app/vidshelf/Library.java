@@ -140,7 +140,6 @@ public class Library implements HttpServer.Handler {
         synchronized (this) { albums = new ArrayList<>(icloudAlbums); }
         for (ICloud.Album a : albums) ICloud.load(a);   // iCloud 공유 앨범도 함께 새로 받음
         scan();
-        autoPerformers();
         lookupMissingSoon();
         megaThumbsSoon();
     }
@@ -335,49 +334,8 @@ public class Library implements HttpServer.Handler {
     }
 
     // ------------------------------------------------------------------ 출연자 자동 지정 · 정보 찾기
-    private static final Pattern FOLDER_PERSON = Pattern.compile("^\\s*[\\[［【]([^\\]］】]+)[\\]］】]\\s*(.+?)\\s*$");
     private final java.util.concurrent.atomic.AtomicBoolean lookupRunning = new java.util.concurrent.atomic.AtomicBoolean();
     private volatile String lookupStatus = "";
-
-    /** ‘[그룹] 이름’ 형식의 MEGA 폴더 안 영상에 출연자를 지정합니다. 이미 처리한 영상은 건너뜀 (사용자가 지운 출연자를 되살리지 않도록). */
-    public synchronized JSONObject autoPerformers() {
-        int assigned = 0;
-        Set<String> people = new TreeSet<>();
-        try {
-            List<Video> targets = new ArrayList<>(all);
-            targets.addAll(allPhotos);
-            for (Video v : targets) {
-                if (v.node == null) continue;
-                JSONObject m = meta(v);
-                if (m.optBoolean("auto_perf", false)) continue;
-                String[] parts = v.node.path.split("/");
-                for (int i = parts.length - 1; i >= 0; i--) {
-                    Matcher fm = FOLDER_PERSON.matcher(parts[i]);
-                    if (!fm.find()) continue;
-                    String group = fm.group(1).trim(), name = fm.group(2).trim();
-                    if (name.isEmpty()) break;
-                    JSONArray cur = entityRefs(m, "performers");
-                    JSONArray names = new JSONArray();
-                    boolean has = false;
-                    for (int k = 0; k < cur.length(); k++) {
-                        String n = cur.getJSONObject(k).optString("name");
-                        names.put(n);
-                        if (n.equalsIgnoreCase(name)) has = true;
-                    }
-                    if (!has) { names.put(name); setLinks(m, "performers", names); assigned++; }
-                    JSONObject info = performerInfo(entityId("performers", name));
-                    if (info.optString("group").isEmpty()) info.put("group", group);
-                    people.add(name);
-                    break;
-                }
-                m.put("auto_perf", true);
-            }
-            save();
-            return new JSONObject().put("assigned", assigned).put("performers", new JSONArray(people));
-        } catch (JSONException e) {
-            return new JSONObject();
-        }
-    }
 
     private synchronized JSONObject performerInfo(long id) throws JSONException {
         JSONObject all = store.optJSONObject("performer_info");
@@ -1253,6 +1211,7 @@ public class Library implements HttpServer.Handler {
         o.put("size", v.size);
         o.put("rating", m.optInt("rating", 0));
         o.put("favorite", m.optBoolean("favorite", false) ? 1 : 0);
+        o.put("source", v.source());
         o.put("play_count", m.optInt("play_count", 0));
         int thumbs = v.node != null ? (megaHasThumb(v.node) ? 1 : 0) : v.item != null ? 1 : N_FRAMES;
         if (thumbs == 0 && coverFile(v).length() > 0) thumbs = 1;   // 직접 정한 썸네일
@@ -1860,17 +1819,6 @@ public class Library implements HttpServer.Handler {
             }
         }
         if (p0.equals("performers") && parts.length >= 2) {
-            if (parts[1].equals("auto") && m.equals("POST")) {          // MEGA 폴더 이름으로 다시 지정 + 정보 찾기
-                synchronized (this) {
-                    JSONObject vids = store.optJSONObject("videos");
-                    Iterator<String> it = vids.keys();
-                    while (it.hasNext()) { JSONObject mm = vids.optJSONObject(it.next()); if (mm != null) mm.remove("auto_perf"); }
-                }
-                JSONObject r0 = autoPerformers();
-                lookupMissingSoon();
-                res.json(200, r0.toString());
-                return;
-            }
             if (parts.length == 3 && parts[2].equals("lookup") && m.equals("POST")) {   // 인터넷에서 다시 찾기 (네트워크, 잠금 밖)
                 JSONObject e = lookupPerformer(parseLong(parts[1], -1), true);
                 if (e == null) res.error(404, "not found"); else res.json(200, e.toString());
