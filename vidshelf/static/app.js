@@ -243,7 +243,7 @@ function wallTile({ href, onclick, src, ratio, badges, performers }) {
 function videoTile(v) {
   return wallTile({
     href: `#/v/${v.id}`, src: v.thumbs > 0 ? thumbUrl(v.id, 0, v.thumbs) : null,
-    ratio: v.width && v.height ? v.width / v.height : 16 / 9, performers: v.performers,
+    ratio: v.width && v.height ? v.width / v.height : 0, performers: v.performers,   // 모르면 썸네일의 실제 비율을 씀
     badges: [v.duration ? h("span", { class: "badge dur" }, fmtDur(v.duration)) : null, v.favorite ? h("span", { class: "badge fav" }, "♥") : null],
   });
 }
@@ -485,10 +485,14 @@ async function renderVideo(id, params) {
   });
   video.addEventListener("loadedmetadata", () => {
     // MEGA 영상처럼 길이를 모르는 경우 재생하면서 알게 된 길이를 저장
+    const body = {};
     if (!v.duration && mode === "direct" && isFinite(video.duration) && video.duration > 0) {
-      v.duration = video.duration; seek.max = Math.floor(v.duration);
-      api(`videos/${v.id}/progress`, { method: "POST", body: { pos: 0, duration: v.duration } }).catch(() => {});
+      v.duration = video.duration; seek.max = Math.floor(v.duration); body.duration = v.duration;
     }
+    if (!v.width && video.videoWidth) {   // 실제 해상도를 기억해 이미지 벽 비율에 사용
+      v.width = video.videoWidth; v.height = video.videoHeight; body.width = v.width; body.height = v.height;
+    }
+    if (Object.keys(body).length) api(`videos/${v.id}/progress`, { method: "POST", body: { pos: video.currentTime || 0, ...body } }).catch(() => {});
   });
   video.addEventListener("play", () => {
     if (!counted) { counted = true; api(`videos/${v.id}/play`, { method: "POST" }).catch(() => {}); }

@@ -40,7 +40,8 @@ public class Mega {
         public boolean folder;
         public long size, ts;
         public byte[] aesKey, nonce;      // 파일: 16바이트 키 + 8바이트 nonce, 폴더: 16바이트 키
-        public String thumbHandle;        // 썸네일 파일 속성 핸들 (없으면 null)
+        public String thumbHandle;        // 썸네일 파일 속성 핸들 (정사각형 120px, 없으면 null)
+        public String previewHandle;      // 미리보기 파일 속성 핸들 (원래 비율, 큰 이미지)
         public long id;                   // 라이브러리에서 쓰는 숫자 id
     }
 
@@ -160,6 +161,7 @@ public class Mega {
                 for (String part : fa.split("/")) {
                     int star = part.indexOf('*');
                     if (star > 0 && part.substring(0, star).endsWith(":0")) n.thumbHandle = part.substring(star + 1);
+                    if (star > 0 && part.substring(0, star).endsWith(":1")) n.previewHandle = part.substring(star + 1);
                 }
                 n.id = (1L << 52) | handleToLong(n.handle);
                 nodes.add(n);
@@ -313,9 +315,22 @@ public class Mega {
 
     // ------------------------------------------------------------------ thumbnails
     public static byte[] thumbnail(Link link, Node n) throws IOException {
-        if (n.thumbHandle == null) return null;
+        return fileAttr(link, n, n.thumbHandle);
+    }
+
+    /** 원래 비율을 유지한 미리보기를 먼저, 없으면 정사각형 썸네일. */
+    public static byte[] preview(Link link, Node n) throws IOException {
+        byte[] b = null;
+        if (n.previewHandle != null) {
+            try { b = fileAttr(link, n, n.previewHandle); } catch (IOException ignored) {}
+        }
+        return b != null ? b : fileAttr(link, n, n.thumbHandle);
+    }
+
+    static byte[] fileAttr(Link link, Node n, String handle) throws IOException {
+        if (handle == null) return null;
         try {
-            JSONObject r = (JSONObject) api(link, new JSONObject().put("a", "ufa").put("fah", n.thumbHandle).put("ssl", 2).put("r", 1));
+            JSONObject r = (JSONObject) api(link, new JSONObject().put("a", "ufa").put("fah", handle).put("ssl", 2).put("r", 1));
             String p = r.optString("p", "");
             if (p.isEmpty()) return null;
             HttpURLConnection c = (HttpURLConnection) new URL(p).openConnection();
@@ -324,7 +339,7 @@ public class Mega {
             c.setDoOutput(true);
             c.setRequestMethod("POST");
             try (OutputStream o = c.getOutputStream()) {
-                o.write(b64(n.thumbHandle));
+                o.write(b64(handle));
             }
             byte[] resp;
             try (InputStream in = c.getInputStream()) {

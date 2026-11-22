@@ -281,7 +281,7 @@ public class Library implements HttpServer.Handler {
             String e = ext(n.name);
             String kind = MEGA_VIDEO_EXTS.contains(e) ? "video" : mimeFor(e).startsWith("image/") ? "image" : mimeFor(e).startsWith("audio/") ? "audio" : "file";
             fi.put(new JSONObject().put("handle", n.handle).put("name", n.name).put("size", n.size).put("kind", kind)
-                    .put("id", kind.equals("video") ? n.id : JSONObject.NULL).put("thumb", n.thumbHandle != null)
+                    .put("id", kind.equals("video") ? n.id : JSONObject.NULL).put("thumb", n.thumbHandle != null || n.previewHandle != null)
                     .put("url", "/mega-file/" + index + "/" + n.handle));
         }
         return o.put("folder", new JSONObject().put("handle", cur.handle).put("name", cur.name))
@@ -422,7 +422,7 @@ public class Library implements HttpServer.Handler {
                 MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME, MediaStore.Video.Media.RELATIVE_PATH,
                 MediaStore.Video.Media.SIZE, MediaStore.Video.Media.DURATION, MediaStore.Video.Media.WIDTH,
                 MediaStore.Video.Media.HEIGHT, MediaStore.Video.Media.DATE_ADDED, MediaStore.Video.Media.DATE_MODIFIED,
-                MediaStore.Video.Media.MIME_TYPE};
+                MediaStore.Video.Media.MIME_TYPE, android.os.Build.VERSION.SDK_INT >= 30 ? MediaStore.MediaColumns.ORIENTATION : MediaStore.Video.Media._ID};
         try (Cursor c = ctx.getContentResolver().query(base, proj, null, null, null)) {
             if (c != null) {
                 while (c.moveToNext()) {
@@ -437,6 +437,10 @@ public class Library implements HttpServer.Handler {
                     v.dateAdded = c.getLong(7);
                     v.dateModified = c.getLong(8);
                     v.mime = c.getString(9);
+                    // 세로로 찍은 영상은 회전 정보가 따로 있어서, 화면비를 맞추려면 가로·세로를 바꿔야 함
+                    if (android.os.Build.VERSION.SDK_INT >= 30 && (c.getInt(10) == 90 || c.getInt(10) == 270)) {
+                        int t = v.width; v.width = v.height; v.height = t;
+                    }
                     v.uri = ContentUris.withAppendedId(base, v.id);
                     v.key = v.relPath + v.name + "|" + v.size;
                     list.add(v);
@@ -550,7 +554,8 @@ public class Library implements HttpServer.Handler {
 
     private JSONObject photoSummary(Video v) throws JSONException {
         JSONObject m = meta(v);
-        return new JSONObject().put("id", v.id).put("title", title(v)).put("width", v.width).put("height", v.height)
+        int[] wh = dims(v, m);
+        return new JSONObject().put("id", v.id).put("title", title(v)).put("width", wh[0]).put("height", wh[1])
                 .put("size", v.size).put("favorite", m.optBoolean("favorite", false) ? 1 : 0)
                 .put("performers", performerNames(m)).put("added_at", v.dateAdded).put("taken", v.taken)
                 .put("source", v.node != null ? "mega" : "local");
@@ -606,8 +611,9 @@ public class Library implements HttpServer.Handler {
         if (!f.exists() || f.length() == 0) {
             byte[] jpg = null;
             if (v.node != null) {
-                if (v.node.thumbHandle != null) jpg = Mega.thumbnail(v.link, v.node);
+                jpg = Mega.preview(v.link, v.node);
                 if (jpg == null) { megaStream(v.link, v.node, v.mime, r, res, false); return; }   // 썸네일이 없으면 원본
+                rememberPreviewSize(v, jpg);
             } else {
                 Bitmap bmp = null;
                 frameLock.acquire();
@@ -685,18 +691,41 @@ public class Library implements HttpServer.Handler {
         o.put("id", v.id);
         o.put("title", title(v));
         o.put("duration", v.node != null ? m.optDouble("duration", 0) : v.duration);
-        o.put("width", v.width);
-        o.put("height", v.height);
+        int[] wh = dims(v, m);
+        o.put("width", wh[0]);
+        o.put("height", wh[1]);
         o.put("size", v.size);
         o.put("rating", m.optInt("rating", 0));
         o.put("favorite", m.optBoolean("favorite", false) ? 1 : 0);
         o.put("play_count", m.optInt("play_count", 0));
-        o.put("thumbs", v.node != null ? (v.node.thumbHandle != null ? 1 : 0) : N_FRAMES);
+        o.put("thumbs", v.node != null ? (v.node.thumbHandle != null || v.node.previewHandle != null ? 1 : 0) : N_FRAMES);
         o.put("missing", 0);
         o.put("resume_pos", m.optDouble("resume_pos", 0));
         o.put("added_at", v.dateAdded);
         o.put("performers", performerNames(m));
         return o;
+    }
+
+    /** 화면비: 실제 해상도 → (MEGA) 재생 때 저장한 해상도 → 미리보기 이미지 크기 순. */
+    private static int[] dims(Video v, JSONObject m) {
+        if (v.width > 0 && v.height > 0) return new int[]{v.width, v.height};
+        if (m.optInt("width", 0) > 0 && m.optInt("height", 0) > 0) return new int[]{m.optInt("width"), m.optInt("height")};
+        return new int[]{m.optInt("pw", 0), m.optInt("ph", 0)};
+    }
+
+    /** 미리보기 JPEG 의 크기를 비율 정보로 저장. */
+    private synchronized void rememberPreviewSize(Video v, byte[] jpg) {
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        android.graphics.BitmapFactory.decodeByteArray(jpg, 0, jpg.length, o);
+        if (o.outWidth > 0 && o.outHeight > 0 && o.outWidth != o.outHeight) {   // 정사각형 썸네일은 비율 정보가 아님
+            try {
+                JSONObject m = meta(v);
+                m.put("pw", o.outWidth);
+                m.put("ph", o.outHeight);
+                save();
+            } catch (JSONException ignored) {}
+        }
     }
 
     private JSONArray entityRefs(JSONObject m, String field) throws JSONException {
@@ -1117,6 +1146,7 @@ public class Library implements HttpServer.Handler {
                     JSONObject pb = body(r);
                     meta.put("resume_pos", pb.optDouble("pos", 0));
                     if (pb.optDouble("duration", 0) > 0) meta.put("duration", pb.optDouble("duration"));
+                    if (pb.optInt("width", 0) > 0 && pb.optInt("height", 0) > 0) { meta.put("width", pb.optInt("width")); meta.put("height", pb.optInt("height")); }
                     save();
                     res.json(200, "{\"ok\":true}");
                     return;
@@ -1473,11 +1503,12 @@ public class Library implements HttpServer.Handler {
     }
 
     private void megaThumb(Video v, int n, HttpServer.Request r, HttpServer.Response res) throws IOException {
-        if (n != 0 || v.node.thumbHandle == null) { res.error(404, "no frame"); return; }
-        File f = new File(new File(thumbDir, "mega"), v.node.handle + ".jpg");
+        if (n != 0 || (v.node.thumbHandle == null && v.node.previewHandle == null)) { res.error(404, "no frame"); return; }
+        File f = new File(new File(thumbDir, "mega"), v.node.handle + "-p.jpg");
         if (!f.exists() || f.length() == 0) {
-            byte[] jpg = Mega.thumbnail(v.link, v.node);
+            byte[] jpg = Mega.preview(v.link, v.node);
             if (jpg == null) { res.error(404, "no thumbnail"); return; }
+            rememberPreviewSize(v, jpg);
             f.getParentFile().mkdirs();
             try (FileOutputStream o = new FileOutputStream(f)) { o.write(jpg); }
         }
@@ -1496,7 +1527,7 @@ public class Library implements HttpServer.Handler {
             try {
                 if (n == 0) {
                     try {
-                        bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(480, 270), null);
+                        bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(640, 640), null);   // 비율 유지 (세로 영상도)
                     } catch (Exception ignored) {
                     }
                 }
