@@ -1212,6 +1212,7 @@ public class Library implements HttpServer.Handler {
         o.put("rating", m.optInt("rating", 0));
         o.put("favorite", m.optBoolean("favorite", false) ? 1 : 0);
         o.put("source", v.source());
+        if (m.optLong("last_played", 0) > 0) o.put("last_played", m.optLong("last_played"));
         o.put("play_count", m.optInt("play_count", 0));
         int thumbs = v.node != null ? (megaHasThumb(v.node) ? 1 : 0) : v.item != null ? 1 : N_FRAMES;
         if (thumbs == 0 && coverFile(v).length() > 0) thumbs = 1;   // 직접 정한 썸네일
@@ -1243,6 +1244,44 @@ public class Library implements HttpServer.Handler {
                 save();
             } catch (JSONException ignored) {}
         }
+    }
+
+    /** 시청 통계: 최근 14일 날짜별 시청 시간, 전체 시청 시간, 많이 본 출연자 */
+    private synchronized JSONObject stats() throws JSONException {
+        JSONObject log = store.optJSONObject("watch_log");
+        JSONArray days = new JSONArray();
+        java.time.LocalDate today = java.time.LocalDate.now();
+        for (int i = 13; i >= 0; i--) {
+            String d = today.minusDays(i).toString();
+            days.put(new JSONObject().put("date", d).put("secs", log == null ? 0 : log.optDouble(d, 0)));
+        }
+        double total = 0;
+        if (log != null) { Iterator<String> it = log.keys(); while (it.hasNext()) total += log.optDouble(it.next(), 0); }
+        Map<Long, double[]> per = new java.util.HashMap<>();   // 출연자 id → {재생 횟수, 본 시간}
+        int videosWatched = 0;
+        for (Video v : visible()) {
+            JSONObject m = meta(v);
+            int plays = m.optInt("play_count", 0);
+            double secs = m.optDouble("watch_secs", 0);
+            if (plays == 0 && secs == 0) continue;
+            videosWatched++;
+            JSONArray ids = m.optJSONArray("performers");
+            for (int i = 0; ids != null && i < ids.length(); i++) {
+                double[] a = per.computeIfAbsent(ids.optLong(i), k -> new double[2]);
+                a[0] += plays; a[1] += secs;
+            }
+        }
+        JSONObject names = store.optJSONObject("performers");
+        List<Map.Entry<Long, double[]>> top = new ArrayList<>(per.entrySet());
+        top.sort((x, y) -> Double.compare(y.getValue()[1] * 1000 + y.getValue()[0], x.getValue()[1] * 1000 + x.getValue()[0]));
+        JSONArray tp = new JSONArray();
+        for (Map.Entry<Long, double[]> e : top) {
+            String name = names == null ? "" : names.optString(String.valueOf(e.getKey()), "");
+            if (name.isEmpty()) continue;
+            tp.put(new JSONObject().put("id", e.getKey()).put("name", name).put("plays", (int) e.getValue()[0]).put("secs", e.getValue()[1]));
+            if (tp.length() >= 10) break;
+        }
+        return new JSONObject().put("days", days).put("total_secs", total).put("videos_watched", videosWatched).put("top_performers", tp);
     }
 
     private JSONArray entityRefs(JSONObject m, String field) throws JSONException {
@@ -1708,6 +1747,19 @@ public class Library implements HttpServer.Handler {
                     res.json(200, "{\"ok\":true}");
                     return;
                 }
+                if (action.equals("watched") && m.equals("POST")) {   // 본 시간(초) 쌓기: 영상별 + 날짜별
+                    double secs = Math.min(3600, Math.max(0, body(r).optDouble("secs", 0)));
+                    if (secs > 0) {
+                        meta.put("watch_secs", meta.optDouble("watch_secs", 0) + secs);
+                        JSONObject log = store.optJSONObject("watch_log");
+                        if (log == null) { log = new JSONObject(); store.put("watch_log", log); }
+                        String day = java.time.LocalDate.now().toString();
+                        log.put(day, log.optDouble(day, 0) + secs);
+                        save();
+                    }
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
                 if (action.equals("unplayable") && m.equals("POST")) {   // 화면에서 바로 재생할 수 없는 형식 → 숏폼에서 뺌
                     meta.put("no_web", true);
                     save();
@@ -2038,6 +2090,7 @@ public class Library implements HttpServer.Handler {
             }
             return;
         }
+        if (p0.equals("stats") && m.equals("GET")) { res.json(200, stats().toString()); return; }
         if (p0.equals("saved_filters")) {   // 저장된 필터: 이름 + 종류(전체/동영상/사진) + 조건
             JSONArray list;
             synchronized (this) {

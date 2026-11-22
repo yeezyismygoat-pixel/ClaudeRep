@@ -449,6 +449,7 @@ async function route() {
     if (path === "/photos") return await renderMedia(params, "photo");
     if (path === "/shorts") return await renderShorts(params);
     if (path === "/library") return await renderLibraryHub();
+    if (path === "/stats") return await renderStats();
     if (path === "/media") return await renderMedia(params, params.get("type") || "all");
     if (path === "/duplicates") return await renderDuplicates();
     if (path === "/hidden") return await renderHidden();
@@ -1032,10 +1033,8 @@ async function renderMedia(params0, type0) {
           const cell = photoCell(it, "wall", () => openViewer(photos, i));
           if (mode === "wall") grid.append(selectable(cell, it));
           else {   // 목록 보기: 이어지는 사진들은 이미지 벽처럼 줄지어 보여 줌
-            let run = grid.lastElementChild;
-            if (!run || !run.classList.contains("photo-run")) { run = h("div", { class: "wall photo-run" }); grid.append(run); }
-            const fb = parseFloat(cell.style.flexBasis);   // 목록 사이에서는 줄 높이를 낮춰 한 줄에 여러 장
-            if (fb) cell.style.flexBasis = `${Math.round(fb * 0.5)}px`;
+            let run = grid.lastElementChild;   // 목록 보기: 이어지는 사진은 옆으로 넘겨 보는 한 줄로
+            if (!run || !run.classList.contains("photo-strip")) { run = h("div", { class: "photo-strip" }); grid.append(run); }
             run.append(mediaTab ? cell : selectable(cell, it));
           }
         } else if (mode === "wall") {
@@ -1648,6 +1647,14 @@ async function renderVideo(id, params) {
   video.addEventListener("play", () => {
     if (!counted) { counted = true; api(`videos/${v.id}/play`, { method: "POST" }).catch(() => {}); }
   });
+  const autoNextOn = () => { try { return localStorage.getItem("vs-autonext") !== "0"; } catch (e) { return true; } };
+  const autoNextBtn = h("button", { class: "btn sm", onclick: () => {
+    const on = !autoNextOn();
+    try { localStorage.setItem("vs-autonext", on ? "1" : "0"); } catch (e) {}
+    drawAutoNext(); toast(on ? "영상이 끝나면 다음 영상을 이어서 재생합니다" : "연속 재생을 껐습니다");
+  } });
+  const drawAutoNext = () => { autoNextBtn.textContent = autoNextOn() ? "↻ 연속 재생 켬" : "연속 재생 끔"; autoNextBtn.classList.toggle("on", autoNextOn()); };
+  drawAutoNext();
   const nativeBtn = h("button", { class: "btn sm", hidden: !hasNativePlayer(), onclick: () => { video.pause(); playNative(v, currentTime()); } }, "▶ 앱 플레이어로 재생");
   window.__nativeClosed = (id, pos) => { if (String(id) === String(v.id) && pos > 0) { try { video.currentTime = pos; } catch (e) {} } };
   const goNative = (why) => {
@@ -1666,9 +1673,17 @@ async function renderVideo(id, params) {
       setMode("transcode", 0, true);
     }
   });
+  let watchedSecs = 0, lastTick = null;   // 실제로 본 시간 (통계용)
+  video.addEventListener("timeupdate", () => {
+    const t = video.currentTime;
+    if (lastTick != null && !video.paused) { const d = t - lastTick; if (d > 0 && d < 2) watchedSecs += d; }
+    lastTick = t;
+  });
+  video.addEventListener("seeking", () => { lastTick = null; });
   const saveProgress = () => {
     const t = currentTime();
     if (t > 0) api(`videos/${v.id}/progress`, { method: "POST", body: { pos: t > v.duration - 10 ? 0 : t } }).catch(() => {});
+    if (watchedSecs >= 1) { const sec = Math.round(watchedSecs); watchedSecs = 0; api(`videos/${v.id}/watched`, { method: "POST", body: { secs: sec } }).catch(() => {}); }
   };
   video.addEventListener("pause", saveProgress);
   progressTimer = setInterval(() => { if (!video.paused) saveProgress(); }, 10000);
@@ -1699,11 +1714,30 @@ async function renderVideo(id, params) {
     svgIco('<path d="M6 5v14" stroke-width="2.4"/><path d="M19 5.5L8.5 12 19 18.5z" fill="currentColor" stroke="none"/>'));
   const nextBtn = h("button", { class: "vp-skip", "aria-label": "다음 영상", disabled: !nextId, onclick: (e) => { e.stopPropagation(); goVideo(nextId); } },
     svgIco('<path d="M18 5v14" stroke-width="2.4"/><path d="M5 5.5L15.5 12 5 18.5z" fill="currentColor" stroke="none"/>'));
+  // 연속 재생: 영상이 끝나면 목록의 다음 영상으로 (몇 초 기다리는 동안 취소 가능)
+  const upNext = h("div", { class: "vp-upnext", hidden: true });
+  let upTimer = null;
+  const cancelUpNext = () => { clearInterval(upTimer); upTimer = null; upNext.hidden = true; };
+  video.addEventListener("ended", () => {
+    if (!nextId || !autoNextOn()) return;
+    let n = 5;
+    const label = h("span", {}, `${n}초 뒤 다음 영상`);
+    upNext.replaceChildren(label,
+      h("button", { class: "btn sm primary", onclick: (e) => { e.stopPropagation(); cancelUpNext(); goVideo(nextId); } }, "지금 보기"),
+      h("button", { class: "btn sm", onclick: (e) => { e.stopPropagation(); cancelUpNext(); } }, "취소"));
+    upNext.hidden = false;
+    upTimer = setInterval(() => {
+      n--;
+      if (n <= 0) { cancelUpNext(); goVideo(nextId); return; }
+      label.textContent = `${n}초 뒤 다음 영상`;
+    }, 1000);
+  });
+  video.addEventListener("play", cancelUpNext);
   const ui = h("div", { class: "vp-ui" }, fsBtn,
     h("div", { class: "vp-mid" }, prevBtn, centerBtn, nextBtn),
     h("div", { class: "vp-times" }, timeEl, remainEl));
   // 재생 막대는 항상 영상 바닥에 있고 바로 끌어서 옮길 수 있음
-  const playerBox = h("div", { class: "player vp" }, video, ui, track);
+  const playerBox = h("div", { class: "player vp" }, video, ui, track, upNext);
   const dur = () => v.duration || (isFinite(video.duration) ? video.duration : 0);
   const drawPlay = () => {
     const d = video.paused ? PLAY : PAUSE;
@@ -1725,7 +1759,33 @@ async function renderVideo(id, params) {
     else if (playerBox.requestFullscreen) playerBox.requestFullscreen().catch(() => video.webkitEnterFullscreen && video.webkitEnterFullscreen());
     else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
   };
-  playerBox.addEventListener("click", () => { if (playerBox.classList.contains("ui-on")) { playerBox.classList.remove("ui-on"); clearTimeout(hideTimer); } else showUi(); });
+  // 한 번 누르면 조작부 보이기/숨기기, 왼쪽·오른쪽을 두 번 빠르게 누르면 10초 뒤로/앞으로 (유튜브처럼)
+  let tapTimer = null, lastTapAt = 0, lastSide = 0, seekStack = 0, stackTimer = null;
+  const ripple = h("div", { class: "vp-ripple", "aria-hidden": "true" });
+  playerBox.append(ripple);
+  const toggleUi = () => { if (playerBox.classList.contains("ui-on")) { playerBox.classList.remove("ui-on"); clearTimeout(hideTimer); } else showUi(); };
+  playerBox.addEventListener("click", (e) => {
+    if (e.target.closest("button, .vp-track")) return;
+    const r = playerBox.getBoundingClientRect(), x = (e.clientX - r.left) / r.width;
+    const side = x < 0.38 ? -1 : x > 0.62 ? 1 : 0;
+    const now = Date.now();
+    if (side && side === lastSide && now - lastTapAt < 320) {   // 두 번째 탭 (계속 두드리면 10초씩 더)
+      clearTimeout(tapTimer); tapTimer = null;
+      lastTapAt = now;
+      const d = dur();
+      const t = Math.min(Math.max(0, currentTime() + side * 10), d ? d - 0.5 : Infinity);
+      seekTo(t, !video.paused);
+      seekStack += 10;
+      ripple.className = "vp-ripple show " + (side > 0 ? "right" : "left");
+      ripple.textContent = (side > 0 ? "" : "« ") + `${seekStack}초` + (side > 0 ? " »" : "");
+      clearTimeout(stackTimer);
+      stackTimer = setTimeout(() => { seekStack = 0; ripple.className = "vp-ripple"; }, 650);
+      return;
+    }
+    lastTapAt = now; lastSide = side;
+    clearTimeout(tapTimer);
+    tapTimer = setTimeout(() => { tapTimer = null; toggleUi(); }, side ? 260 : 0);
+  });
   video.addEventListener("play", () => { drawPlay(); if (playerBox.classList.contains("ui-on")) showUi(); });
   video.addEventListener("pause", () => { drawPlay(); showUi(true); });
   video.addEventListener("timeupdate", () => {
@@ -1905,7 +1965,7 @@ async function renderVideo(id, params) {
   $app.replaceChildren(h("div", { class: "watch1" },
     playerBox,
     seekRow,
-    h("div", { class: "player-note" }, canTranscode ? modeNote : null, canTranscode ? modeBtn : null, resume, nativeBtn),
+    h("div", { class: "player-note" }, canTranscode ? modeNote : null, canTranscode ? modeBtn : null, resume, nativeBtn, autoNextBtn),
     infoBox));
   drawInfo();
 }
@@ -2478,7 +2538,14 @@ async function renderShorts(params) {
       shortsMuted = !shortsMuted;
       items.forEach((it) => { it.video.muted = shortsMuted; it.mute.textContent = shortsMuted ? "🔇" : "🔊"; });
     };
-    let counted = false;
+    let counted = false, watched = 0, lastT = null;
+    video.addEventListener("timeupdate", () => {   // 본 시간 (통계용)
+      const t = video.currentTime;
+      if (lastT != null && !video.paused) { const d = t - lastT; if (d > 0 && d < 2) watched += d; }
+      lastT = t;
+    });
+    video.addEventListener("seeking", () => { lastT = null; });
+    const flush = () => { if (watched >= 1) { const sec = Math.round(watched); watched = 0; api(`videos/${v.id}/watched`, { method: "POST", body: { secs: sec } }).catch(() => {}); } };
     video.addEventListener("play", () => {
       icon.classList.remove("show");
       if (!counted) { counted = true; api(`videos/${v.id}/play`, { method: "POST" }).catch(() => {}); }
@@ -2591,7 +2658,7 @@ async function renderShorts(params) {
       setTimeout(() => big.remove(), 900);
       try { if (window.VidShelfApp && VidShelfApp.haptic) VidShelfApp.haptic(); else if (navigator.vibrate) navigator.vibrate(25); } catch (er) {}
     }
-    return { v, el, video, bar, mute: muteBtn };
+    return { v, el, video, bar, mute: muteBtn, flush };
   }
 
   const setSrc = (it, on) => {
@@ -2606,7 +2673,7 @@ async function renderShorts(params) {
     lastActive = i;
     items.forEach((it, k) => {
       setSrc(it, Math.abs(k - i) <= 1);   // 지금 영상과 앞뒤 하나만 받아 둠
-      if (k !== i) it.video.pause();
+      if (k !== i) { it.video.pause(); it.flush(); }
     });
     const it = items[i];
     it.video.play().catch(() => {   // 소리가 있는 자동 재생이 막히면 소리 없이
@@ -2634,7 +2701,7 @@ async function renderShorts(params) {
         h("p", { class: "meta" }, "MEGA 영상은 한 번 재생하거나 미리보기를 만든 뒤에 길이를 알 수 있어서, 그 전에는 여기에 나오지 않습니다.")));
     } finally { loading = false; }
   }
-  pageCleanup = () => { watch.disconnect(); items.forEach((it) => setSrc(it, false)); applyTheme(); };
+  pageCleanup = () => { watch.disconnect(); items.forEach((it) => { it.flush(); setSrc(it, false); }); applyTheme(); };
   await load();
 }
 
@@ -2671,10 +2738,75 @@ async function renderLibraryHub() {
       serverCaps.duplicates ? row("#/duplicates", "broom", "중복 영상", "같은 영상이 여러 곳에 있는지 찾기") : null,
       serverCaps.hidden_count !== undefined ? row("#/hidden", "info", "숨긴 영상", `${serverCaps.hidden_count}개`) : null),
     h("h2", { class: "set-group-title" }, "앱"),
+    h("h2", { class: "set-group-title" }, "기록"),
+    h("div", { class: "lib-list set-list" }, row("#/stats", "info", "시청 기록 · 통계", "최근 본 영상 · 시청 시간 · 많이 본 출연자")),
     h("div", { class: "lib-list set-list" }, row("#/settings", "display", "설정", "화면 · 폴더 · 클라우드 · 백업 · 비밀번호"))));
   api("performers").then((l) => (peopleN.textContent = `${l.length}명`)).catch(() => {});
   api("tags").then((l) => (tagN.textContent = `${l.length}개`)).catch(() => {});
   api("media?type=all&fav=1&per=1").then((d) => (favN.textContent = `${d.total.toLocaleString()}개`)).catch(() => {});
+}
+
+/** 시청 기록 · 통계 */
+function fmtHours(secs) {
+  const m = Math.round(secs / 60);
+  if (m < 1) return "0분";
+  if (m < 60) return `${m}분`;
+  return `${Math.floor(m / 60)}시간` + (m % 60 ? ` ${m % 60}분` : "");
+}
+async function renderStats() {
+  setTab("library");
+  const [st, recent, most, people] = await Promise.all([
+    api("stats"),
+    api("videos?sort=played&order=desc&per=30&page=1"),
+    api("videos?sort=plays&order=desc&per=12&page=1"),
+    api("performers").catch(() => []),
+  ]);
+  const days = st.days || [];
+  const week = days.slice(-7).reduce((a, d) => a + d.secs, 0);
+  const prevWeek = days.slice(0, 7).reduce((a, d) => a + d.secs, 0);
+  const today = days.length ? days[days.length - 1].secs : 0;
+  const max = Math.max(60, ...days.map((d) => d.secs));
+  const WD = ["일", "월", "화", "수", "목", "금", "토"];
+  const tile = (label, value, sub) => h("div", { class: "st-tile" }, h("span", { class: "meta" }, label), h("b", {}, value), sub ? h("span", { class: "meta" }, sub) : null);
+  const diff = week - prevWeek;
+  const chart = h("div", { class: "st-chart", role: "img", "aria-label": "최근 14일 날짜별 시청 시간" },
+    ...days.map((d, i) => {
+      const dt = new Date(d.date + "T00:00:00");
+      const isToday = i === days.length - 1;
+      return h("div", { class: "st-col" + (isToday ? " today" : ""), title: `${dt.getMonth() + 1}월 ${dt.getDate()}일 · ${fmtHours(d.secs)}` },
+        h("div", { class: "st-bar-box" }, h("div", { class: "st-bar", style: `height:${Math.max(d.secs ? 4 : 0, (d.secs / max) * 100)}%` })),
+        h("span", {}, isToday ? "오늘" : WD[dt.getDay()]));
+    }));
+  const watched = (recent.items || []).filter((v) => v.last_played);
+  const mostPlayed = (most.items || []).filter((v) => v.play_count > 0);
+  const top = st.top_performers || [];
+  const topMax = Math.max(1, ...top.map((p) => p.secs || p.plays));
+  $app.replaceChildren(h("div", { class: "statpage" },
+    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, `본 영상 ${(st.videos_watched || 0).toLocaleString()}개`), h("h1", {}, "시청 기록"))),
+    h("div", { class: "st-tiles" },
+      tile("오늘", fmtHours(today)),
+      tile("최근 7일", fmtHours(week), prevWeek || week ? (diff >= 0 ? `지난주보다 ${fmtHours(diff)} 더` : `지난주보다 ${fmtHours(-diff)} 덜`) : null),
+      tile("지금까지", fmtHours(st.total_secs || 0))),
+    h("section", { class: "panel" }, h("h3", {}, "최근 14일"), chart,
+      !week && !prevWeek ? h("p", { class: "meta" }, "영상을 보면 여기에 날짜별 시청 시간이 쌓입니다. (이번 버전부터 기록됩니다)") : null),
+    top.length ? h("section", { class: "panel" }, h("h3", {}, "많이 본 출연자"),
+      h("div", { class: "st-people" }, ...top.map((p, i) => {
+        const pf = people.find((x) => x.id === p.id) || p;
+        return h("a", { class: "st-person", href: `#/performer?id=${p.id}` },
+          h("span", { class: "st-rank" }, String(i + 1)),
+          h("span", { class: "yt-av" }, entityCover(pf, p.name.slice(0, 1))),
+          h("div", { class: "st-pmain" }, h("b", {}, p.name),
+            h("div", { class: "st-pbar" }, h("i", { style: `width:${((p.secs || p.plays) / topMax) * 100}%` })),
+            h("span", { class: "meta" }, `${p.plays}회 · ${fmtHours(p.secs || 0)}`)));
+      }))) : null,
+    h("section", {}, h("div", { class: "sec-head" }, h("h2", {}, "최근 본 영상"), h("a", { class: "more-link", href: "#/media?type=video&sort=played" }, "모두 보기 ›")),
+      watched.length ? h("div", { class: "st-history" }, ...watched.map((v) => h("a", { class: "st-hist", href: `#/v/${v.id}` },
+        h("div", { class: "thumb" }, v.thumbs > 0 ? h("img", { loading: "lazy", alt: "", src: thumbUrl(v.id, 0, v.thumbs), onerror: (e) => (e.target.hidden = true) }) : null,
+          v.duration ? h("span", { class: "badge dur" }, fmtDur(v.duration)) : null),
+        h("div", { class: "st-htext" }, h("b", {}, v.title), h("span", { class: "meta" }, `${timeAgo(v.last_played)} · ${v.play_count}회 재생`)))))
+        : h("p", { class: "meta" }, "아직 본 영상이 없습니다.")),
+    mostPlayed.length ? h("section", {}, h("div", { class: "sec-head" }, h("h2", {}, "많이 본 영상")),
+      h("div", { class: "grid" }, ...mostPlayed.map((v) => videoCard(v)))) : null));
 }
 
 function favSyncPanel(st) {
