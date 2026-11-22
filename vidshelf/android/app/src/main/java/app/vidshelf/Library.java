@@ -360,7 +360,7 @@ public class Library implements HttpServer.Handler {
                 }
                 int i = 0;
                 for (long[] t : todo) {
-                    lookupStatus = "출연자 정보 찾는 중… " + (++i) + "/" + todo.size();
+                    lookupStatus = "사람 정보 찾는 중… " + (++i) + "/" + todo.size();
                     lookupPerformer(t[0], false);
                 }
             } catch (Exception ignored) {

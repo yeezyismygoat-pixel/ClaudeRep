@@ -12,7 +12,7 @@ function keepTypingFocus(input) {
   input.focus({ preventScroll: true });
   const n = input.value.length;
   try { input.setSelectionRange(n, n); } catch (e) {}
-}   // 서버가 지원하는 기능 (안드로이드 앱: MEGA, 출연자 프로필 등)
+}   // 서버가 지원하는 기능 (안드로이드 앱: MEGA, 사람 프로필 등)
 
 // ---------------------------------------------------------------- helpers
 function h(tag, attrs, ...kids) {
@@ -88,7 +88,7 @@ function parseHash() {
 const TAB_GROUP = { videos: "media", photos: "media", media: "media", tags: "explore", performers: "explore", settings: "library", library: "library", cloud: "library" };
 const SOURCE_LABEL = { mega: "MEGA", icloud: "iCloud", local: "이 기기" };
 function setTab(name) {
-  const t = TAB_GROUP[name] || name;   // 사진·출연자·태그·설정은 ‘보관함’ 탭 안에 있음
+  const t = TAB_GROUP[name] || name;   // 사진·사람·태그·설정은 ‘보관함’ 탭 안에 있음
   document.querySelectorAll(".tabs a").forEach((a) => a.classList.toggle("on", a.dataset.tab === t));
 }
 
@@ -456,7 +456,7 @@ async function route() {
     if (path === "/" || path === "") return await renderMedia(params, "video");
     if ((m = path.match(/^\/v\/(\d+)$/))) return await renderVideo(+m[1], params);
     if (path === "/tags") return await renderEntities("tags", "태그", "tag");
-    if (path === "/performers") return await renderEntities("performers", "출연자", "performer");
+    if (path === "/performers") return await renderEntities("performers", "사람", "performer");
     if (path === "/performer") return await renderPerformer(+params.get("id"));
     if (path === "/settings") return await renderSettings({ section: params.get("section") });
     if (path === "/mega") return await renderMega(params);
@@ -500,7 +500,7 @@ async function renderLibrary(params) {
     location.hash = libHash(p);
   };
 
-  // 활성 필터(태그/출연자) 이름 표시
+  // 활성 필터(태그/사람) 이름 표시
   const filterChips = [];
   for (const [key, ep] of [["tag", "tags"], ["performer", "performers"]]) {
     for (const id of params.getAll(key)) {
@@ -516,7 +516,7 @@ async function renderLibrary(params) {
   }
 
   let searchTimer;
-  const search = h("input", { type: "search", class: "search", placeholder: "제목, 태그, 출연자, 경로 검색",
+  const search = h("input", { type: "search", class: "search", placeholder: "제목, 태그, 사람, 경로 검색",
     value: params.get("q") || "",
     oninput: (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 400); } });
   const sortSel = h("select", { onchange: (e) => update({ sort: e.target.value, order: null }) },
@@ -735,7 +735,7 @@ const selBar = h("div", { class: "sel-bar", hidden: true },
 const act = (label, ico, fn) => { const b = h("button", { class: "sel-act", onclick: fn }); b.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ico}</svg>`; b.append(label); return b; };
 const actBar = h("div", { class: "sel-actions", hidden: true },
   act("태그", '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.4"/>', () => editLinks("tags")),
-  act("출연자", '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5"/>', () => editLinks("performers")),
+  act("사람", '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5"/>', () => editLinks("performers")),
   act("날짜", '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>', () => editDate()),
   act("즐겨찾기", '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>', () => editFav()),
   act("삭제", '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>', () => editDelete()));
@@ -807,9 +807,9 @@ async function applyBatch(body, msg) {
   } catch (e) { toast(e.message); }
 }
 
-/** 태그·출연자: 선택한 항목에 붙은 것은 빼고, 새로 넣을 것은 추가 */
+/** 태그·사람: 선택한 항목에 붙은 것은 빼고, 새로 넣을 것은 추가 */
 async function editLinks(field) {
-  const label = field === "tags" ? "태그" : "출연자";
+  const label = field === "tags" ? "태그" : "출연한 사람";
   const info = await api("batch/info", { method: "POST", body: { items: selItems() } }).catch(() => null);
   if (!info) return;
   const remove = new Set(), add = new Set();
@@ -918,6 +918,7 @@ async function renderMedia(params0, type0) {
     const def = (await api("saved_filters").catch(() => [])).find((f) => f.default);
     if (def) {
       params = new URLSearchParams(def.params || ""); params.delete("type");
+      if (params.get("sort") === "random") params.set("seed", String(Math.floor(Math.random() * 1e6)));   // 무작위면 열 때마다 새로 섞음
       type = TYPES.includes(def.type) ? def.type : "all";
       const p = new URLSearchParams(params); if (type !== "all") p.set("type", type);
       history.replaceState(history.state, "", "#/media" + (p.toString() ? "?" + p : ""));
@@ -974,7 +975,7 @@ async function renderMedia(params0, type0) {
   const selHolder = h("div"), actHolder = h("div");   // 선택 모드 막대 자리
   const sel = makeSelection({ holder: selHolder, refresh: () => update({ anim: "fade" }), performers, tags });
   const { selectable, cells } = sel;
-  const mediaTab = parseHash().path === "/media";   // 미디어 탭의 목록 보기는 꾹 누르면 미리보기, 태그·출연자로 들어온 목록은 선택
+  const mediaTab = parseHash().path === "/media";   // 미디어 탭의 목록 보기는 꾹 누르면 미리보기, 태그·사람으로 들어온 목록은 선택
 
   function drawHeader() {
     const mode = viewMode("media") === "wall" ? "wall" : "feed";
@@ -1080,7 +1081,7 @@ async function renderMedia(params0, type0) {
     await load();
   }
 
-  /** 유튜브처럼: 큰 썸네일 + 아래에 출연자 동그라미·제목·한 줄 정보 */
+  /** 유튜브처럼: 큰 썸네일 + 아래에 사람 동그라미·제목·한 줄 정보 */
   function ytCell(it, open) {
     const isPhoto = it.kind === "photo";
     const src = hdSrc(isPhoto ? `/photothumb/${it.id}.jpg` : it.thumbs > 0 ? thumbUrl(it.id, 0, it.thumbs) : null);
@@ -1127,7 +1128,7 @@ async function renderMedia(params0, type0) {
       : h("a", { class: "sq", href: `#/v/${it.id}`, "aria-label": it.title || "영상" }, ...kids);
   }
 
-  // ---- 필터 시트: 검색 · 출연자 · 태그 · 정렬 · 즐겨찾기
+  // ---- 필터 시트: 검색 · 사람 · 태그 · 정렬 · 즐겨찾기
   function openFilterSheet() {
     const sort = sortOf(), order = orderOf();
     const draft = {
@@ -1154,7 +1155,7 @@ async function renderMedia(params0, type0) {
         try { const d = await api("media?" + p); resultBtn.textContent = `${d.total.toLocaleString()}개 보기`; } catch (e) {}
       }, 250);
     };
-    const search = h("input", { type: "search", placeholder: "제목, 출연자, 폴더 검색", value: draft.q, "aria-label": "검색어",
+    const search = h("input", { type: "search", placeholder: "제목, 사람, 폴더 검색", value: draft.q, "aria-label": "검색어",
       oninput: (e) => { draft.q = e.target.value; refreshCount(); },
       onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); close(true); } } });
 
@@ -1251,7 +1252,7 @@ async function renderMedia(params0, type0) {
       });
       savedBox.replaceChildren(...chips,
         h("button", { class: "chip add", onclick: () => { saveRow.hidden = !saveRow.hidden; if (!saveRow.hidden) nameIn.focus(); } }, "＋ 지금 조건 저장"),
-        savedFilters.length ? h("p", { class: "meta sf-hint" }, "길게 누르면 ★ 기본 필터로 정하거나 지울 수 있습니다. 기본 필터는 미디어 탭을 열 때 자동으로 걸립니다.") : null);
+        ...(savedFilters.length ? [h("p", { class: "meta sf-hint" }, "길게 누르면 ★ 기본 필터로 정하거나 지울 수 있습니다. 기본 필터는 미디어 탭을 열 때 자동으로 걸립니다.")] : []));
     }
     api("saved_filters").then((l) => { savedFilters = l; drawSaved(); }).catch(() => {});
     drawSaved();
@@ -1262,7 +1263,7 @@ async function renderMedia(params0, type0) {
       h("div", { class: "sheet-body" },
         h("label", { class: "sheet-search" }, h("span", { "aria-hidden": "true" }, "⌕"), search),
         h("div", { class: "sheet-sec" }, h("h3", {}, "저장된 필터"), savedBox, saveRow),
-        people.length ? h("div", { class: "sheet-sec" }, h("div", { class: "sheet-sec-head" }, h("h3", {}, "출연자"), peopleMore), peopleBox) : null,
+        people.length ? h("div", { class: "sheet-sec" }, h("div", { class: "sheet-sec-head" }, h("h3", {}, "사람"), peopleMore), peopleBox) : null,
         tagList.length ? h("div", { class: "sheet-sec" }, h("h3", {}, "태그"), tagBox) : null,
         h("div", { class: "sheet-sec" }, h("h3", {}, "정렬"), sortBox),
         toggle("즐겨찾기만 보기", "fav"),
@@ -1316,7 +1317,7 @@ function modeToggle(kind, onChange) {
 }
 const wallHeight = () => (window.innerWidth < 560 ? 110 : 180);
 
-/** 이미지 벽 한 칸: 원래 비율을 유지하고 아래에 출연자 이름을 표시 */
+/** 이미지 벽 한 칸: 원래 비율을 유지하고 아래에 사람 이름을 표시 */
 /** 크게 보이는 칸용 큰 미리보기 주소 (화질 깨짐 방지) */
 const hdSrc = (src, size = 1080) => !src ? src : src + (src.includes("?") ? "&" : "?") + "s=" + size;
 
@@ -1371,7 +1372,7 @@ async function renderPhotos(params) {
     chips.push(h("span", { class: "chip on" }, "# " + e.name, h("button", { title: "필터 해제", onclick: () => update({ tag: null }) }, "×")));
   }
   let t;
-  const search = h("input", { type: "search", class: "search", placeholder: "이름, 출연자, 폴더 검색", value: params.get("q") || "",
+  const search = h("input", { type: "search", class: "search", placeholder: "이름, 사람, 폴더 검색", value: params.get("q") || "",
     oninput: (e) => { clearTimeout(t); t = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 400); } });
   const sortSel = h("select", { "aria-label": "정렬", onchange: (e) => update({ sort: e.target.value, order: null }) },
     PHOTO_SORTS.map(([v, l]) => h("option", { value: v, selected: v === sort }, l)));
@@ -1446,7 +1447,7 @@ async function openViewer(items, start) {
   const counter = h("span", { class: "count" });
   const favBtn = h("button", { class: "vbtn", "aria-label": "즐겨찾기" }, icon("heart"));
   const info = h("div", { class: "vinfo" });
-  const input = h("input", { type: "text", list: "dl-viewer-perf", placeholder: "출연자 추가 (Enter)" });
+  const input = h("input", { type: "text", list: "dl-viewer-perf", placeholder: "출연한 사람 추가 (Enter)" });
   const prevBtn = h("button", { onclick: () => slide(-1) }, icon("prev"), "이전");
   const nextBtn = h("button", { onclick: () => slide(1) }, "다음", icon("next"));
   const close = () => {
@@ -1479,12 +1480,12 @@ async function openViewer(items, start) {
           editing ? h("button", { class: n <= (cur.rating || 0) ? "on" : "", title: `${n}점`, onclick: () => save({ rating: cur.rating === n ? 0 : n }) }, "★")
             : n <= (cur.rating || 0) ? h("span", { class: "on" }, "★") : null)),
         h("button", { class: "btn sm" + (editing ? " primary" : ""), onclick: () => { editing = !editing; draw(); } }, editing ? "완료" : "✎ 수정")),
-      h("span", { class: "meta" }, "출연자"),
+      h("span", { class: "meta" }, "출연한 사람"),
       h("div", { class: "chips" }, ...(cur.performer_refs.length ? cur.performer_refs.map((p) => editing
         ? h("span", { class: "chip" }, p.name,
             h("button", { "aria-label": `${p.name} 제거`, onclick: () => save({ performers: cur.performer_refs.filter((x) => x.id !== p.id).map((x) => x.name) }) }, "×"))
         : h("button", { class: "chip", onclick: () => { close(); location.hash = `#/performer?id=${p.id}`; } }, p.name))
-        : [h("span", { class: "meta" }, editing ? "출연자 없음 — 아래에 이름을 입력하세요" : "출연자 없음")])),
+        : [h("span", { class: "meta" }, editing ? "출연한 사람 없음 — 아래에 이름을 입력하세요" : "출연한 사람 없음")])),
       ...(editing ? [input] : []),
       h("span", { class: "meta" }, "태그"),
       h("div", { class: "chips" }, ...((cur.tags || []).length ? cur.tags.map((t) => editing
@@ -1992,7 +1993,7 @@ async function renderVideo(id, params) {
         h("div", { class: "row" }, coverBtn, coverPickBtn, coverResetBtn, coverFile)),
       h("div", { class: "panel" }, h("h3", {}, "제목"), titleIn,
         h("div", { class: "actions", style: "margin-top:10px" }, stars, favBtn())),
-      editor("performers", allPerformers, "출연자", ""),
+      editor("performers", allPerformers, "출연한 사람", ""),
       editor("tags", allTags, "태그", "# "),
       h("div", { class: "panel" }, h("h3", {}, "북마크"), markers,
         h("div", { class: "taginput" }, markerTitle, h("button", { class: "btn", onclick: () => addMarker(markerTitle) }, "현재 위치 추가"))),
@@ -2028,7 +2029,7 @@ async function renderEntities(ep, label, filterKey) {
   const draw = () => {
     const list = items.filter((e) => e.name.toLowerCase().includes(filter.toLowerCase()));
     grid.replaceChildren(...list.map((e) => {
-      if (filterKey === "performer") {   // 출연자: 카드 전체를 누르면 프로필로
+      if (filterKey === "performer") {   // 사람: 카드 전체를 누르면 프로필로
         const href = `#/performer?id=${e.id}`;
         return h("a", { class: "ecard", href },
           h("div", { class: "thumb" }, entityCover(e, "👤")),
@@ -2215,7 +2216,7 @@ async function renderSettings(opts = {}) {
   location.hash = "#/settings";
 }
 
-// ---------------------------------------------------------------- 출연자 프로필
+// ---------------------------------------------------------------- 사람 프로필
 function age(birth) {
   const b = new Date(birth + "T00:00:00"), n = new Date();
   if (isNaN(b)) return "?";
@@ -2227,7 +2228,7 @@ function age(birth) {
 async function renderPerformer(id) {
   setTab("performers");
   const p = await api(`performers/${id}`);
-  const hasInfo = p.group !== undefined;   // 안드로이드 앱만 출연자 정보(그룹·생일 등)를 저장
+  const hasInfo = p.group !== undefined;   // 안드로이드 앱만 사람 정보(그룹·생일 등)를 저장
   const editing = parseHash().params.get("edit") === "1";
   const setEdit = (on) => { location.hash = `#/performer?id=${id}` + (on ? "&edit=1" : ""); };
 
@@ -2276,10 +2277,10 @@ async function renderPerformer(id) {
         let newId = id;
         if (hasInfo) await api(`performers/${id}`, { method: "PATCH", body: { info: { group: val("group"), real_name: val("real_name"), birthdate: val("birthdate"), height: val("height") } } });
         if (name !== p.name) {
-          if (!confirm(`이름을 ‘${name}’(으)로 바꿀까요?\n같은 이름의 출연자가 이미 있으면 하나로 합쳐집니다.`)) { ev.currentTarget.disabled = false; return; }
+          if (!confirm(`이름을 ‘${name}’(으)로 바꿀까요?\n같은 이름의 사람이 이미 있으면 하나로 합쳐집니다.`)) { ev.currentTarget.disabled = false; return; }
           const r = await api(`performers/${id}`, { method: "PATCH", body: { name } });
           if (r && r.id) newId = r.id;
-          if (r && r.merged) toast("같은 이름의 출연자와 합쳤습니다");
+          if (r && r.merged) toast("같은 이름의 사람과 합쳤습니다");
         }
         toast("저장했습니다");
         location.hash = `#/performer?id=${newId}`;
@@ -2294,15 +2295,15 @@ async function renderPerformer(id) {
       route();
     } }, "인터넷에서 다시 찾기") : null;
     const delBtn = h("button", { class: "btn danger", onclick: async () => {
-      if (!confirm(`‘${p.name}’ 출연자를 삭제할까요?\n영상과 사진은 그대로 남고, 출연자 지정만 없어집니다.`)) return;
+      if (!confirm(`‘${p.name}’ 사람을 삭제할까요?\n영상과 사진은 그대로 남고, 사람 지정만 없어집니다.`)) return;
       await api(`performers/${id}`, { method: "DELETE" });
       toast("삭제했습니다");
       location.hash = "#/performers";
-    } }, "출연자 삭제");
+    } }, "사람 삭제");
     editPanel = h("div", { class: "panel" }, h("h3", {}, "수정"),
       form,
       h("div", { class: "row", style: "margin-top:12px" }, saveBtn, lookupBtn, h("button", { class: "btn", onclick: () => setEdit(false) }, "취소")),
-      hasInfo ? h("p", { class: "meta" }, "이름을 다른 출연자와 같게 바꾸면 두 출연자가 합쳐집니다. 그룹 이름을 정확히 적어 두면 인터넷에서 찾을 때 동명이인을 거릅니다.") : null,
+      hasInfo ? h("p", { class: "meta" }, "이름을 다른 사람과 같게 바꾸면 두 사람이 합쳐집니다. 그룹 이름을 정확히 적어 두면 인터넷에서 찾을 때 동명이인을 거릅니다.") : null,
       h("div", { class: "pf-danger" }, delBtn));
   }
 
@@ -2321,7 +2322,7 @@ async function renderPerformer(id) {
   const pTitle = h("h3", { class: "pf-sec" }, "사진");
   const pSection = showPhotos ? h("section", {}, pTitle, pGrid, pMore) : null;
 
-  // --- 선택 모드 (꾹 눌러 여러 개 골라 태그·출연자·날짜·즐겨찾기·삭제)
+  // --- 선택 모드 (꾹 눌러 여러 개 골라 태그·사람·날짜·즐겨찾기·삭제)
   const selHolder = h("div", { class: "sel-float" });
   const [allPerf, allTags] = await Promise.all([api("performers").catch(() => []), api("tags").catch(() => [])]);
   const sel = makeSelection({ holder: selHolder, refresh: () => route(), performers: allPerf, tags: allTags });
@@ -2335,7 +2336,7 @@ async function renderPerformer(id) {
     const d = await api(`videos?performer=${id}&sort=added&order=desc&per=24&page=${vPage}`);
     vTotal = d.total; drawCounts();
     vTitle.textContent = `영상 ${d.total.toLocaleString()}`;
-    if (vPage === 1 && !d.total) { vGrid.replaceWith(h("p", { class: "meta" }, "이 출연자가 지정된 영상이 없습니다.")); return; }
+    if (vPage === 1 && !d.total) { vGrid.replaceWith(h("p", { class: "meta" }, "이 사람이 나온 영상이 없습니다.")); return; }
     if (vPage === 1 && d.items[0] && d.items[0].thumbs > 0) setAvatar(thumbUrl(d.items[0].id, 0, d.items[0].thumbs));
     d.items.forEach((v) => { v.kind = "video"; vGrid.append(sel.selectable(vMode === "wall" ? videoTile(v) : videoCard(v), v)); });
     const shown = (vPage - 1) * d.per + d.items.length;
@@ -2347,7 +2348,7 @@ async function renderPerformer(id) {
     const d = await api(`photos?performer=${id}&sort=taken&order=desc&per=30&page=${pPage}`);
     pTotal = d.total; drawCounts();
     pTitle.textContent = `사진 ${d.total.toLocaleString()}`;
-    if (pPage === 1 && !d.total) { pGrid.replaceWith(h("p", { class: "meta" }, "이 출연자가 지정된 사진이 없습니다.")); return; }
+    if (pPage === 1 && !d.total) { pGrid.replaceWith(h("p", { class: "meta" }, "이 사람이 나온 사진이 없습니다.")); return; }
     if (pPage === 1 && d.items[0]) setAvatar(`/photothumb/${d.items[0].id}.jpg`);
     for (const ph of d.items) {
       const i = pItems.length;
@@ -2725,7 +2726,7 @@ async function renderShorts(params) {
   await load();
 }
 
-// ---------------------------------------------------------------- 보관함 (사진·출연자·태그·설정 모음)
+// ---------------------------------------------------------------- 보관함 (사진·사람·태그·설정 모음)
 const LIB_ICON = {
   heart: '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>',
   photos: '<rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="9" cy="9" r="1.8"/><path d="M21 15.5l-5-5L4.5 21"/>',
@@ -2746,7 +2747,7 @@ async function renderLibraryHub() {
   $app.replaceChildren(h("div", { class: "libhub" },
     h("h2", { class: "set-group-title" }, "기록"),
     h("div", { class: "lib-list set-list" },
-      row("#/stats", "info", "시청 기록 · 통계", "최근 본 영상 · 시청 시간 · 많이 본 출연자")),
+      row("#/stats", "info", "시청 기록 · 통계", "최근 본 영상 · 시청 시간 · 많이 본 사람")),
     h("h2", { class: "set-group-title" }, "파일"),
     h("div", { class: "lib-list set-list" },
       serverCaps.mega_supported ? row("#/cloud", "cloud", "클라우드 파일", cloudN ? `MEGA ${(serverCaps.mega || []).length} · iCloud ${(serverCaps.icloud || []).length}` : "MEGA · iCloud 링크 연결") : null,
@@ -2756,7 +2757,7 @@ async function renderLibraryHub() {
     h("div", { class: "lib-list set-list" }, row("#/settings", "gear", "설정", "화면 · 폴더 · 클라우드 · 백업"))));
 }
 
-/** 탐색: 출연자를 큰 카드로 쭉 (장면 3장), 위쪽 검색·필터는 미디어 탭처럼 떠 있음. 태그·나이로 거르기 */
+/** 탐색: 사람을 큰 카드로 쭉 (장면 3장), 위쪽 검색·필터는 미디어 탭처럼 떠 있음. 태그·나이로 거르기 */
 const EX_AGES = [["teen", "10대", 0, 19], ["20a", "20~24세", 20, 24], ["20b", "25~29세", 25, 29], ["30", "30대", 30, 39], ["40", "40세 이상", 40, 999], ["none", "나이 모름", -1, -1]];
 const EX_SORTS = [["name", "이름"], ["videos", "영상 많은 순"], ["recent", "최근 추가"], ["young", "어린 순"], ["old", "나이 많은 순"]];
 async function renderExplore(params0) {
@@ -2766,12 +2767,12 @@ async function renderExplore(params0) {
   const tagName = (id) => (tags.find((t) => String(t.id) === String(id)) || { name: "#" + id }).name;
   const ageOf = (p) => (p.birthdate ? age(p.birthdate) : null);
   const urlFor = () => "#/explore" + (params.toString() ? "?" + params : "");
-  const isTags = () => params.get("t") === "tags";   // 출연자 / 태그
+  const isTags = () => params.get("t") === "tags";   // 사람 / 태그
 
   const countLine = h("div", { class: "meta" }, "");
   const search = h("input", { type: "search", class: "ex-search", value: params.get("q") || "" });
   const segInd = h("span", { class: "type-ind", "aria-hidden": "true", style: "width: calc((100% - 6px) / 2)" });
-  const segBtns = [["people", "출연자"], ["tags", "태그"]].map(([k, l]) => h("button", { role: "tab", onclick: () => setMode(k) }, l));
+  const segBtns = [["people", "사람"], ["tags", "태그"]].map(([k, l]) => h("button", { role: "tab", onclick: () => setMode(k) }, l));
   const typeSeg = h("div", { class: "type-seg two", role: "tablist" }, segInd, ...segBtns);
   function setMode(k, anim) {
     if ((k === "tags") === isTags()) return;
@@ -2872,7 +2873,7 @@ async function renderExplore(params0) {
   function draw(restore, anim) {
     segBtns.forEach((b, i) => { const on = (i === 1) === isTags(); b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
     segInd.style.transform = `translateX(${isTags() ? 100 : 0}%)`;
-    search.placeholder = isTags() ? "태그 검색" : "출연자 이름 검색";
+    search.placeholder = isTags() ? "태그 검색" : "사람 이름 검색";
     search.setAttribute("aria-label", search.placeholder);
     content.classList.remove("in-left", "in-right"); content.style.transform = ""; content.style.opacity = "";
     if (anim) { void content.offsetWidth; content.classList.add("in-" + anim); }
@@ -2895,7 +2896,7 @@ async function renderExplore(params0) {
     const sortLabel = (EX_SORTS.find(([v]) => v === (params.get("sort") || "videos")) || [0, ""])[1];
     countLine.textContent = `${list.length.toLocaleString()}명 · ${sortLabel}`;
     drawChips();
-    if (!list.length) { grid.append(h("div", { class: "empty", style: "grid-column:1/-1" }, all.length ? "조건에 맞는 출연자가 없습니다." : "아직 출연자가 없습니다. 영상 화면의 ‘수정’에서 출연자를 넣어 보세요.")); more.replaceChildren(); return; }
+    if (!list.length) { grid.append(h("div", { class: "empty", style: "grid-column:1/-1" }, all.length ? "조건에 맞는 사람이 없습니다." : "아직 사람이 없습니다. 영상 화면의 ‘수정’에서 사람을 넣어 보세요.")); more.replaceChildren(); return; }
     const pages = restore ? Math.max(1, restore.pages || 1) : 1;
     for (let i = 0; i < pages && shown < list.length; i++) {
       const next = list.slice(shown, shown + PER); grid.append(...next.map(card)); shown += next.length;
@@ -2947,7 +2948,7 @@ async function renderExplore(params0) {
     const close = openSheet("필터", [
       h("div", { class: "sheet-sec" }, h("h3", {}, "정렬"), sortBox),
       h("div", { class: "sheet-sec" }, h("h3", {}, "나이"), chipSet(EX_AGES.map((a) => [a[0], a[1]]), draft.age)),
-      usedTags.length ? h("div", { class: "sheet-sec" }, h("h3", {}, "태그 (그 태그가 붙은 영상·사진이 있는 출연자)"), chipSet(usedTags.map((t) => [String(t.id), t.name]), draft.tag, (n) => "#" + n)) : null,
+      usedTags.length ? h("div", { class: "sheet-sec" }, h("h3", {}, "태그 (그 태그가 붙은 영상·사진이 있는 사람)"), chipSet(usedTags.map((t) => [String(t.id), t.name]), draft.tag, (n) => "#" + n)) : null,
     ], [
       h("button", { class: "btn", onclick: () => { draft.tag.clear(); draft.age.clear(); draft.sort = "videos"; close(() => update(toParams())); } }, "초기화"),
       goBtn,
@@ -3014,7 +3015,7 @@ async function renderStats() {
       tile("지금까지", fmtHours(st.total_secs || 0))),
     h("section", { class: "panel" }, h("h3", {}, "최근 14일"), chart,
       !week && !prevWeek ? h("p", { class: "meta" }, "영상을 보면 여기에 날짜별 시청 시간이 쌓입니다. (이번 버전부터 기록됩니다)") : null),
-    top.length ? h("section", { class: "panel" }, h("h3", {}, "많이 본 출연자"),
+    top.length ? h("section", { class: "panel" }, h("h3", {}, "많이 본 사람"),
       h("div", { class: "st-people" }, ...top.map((p, i) => {
         const pf = people.find((x) => x.id === p.id) || p;
         return h("a", { class: "st-person", href: `#/performer?id=${p.id}` },
@@ -3076,7 +3077,7 @@ async function renderHome() {
   const recent = shelf("최근 추가된 영상", "#/?sort=added", "vids");
   const favs = shelf("즐겨찾기", "#/media?fav=1", "favs");
   const photos = shelf("최근 사진", "#/photos", "photos");
-  const people = shelf("출연자", "#/performers", "people");
+  const people = shelf("사람", "#/performers", "people");
   $app.replaceChildren(h("div", { class: "home" },
     h("div", { class: "home-head" }, h("div", {}, stats, h("h1", {}, "내 보관함")),
       h("a", { class: "btn", href: "#/?q=", "aria-label": "검색" }, "검색")),
@@ -3084,7 +3085,7 @@ async function renderHome() {
 
   const counts = { videos: null, photos: null, people: null };
   const n = (x) => (x == null ? "…" : x.toLocaleString());
-  const drawStats = () => (stats.textContent = [`영상 ${n(counts.videos)}`, serverCaps.photos ? `사진 ${n(counts.photos)}` : "", `출연자 ${n(counts.people)}`].filter(Boolean).join(" · "));
+  const drawStats = () => (stats.textContent = [`영상 ${n(counts.videos)}`, serverCaps.photos ? `사진 ${n(counts.photos)}` : "", `사람 ${n(counts.people)}`].filter(Boolean).join(" · "));
   drawStats();
 
   const small = (v) => videoCard(v);
@@ -3132,7 +3133,7 @@ function backupPanel() {
   file.addEventListener("change", async () => {
     const f = file.files[0];
     if (!f) return;
-    if (!confirm(`‘${f.name}’ 백업으로 지금 정보를 바꿀까요?\n지금 있는 태그·별점·출연자 정보는 백업 내용으로 바뀝니다.`)) { file.value = ""; return; }
+    if (!confirm(`‘${f.name}’ 백업으로 지금 정보를 바꿀까요?\n지금 있는 태그·별점·사람 정보는 백업 내용으로 바뀝니다.`)) { file.value = ""; return; }
     msg.textContent = "불러오는 중…";
     try {
       const text = await f.text();
@@ -3145,7 +3146,7 @@ function backupPanel() {
     file.value = "";
   });
   return h("div", { class: "panel" }, h("h3", {}, "백업 / 복원"),
-    h("p", { class: "meta" }, "태그·별점·즐겨찾기·출연자 정보·북마크·메모·클라우드 링크를 파일 하나로 저장합니다. 앱을 지웠다 다시 설치할 때 이 파일로 되살릴 수 있습니다. (비밀번호와 e-hentai 로그인은 넣지 않습니다)"),
+    h("p", { class: "meta" }, "태그·별점·즐겨찾기·사람 정보·북마크·메모·클라우드 링크를 파일 하나로 저장합니다. 앱을 지웠다 다시 설치할 때 이 파일로 되살릴 수 있습니다. (비밀번호와 e-hentai 로그인은 넣지 않습니다)"),
     h("p", { class: "warn" }, "백업 파일에는 MEGA 링크(열쇠 포함)가 들어 있으니 다른 사람에게 보내지 마세요."),
     h("div", { class: "row" },
       h("a", { class: "btn primary", href: "/api/backup", download: "vidshelf-backup.json" }, "백업 파일 저장 (Download 폴더)"),
@@ -3196,7 +3197,7 @@ async function renderDuplicates() {
       } }, "목록에서 숨기기");
       const keepBtn = h("button", { class: "btn sm primary", onclick: async (ev) => {
         const others = g.items.filter((x) => x.id !== v.id);
-        if (!confirm(`이 영상만 남기고 나머지 ${others.length}개는 숨길까요?\n숨기는 영상의 태그·출연자·별점·북마크·재생 기록은 이 영상으로 합쳐집니다.`)) return;
+        if (!confirm(`이 영상만 남기고 나머지 ${others.length}개는 숨길까요?\n숨기는 영상의 태그·사람·별점·북마크·재생 기록은 이 영상으로 합쳐집니다.`)) return;
         await api("duplicates/keep", { method: "POST", body: { keep: v.id, others: others.map((x) => x.id) } });
         const box = ev.target.closest(".panel");
         box.querySelectorAll(".dup-item").forEach((el) => el !== ev.target.closest(".dup-item") && el.classList.add("gone"));
@@ -3217,7 +3218,7 @@ async function renderDuplicates() {
       h("h2", { style: "margin:0;font-size:20px" }, "중복 영상"),
       h("a", { class: "btn sm", href: "#/settings" }, "설정으로")),
     groups.length
-      ? h("p", { class: "meta" }, `${groups.length}묶음 · 중복으로 차지하는 크기 약 ${fmtSize(wasted)}. 파일 크기가 똑같으면 같은 영상으로 봅니다. 남길 영상에서 ‘이것만 남기기’를 누르면 나머지는 숨기고 태그·출연자 등 정보는 합쳐집니다. 숨긴 영상은 설정 → 숨긴 영상에서 되돌릴 수 있습니다.`)
+      ? h("p", { class: "meta" }, `${groups.length}묶음 · 중복으로 차지하는 크기 약 ${fmtSize(wasted)}. 파일 크기가 똑같으면 같은 영상으로 봅니다. 남길 영상에서 ‘이것만 남기기’를 누르면 나머지는 숨기고 태그·사람 등 정보는 합쳐집니다. 숨긴 영상은 설정 → 숨긴 영상에서 되돌릴 수 있습니다.`)
       : h("div", { class: "empty" }, "중복 영상이 없습니다."),
     ...groups.map(groupEl)));
 }

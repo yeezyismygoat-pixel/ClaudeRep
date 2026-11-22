@@ -13,8 +13,8 @@ android {
         applicationId "app.vidshelf"
         minSdk 29
         targetSdk 34
-        versionCode 58
-        versionName "7.8"
+        versionCode 59
+        versionName "7.9"
     }
 
     compileOptions {
