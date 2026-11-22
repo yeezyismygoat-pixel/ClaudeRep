@@ -209,6 +209,87 @@ function attachScrub(track, fill, { duration, onSeek, previewSrc, onDrag, maxBox
   return { isDragging: () => dragging };
 }
 
+/** 영상을 꾹 누르고 있는 동안 2배속 (손을 떼면 원래 속도) */
+function holdFast(box, video) {
+  const badge = h("div", { class: "fast-badge", hidden: true }, "2배속 ▶▶");
+  box.append(badge);
+  let timer = null, on = false, sx = 0, sy = 0, prevRate = 1, suppress = false;
+  box.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1 || e.target.closest("button, a, input, .seekbar, .vp-track, .sbar-wrap, .serr")) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (video.paused) return;
+      on = true; prevRate = video.playbackRate || 1; video.playbackRate = 2; badge.hidden = false;
+      try { if (window.VidShelfApp && VidShelfApp.haptic) VidShelfApp.haptic(); else if (navigator.vibrate) navigator.vibrate(15); } catch (er) {}
+    }, 450);
+  }, { passive: true });
+  box.addEventListener("touchmove", (e) => { if (timer && !on && Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 12) { clearTimeout(timer); timer = null; } }, { passive: true });
+  const end = () => {
+    clearTimeout(timer); timer = null;
+    if (!on) return;
+    on = false; video.playbackRate = prevRate; badge.hidden = true;
+    suppress = true; setTimeout(() => { suppress = false; }, 400);   // 손을 뗄 때 생기는 ‘누르기’는 무시
+  };
+  box.addEventListener("touchend", end); box.addEventListener("touchcancel", end);
+  box.addEventListener("click", (e) => { if (suppress) { e.stopImmediatePropagation(); e.preventDefault(); suppress = false; } }, true);
+  box.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+
+/** 목록을 불러오는 동안 보여 줄 회색 틀 */
+function skeletonList(mode) {
+  if (mode === "wall") {
+    const ws = [1.5, 0.75, 1.33, 1, 0.75, 1.78, 1, 1.33, 0.8, 1.5, 1, 0.75];
+    return h("div", { class: "mcontent skeleton" }, h("div", { class: "wall" }, ...ws.map((r) => h("div", { class: "tile sk", style: `flex:${r} 1 ${Math.round(r * wallHeight())}px` }, h("div", { class: "tile-img sk-box", style: `aspect-ratio:${r}` })))));
+  }
+  return h("div", { class: "mcontent skeleton" }, h("div", { class: "ytfeed" }, ...[0, 1, 2].map(() => h("div", { class: "yt sk" },
+    h("div", { class: "yt-thumb sk-box", style: "aspect-ratio:16/9" }),
+    h("div", { class: "yt-info" }, h("span", { class: "yt-av sk-box" }), h("div", { class: "yt-text" }, h("div", { class: "sk-line", style: "width:70%" }), h("div", { class: "sk-line", style: "width:40%" })))))));
+}
+
+/** 빠른 스크롤 막대: 오른쪽 끝을 잡고 끌면 날짜(이름순이면 첫 글자)를 보여 주며 빠르게 이동 */
+function attachFastScroll(getLabel) {
+  const bubble = h("div", { class: "fs-bubble", hidden: true });
+  const thumb = h("div", { class: "fs-thumb" });
+  const bar = h("div", { class: "fs-bar", "aria-hidden": "true" }, thumb, bubble);
+  document.body.append(bar);
+  let hideT = null, dragging = false;
+  const range = () => Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+  const top0 = () => 90, track = () => window.innerHeight - 90 - 120;   // 위 버튼·아래 메뉴를 피한 구간
+  const place = () => { thumb.style.transform = `translateY(${top0() + (window.scrollY / range()) * track()}px)`; };
+  const label = () => { const t = getLabel(); bubble.hidden = !t; if (t) bubble.textContent = t; bubble.style.transform = thumb.style.transform; };
+  const show = () => {
+    if (document.documentElement.scrollHeight < window.innerHeight * 3) return;   // 짧은 목록에는 안 보임
+    bar.classList.add("on"); place();
+    clearTimeout(hideT); if (!dragging) hideT = setTimeout(() => bar.classList.remove("on"), 1300);
+  };
+  const onScroll = () => { show(); if (dragging) label(); };
+  window.addEventListener("scroll", onScroll, { passive: true });
+  thumb.addEventListener("touchstart", (e) => { e.stopPropagation(); dragging = true; bar.classList.add("dragging"); clearTimeout(hideT); label(); }, { passive: true });
+  thumb.addEventListener("touchmove", (e) => {
+    if (!dragging) return;
+    e.preventDefault(); e.stopPropagation();
+    const f = Math.min(1, Math.max(0, (e.touches[0].clientY - top0() - 24) / track()));
+    window.scrollTo({ top: f * range(), behavior: "instant" });
+    place(); label();
+  }, { passive: false });
+  const end = () => { if (!dragging) return; dragging = false; bar.classList.remove("dragging"); bubble.hidden = true; hideT = setTimeout(() => bar.classList.remove("on"), 1300); };
+  thumb.addEventListener("touchend", end); thumb.addEventListener("touchcancel", end);
+  return () => { window.removeEventListener("scroll", onScroll); bar.remove(); };
+}
+/** 화면 가운데에 있는 칸의 날짜 */
+function labelAtCenter() {
+  const y = window.innerHeight / 2;
+  let el = null;
+  for (const x of [window.innerWidth / 2, window.innerWidth / 4, (window.innerWidth * 3) / 4]) { const t = document.elementFromPoint(x, y); el = t && t.closest("[data-when], [data-letter]"); if (el) break; }
+  if (!el) return "";
+  if (el.dataset.letter != null) return el.dataset.letter || "";
+  const ts = +el.dataset.when;
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return `${d.getFullYear()}년 ${d.getMonth() + 1}월`;
+}
+
 /** 영상을 받아 오는 동안(클라우드 등) 가운데에 도는 로딩 표시 */
 function attachLoading(video, box) {
   const sp = h("div", { class: "vloading", hidden: true, "aria-label": "불러오는 중" }, h("i"));
@@ -447,6 +528,7 @@ async function route() {
   const { path, params } = parseHash();
   stopPlayer();
   if (pageCleanup) { try { pageCleanup(); } catch (e) {} pageCleanup = null; }
+  if (window.__fsCleanup) { try { window.__fsCleanup(); } catch (e) {} window.__fsCleanup = null; }
   document.body.classList.remove("shorts-mode", "nav-hidden");
   const mem = scrollMemory[location.hash];
   if (mem && mem.y > 0) {   // 돌아온 화면: 맨 위로 갔다가 내려오지 않도록, 가린 채로 그 위치에 먼저 가 있음
@@ -1052,7 +1134,8 @@ async function renderMedia(params0, type0) {
     if (sort === "random" && !base.get("seed")) base.set("seed", "7");
     cells.clear();
     const old = content.firstElementChild;
-    if (old) { old.style.minHeight = old.offsetHeight + "px"; old.classList.add("leaving"); }   // 새 목록이 오기 전까지 높이 유지(깜빡임 방지)
+    if (old && !old.classList.contains("skeleton")) { old.style.minHeight = old.offsetHeight + "px"; old.classList.add("leaving"); }   // 새 목록이 오기 전까지 높이 유지(깜빡임 방지)
+    else content.replaceChildren(skeletonList(mode));   // 처음 열 때: 빈 화면 대신 칸 모양 회색 틀
     async function load() {
       base.set("page", page);
       let d;
@@ -1065,6 +1148,12 @@ async function renderMedia(params0, type0) {
         return;
       }
       for (const it of d.items) {
+        placeItem(it);
+        const cell = grid.lastElementChild;   // 날짜 표시용 (빠른 스크롤 막대). 사진 줄은 첫 사진 날짜
+        if (cell && !cell.dataset.when) cell.dataset.when = String((sort === "taken" ? it.taken : null) || it.added_at || it.taken || 0);
+        if (cell && sort === "title") cell.dataset.letter = (it.title || "").trim().slice(0, 1).toUpperCase();
+      }
+      function placeItem(it) {
         if (it.kind === "photo") {
           const i = photos.length;
           photos.push(it);
@@ -1164,8 +1253,32 @@ async function renderMedia(params0, type0) {
         try { const d = await api("media?" + p); resultBtn.textContent = `${d.total.toLocaleString()}개 보기`; } catch (e) {}
       }, 250);
     };
+    // 검색 도우미: 비어 있을 때는 최근 검색어, 글자를 치면 사람·태그 이름 추천 (누르면 그 사람·태그로 거름)
+    const suggest = h("div", { class: "chips search-suggest", hidden: true });
+    const recentQ = () => { try { return JSON.parse(localStorage.getItem("vs-recent-q") || "[]"); } catch (e) { return []; } };
+    const drawSuggest = () => {
+      const q = draft.q.trim().toLowerCase();
+      let chips = [];
+      if (!q) {
+        const rq = recentQ();
+        if (rq.length) chips = [h("span", { class: "meta ss-title" }, "최근 검색"),
+          ...rq.map((w) => h("button", { class: "chip", onclick: () => { draft.q = w; search.value = w; refreshCount(); drawSuggest(); } }, "🕘 " + w)),
+          h("button", { class: "linkbtn", onclick: () => { try { localStorage.removeItem("vs-recent-q"); } catch (e) {} drawSuggest(); } }, "지우기")];
+      } else {
+        const ps = performers.filter((pf) => pf.name.toLowerCase().includes(q) && !draft.performer.has(String(pf.id))).slice(0, 6);
+        const ts = tags.filter((t) => t.name.toLowerCase().includes(q) && !draft.tag.has(String(t.id))).slice(0, 6);
+        const pick = (fn) => () => { fn(); draft.q = ""; search.value = ""; drawPeople(); drawTags(); refreshCount(); drawSuggest(); };
+        chips = [...ps.map((pf) => h("button", { class: "chip ss-person", onclick: pick(() => draft.performer.add(String(pf.id))) },
+            h("span", { class: "fc-av" }, entityCover(pf, pf.name.slice(0, 1))), pf.name)),
+          ...ts.map((t) => h("button", { class: "chip", onclick: pick(() => draft.tag.add(String(t.id))) }, "#" + t.name))];
+        if (chips.length) chips.unshift(h("span", { class: "meta ss-title" }, "이 사람·태그로 거르기"));
+      }
+      suggest.replaceChildren(...chips);
+      suggest.hidden = !chips.length;
+    };
     const search = h("input", { type: "search", placeholder: "제목, 사람, 폴더 검색", value: draft.q, "aria-label": "검색어",
-      oninput: (e) => { draft.q = e.target.value; refreshCount(); },
+      oninput: (e) => { draft.q = e.target.value; refreshCount(); drawSuggest(); },
+      onfocus: () => drawSuggest(),
       onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); close(true); } } });
 
     const people = performers.filter((pf) => pf.count || pf.photo_count).sort((a, b) => (b.count + (b.photo_count || 0)) - (a.count + (a.photo_count || 0)));
@@ -1271,6 +1384,7 @@ async function renderMedia(params0, type0) {
       h("div", { class: "sheet-head" }, h("h2", {}, "필터"), h("button", { class: "round-btn", "aria-label": "닫기", onclick: () => close(false) }, icon("close"))),
       h("div", { class: "sheet-body" },
         h("label", { class: "sheet-search" }, h("span", { "aria-hidden": "true" }, "⌕"), search),
+        suggest,
         h("div", { class: "sheet-sec" }, h("h3", {}, "저장된 필터"), savedBox, saveRow),
         people.length ? h("div", { class: "sheet-sec" }, h("div", { class: "sheet-sec-head" }, h("h3", {}, "사람"), peopleMore), peopleBox) : null,
         tagList.length ? h("div", { class: "sheet-sec" }, h("h3", {}, "태그"), tagBox) : null,
@@ -1290,6 +1404,8 @@ async function renderMedia(params0, type0) {
     function close(apply) {   // 닫기는 ‘뒤로’로 처리하고, 적용할 필터는 닫힌 뒤에 반영 (apply 가 조건이면 그 조건으로)
       if (closed) return;
       pending = apply instanceof URLSearchParams ? apply : apply ? toParams() : null;
+      const q = pending && pending.get("q");
+      if (q) { try { const rq = JSON.parse(localStorage.getItem("vs-recent-q") || "[]").filter((w) => w !== q); rq.unshift(q); localStorage.setItem("vs-recent-q", JSON.stringify(rq.slice(0, 8))); } catch (e) {} }
       history.back();
     }
     const sheetId = Math.random();
@@ -1310,6 +1426,7 @@ async function renderMedia(params0, type0) {
   }
 
   drawHeader();
+  window.__fsCleanup = attachFastScroll(() => (["added", "taken", "title"].includes(sortOf()) ? labelAtCenter() : ""));
   await drawContent("none");
 }
 
@@ -1860,6 +1977,7 @@ async function renderVideo(id, params) {
   // 재생 막대는 항상 영상 바닥에 있고 바로 끌어서 옮길 수 있음
   const playerBox = h("div", { class: "player vp" }, video, ui, track, upNext);
   attachLoading(video, playerBox);
+  holdFast(playerBox, video);
   const dur = () => v.duration || (isFinite(video.duration) ? video.duration : 0);
   const drawPlay = () => {
     const d = video.paused ? PLAY : PAUSE;
@@ -2740,6 +2858,7 @@ async function renderShorts(params) {
         h("a", { class: "sbtn", href: `#/v/${v.id}`, "aria-label": "자세히" }, "ⓘ")),
       sbarWrap);
     loadingEl.replaceWith(attachLoading(video, h("div")));
+    holdFast(el, video);
     // 한 번 누르면 재생/일시정지, 두 번 빠르게 누르면 하트 (인스타처럼)
     let tapTimer = null, lastTap = 0;
     el.addEventListener("click", (e) => {
@@ -3155,6 +3274,38 @@ function shelf(title, moreHref, kind) {
   } };
 }
 
+/** 홈 화면 줄 순서·보이기 (이 기기에 저장) */
+const HOME_SECTIONS = [["resume", "이어 보기"], ["recent", "최근 추가된 영상"], ["favs", "즐겨찾기"], ["photos", "최근 사진"], ["people", "사람"]];
+function homeLayout() {
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem("vs-home") || "[]"); } catch (e) {}
+  const out = saved.filter((x) => HOME_SECTIONS.some(([k]) => k === x.k));
+  HOME_SECTIONS.forEach(([k]) => { if (!out.some((x) => x.k === k)) out.push({ k, on: true }); });   // 새로 생긴 줄은 맨 뒤에 켜진 채로
+  return out;
+}
+function openHomeEditor() {
+  let layout = homeLayout();
+  const label = (k) => (HOME_SECTIONS.find(([x]) => x === k) || [k, k])[1];
+  const list = h("div", { class: "home-edit-list" });
+  const saveLayout = () => { try { localStorage.setItem("vs-home", JSON.stringify(layout)); } catch (e) {} };
+  const draw = () => list.replaceChildren(...layout.map((x, i) => {
+    const sw = h("button", { class: "switch" + (x.on ? " on" : ""), role: "switch", "aria-checked": x.on ? "true" : "false", "aria-label": `${label(x.k)} 보이기`,
+      onclick: () => { x.on = !x.on; saveLayout(); draw(); } });
+    const move = (d) => { const j = i + d; if (j < 0 || j >= layout.length) return; [layout[i], layout[j]] = [layout[j], layout[i]]; saveLayout(); draw(); };
+    return h("div", { class: "home-edit-row" + (x.on ? "" : " off") },
+      h("div", { class: "he-move" },
+        h("button", { class: "round-btn sm", "aria-label": "위로", disabled: i === 0, onclick: () => move(-1) }, "▲"),
+        h("button", { class: "round-btn sm", "aria-label": "아래로", disabled: i === layout.length - 1, onclick: () => move(1) }, "▼")),
+      h("span", { class: "he-name" }, label(x.k)), sw);
+  }));
+  draw();
+  openSheet("홈 편집", [h("p", { class: "meta", style: "margin:0" }, "▲▼로 순서를 바꾸고, 스위치로 보이거나 숨깁니다."), list],
+    [h("button", { class: "btn", onclick: () => { layout = HOME_SECTIONS.map(([k]) => ({ k, on: true })); saveLayout(); draw(); } }, "처음대로"),
+     h("button", { class: "btn primary sheet-go", onclick: () => history.back() }, "완료")]);
+  const onClose = () => { window.removeEventListener("popstate", onClose); if (parseHash().path === "/home" || !location.hash) setTimeout(route, 230); };
+  window.addEventListener("popstate", onClose);
+}
+
 async function renderHome() {
   setTab("home");
   if (!Object.keys(serverCaps).length) serverCaps = await api("settings").catch(() => ({}));   // 앱을 막 열었을 때
@@ -3163,11 +3314,14 @@ async function renderHome() {
   const recent = shelf("최근 추가된 영상", "#/?sort=added", "vids");
   const favs = shelf("즐겨찾기", "#/media?fav=1", "favs");
   const photos = shelf("최근 사진", "#/photos", "photos");
-  const people = shelf("사람", "#/performers", "people");
+  const people = shelf("사람", "#/explore", "people");
+  const secs = { resume, recent, favs, photos, people };
+  const layout = homeLayout();
   $app.replaceChildren(h("div", { class: "home" },
     h("div", { class: "home-head" }, h("div", {}, stats, h("h1", {}, "내 보관함")),
       h("a", { class: "btn", href: "#/?q=", "aria-label": "검색" }, "검색")),
-    resume.sec, recent.sec, favs.sec, photos.sec, people.sec));
+    ...layout.filter((x) => x.on && secs[x.k]).map((x) => secs[x.k].sec),
+    h("div", { class: "home-edit" }, h("button", { class: "btn sm", onclick: openHomeEditor }, "✎ 홈 편집"))));
 
   const counts = { videos: null, photos: null, people: null };
   const n = (x) => (x == null ? "…" : x.toLocaleString());
