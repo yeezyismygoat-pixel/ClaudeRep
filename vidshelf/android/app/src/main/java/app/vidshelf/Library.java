@@ -1117,7 +1117,7 @@ public class Library implements HttpServer.Handler {
         String q = nz(r.param("q")).trim().toLowerCase(Locale.ROOT);
         String[] words = q.isEmpty() ? new String[0] : q.split("\\s+");
         Set<Long> perfFilter = longs(r.params("performer")), tagFilter = longs(r.params("tag"));
-        boolean fav = "1".equals(r.param("fav"));
+        boolean fav = "1".equals(r.param("fav")), unwatched = "1".equals(r.param("unwatched"));
         List<Video> list = new ArrayList<>();
         Set<Long> photoIds = new HashSet<>();
         List<Video> src = new ArrayList<>();
@@ -1126,6 +1126,7 @@ public class Library implements HttpServer.Handler {
         for (Video v : src) {
             JSONObject m = meta(v);
             if (fav && !m.optBoolean("favorite", false)) continue;
+            if (unwatched && (photoIds.contains(v.id) || m.optInt("play_count", 0) > 0)) continue;
             if (!containsAll(m.optJSONArray("performers"), perfFilter) || !containsAll(m.optJSONArray("tags"), tagFilter)) continue;
             if (words.length > 0) {
                 String hay = (title(v) + " " + v.relPath + v.name + " " + performerNames(m).join(" ")).toLowerCase(Locale.ROOT);
@@ -1145,6 +1146,9 @@ public class Library implements HttpServer.Handler {
                 case "title": cmp = Comparator.comparing(v -> title(v).toLowerCase(Locale.ROOT)); break;
                 case "size": cmp = Comparator.comparingLong(v -> v.size); break;
                 case "rating": cmp = Comparator.comparingInt(v -> meta(v).optInt("rating", 0)); break;
+                case "duration": cmp = Comparator.comparingDouble(v -> v.node != null ? meta(v).optDouble("duration", 0) : v.duration); break;
+                case "plays": cmp = Comparator.comparingInt(v -> meta(v).optInt("play_count", 0)); break;
+                case "played": cmp = Comparator.comparingLong(v -> meta(v).optLong("last_played", 0)); break;
                 default: cmp = Comparator.comparingLong(v -> v.dateAdded);
             }
             cmp = cmp.thenComparingLong(v -> v.id);

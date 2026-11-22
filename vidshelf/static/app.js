@@ -157,17 +157,17 @@ async function route() {
   try {
     let m;
     if (path === "/home" || (path === "/" && !location.hash)) return await renderHome();
-    if (path === "/" || path === "") return await renderLibrary(params);
+    if (path === "/" || path === "") return await renderMedia(params, "video");
     if ((m = path.match(/^\/v\/(\d+)$/))) return await renderVideo(+m[1], params);
     if (path === "/tags") return await renderEntities("tags", "태그", "tag");
     if (path === "/performers") return await renderEntities("performers", "출연자", "performer");
     if (path === "/performer") return await renderPerformer(+params.get("id"));
     if (path === "/settings") return await renderSettings();
     if (path === "/mega") return await renderMega(params);
-    if (path === "/photos") return await renderPhotos(params);
+    if (path === "/photos") return await renderMedia(params, "photo");
     if (path === "/shorts") return await renderShorts(params);
     if (path === "/library") return await renderLibraryHub();
-    if (path === "/media") return await renderMedia(params);
+    if (path === "/media") return await renderMedia(params, params.get("type") || "all");
     if (path === "/duplicates") return await renderDuplicates();
     if (path === "/hidden") return await renderHidden();
     if (path === "/comics") return await renderComics(params);
@@ -276,65 +276,232 @@ function mediaSeg(cur) {
 }
 
 const MEDIA_SORTS = [["added", "추가한 날짜"], ["title", "이름"], ["size", "파일 크기"], ["rating", "별점"], ["random", "무작위"]];
+const VIDEO_SORTS = [["duration", "길이"], ["plays", "재생 횟수"], ["played", "최근 재생"]];
+const FILTER_KEYS = ["q", "performer", "tag", "fav", "unwatched"];
 
-async function renderMedia(params) {
+/** 미디어 탭 (1번 시안: 필터 시트). type = all | video | photo */
+async function renderMedia(params, type) {
   setTab("media");
   if (!Object.keys(serverCaps).length) serverCaps = await api("settings").catch(() => ({}));
+  if (serverCaps.photos === false && type === "photo") type = "video";
   const sort = params.get("sort") || "added";
   const order = params.get("order") || (sort === "title" ? "asc" : "desc");
-  const update = (changes) => {
-    const p = new URLSearchParams(params);
-    for (const [k, v] of Object.entries(changes)) (v == null || v === "") ? p.delete(k) : p.set(k, v);
+  const go = (p) => {   // p: URLSearchParams (type 제외)
+    p.delete("type");
+    if (type !== "all") p.set("type", type);
     location.hash = "#/media" + (p.toString() ? "?" + p : "");
   };
-  let t;
-  const search = h("input", { type: "search", class: "search", placeholder: "제목, 출연자, 폴더 검색", value: params.get("q") || "",
-    oninput: (e) => { clearTimeout(t); t = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 400); } });
-  const sortSel = h("select", { "aria-label": "정렬", onchange: (e) => update({ sort: e.target.value, order: null }) },
-    MEDIA_SORTS.map(([v, l]) => h("option", { value: v, selected: v === sort }, l)));
-  const orderBtn = sort === "random" ? h("button", { class: "btn", onclick: () => update({ seed: Date.now() % 100000 }) }, "섞기")
-    : h("button", { class: "btn", onclick: () => update({ order: order === "asc" ? "desc" : "asc" }) }, order === "asc" ? "↑ 오름차순" : "↓ 내림차순");
-  const fav = h("button", { class: "chip" + (params.get("fav") === "1" ? " on" : ""), onclick: () => update({ fav: params.get("fav") === "1" ? null : "1" }) }, "♥ 즐겨찾기");
+  const setType = (t) => { const p = new URLSearchParams(params); p.delete("type"); if (t !== "all") p.set("type", t); if (t !== "video") p.delete("unwatched"); location.hash = "#/media" + (p.toString() ? "?" + p : ""); };
+  const sortLabel = (MEDIA_SORTS.concat(VIDEO_SORTS).find(([v]) => v === sort) || [0, "추가한 날짜"])[1];
+
+  // 이름 알아오기 (필터 칩, 시트)
+  const [performers, tags] = await Promise.all([api("performers").catch(() => []), api("tags").catch(() => [])]);
+  const perfName = (id) => (performers.find((x) => String(x.id) === String(id)) || { name: "#" + id }).name;
+  const tagName = (id) => (tags.find((x) => String(x.id) === String(id)) || { name: "" + id }).name;
+  const nFilters = params.getAll("performer").length + params.getAll("tag").length + (params.get("q") ? 1 : 0) + (params.get("fav") === "1" ? 1 : 0) + (params.get("unwatched") === "1" ? 1 : 0);
+
+  // ---- 머리말
+  const countLine = h("div", { class: "meta" }, "…");
   const mode = viewMode("media");
-  const count = h("span", { class: "meta" });
-  const grid = h("div", { class: mode === "wall" ? "wall" : "pgrid mgrid" });
+  const viewBtn = h("button", { class: "round-btn", "aria-label": mode === "wall" ? "그리드로 보기" : "이미지 벽으로 보기", title: mode === "wall" ? "그리드로 보기" : "이미지 벽으로 보기",
+    onclick: () => { try { localStorage.setItem("vs-mode-media", mode === "wall" ? "grid" : "wall"); } catch (e) {} route(); } });
+  viewBtn.innerHTML = mode === "wall"
+    ? '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>'
+    : '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="10" height="7" rx="1.5"/><rect x="15" y="4" width="6" height="7" rx="1.5"/><rect x="3" y="13" width="6" height="7" rx="1.5"/><rect x="11" y="13" width="10" height="7" rx="1.5"/></svg>';
+  const filterBtn = h("button", { class: "filter-btn", onclick: () => openFilterSheet() });
+  filterBtn.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>';
+  filterBtn.append("필터", nFilters ? h("span", { class: "fbadge" }, nFilters) : null);
+
+  const typeCounts = { video: h("span"), photo: h("span") };
+  const typeSeg = h("div", { class: "type-seg", role: "tablist", "aria-label": "미디어 종류" },
+    ...[["all", "전체", null], ["video", "동영상", typeCounts.video], serverCaps.photos === false ? null : ["photo", "사진", typeCounts.photo]].filter(Boolean).map(([t, l, c]) =>
+      h("button", { class: type === t ? "on" : "", role: "tab", "aria-selected": type === t ? "true" : "false", onclick: () => setType(t) }, l, c ? " " : null, c)));
+
+  // ---- 걸린 필터
+  const without = (key, val) => { const p = new URLSearchParams(params); const rest = p.getAll(key).filter((x) => x !== val); p.delete(key); rest.forEach((x) => p.append(key, x)); go(p); };
+  const activeChips = [];
+  if (params.get("q")) activeChips.push(h("span", { class: "fchip" }, `“${params.get("q")}”`, h("button", { "aria-label": "검색어 지우기", onclick: () => without("q", params.get("q")) }, "×")));
+  for (const id of params.getAll("performer")) {
+    const p = performers.find((x) => String(x.id) === id) || {};
+    activeChips.push(h("span", { class: "fchip" }, h("span", { class: "fc-av" }, entityCover(p, "")), perfName(id), h("button", { "aria-label": `${perfName(id)} 필터 해제`, onclick: () => without("performer", id) }, "×")));
+  }
+  for (const id of params.getAll("tag")) activeChips.push(h("span", { class: "fchip" }, "#" + tagName(id), h("button", { "aria-label": `${tagName(id)} 필터 해제`, onclick: () => without("tag", id) }, "×")));
+  if (params.get("fav") === "1") activeChips.push(h("span", { class: "fchip" }, "♥ 즐겨찾기", h("button", { "aria-label": "즐겨찾기 필터 해제", onclick: () => without("fav", "1") }, "×")));
+  if (params.get("unwatched") === "1") activeChips.push(h("span", { class: "fchip" }, "안 본 영상", h("button", { "aria-label": "안 본 영상 필터 해제", onclick: () => without("unwatched", "1") }, "×")));
+  if (activeChips.length > 1) activeChips.push(h("button", { class: "fclear", onclick: () => { const p = new URLSearchParams(params); FILTER_KEYS.forEach((k) => p.delete(k)); go(p); } }, "모두 지우기"));
+
+  const grid = h("div", { class: mode === "wall" ? "wall" : "sqgrid" });
   const more = h("div", { class: "more" });
-  $app.replaceChildren(h("div", {},
-    h("div", { class: "toolbar" }, mediaSeg("all")),
-    h("div", { class: "toolbar" }, search, sortSel, orderBtn, modeToggle("media", () => route())),
-    h("div", { class: "toolbar" }, h("div", { class: "chips" }, fav), count),
+  $app.replaceChildren(h("div", { class: "media" },
+    h("div", { class: "home-head" }, h("div", {}, countLine, h("h1", {}, "미디어")), h("div", { class: "row", style: "flex-wrap:nowrap" }, viewBtn, filterBtn)),
+    typeSeg,
+    activeChips.length ? h("div", { class: "fchips" }, ...activeChips) : null,
     grid, more));
-  keepTypingFocus(search);
+
+  // 종류별 개수 (필터와 관계없이)
+  api("media?type=video&per=1").then((d) => (typeCounts.video.textContent = d.total.toLocaleString())).catch(() => {});
+  if (serverCaps.photos !== false) api("media?type=photo&per=1").then((d) => (typeCounts.photo.textContent = d.total.toLocaleString())).catch(() => {});
+
+  // ---- 목록
   const photos = [];
   let page = 1;
   const base = new URLSearchParams(params);
-  base.set("sort", sort); base.set("order", order); base.set("per", "60");
+  base.set("type", type); base.set("sort", sort); base.set("order", order); base.set("per", "60");
   if (sort === "random" && !base.get("seed")) base.set("seed", "7");
   async function load() {
     base.set("page", page);
     const d = await api("media?" + base.toString());
-    count.textContent = `${d.total.toLocaleString()}개`;
-    if (page === 1 && !d.total) { grid.replaceWith(h("div", { class: "empty" }, params.toString() ? "조건에 맞는 항목이 없습니다." : "영상과 사진이 아직 없습니다.")); return; }
+    countLine.textContent = `${d.total.toLocaleString()}개 · ${sortLabel}${sort === "random" ? "" : order === "asc" ? " ↑" : ""}`;
+    if (page === 1 && !d.total) {
+      grid.replaceWith(h("div", { class: "empty" }, nFilters ? "조건에 맞는 항목이 없습니다." : type === "photo" ? "사진이 없습니다." : type === "video" ? "영상이 없습니다." : "영상과 사진이 아직 없습니다."));
+      return;
+    }
     for (const it of d.items) {
       if (it.kind === "photo") {
         const i = photos.length;
         photos.push(it);
-        grid.append(photoCell(it, mode, () => openViewer(photos, i)));
-      } else if (mode === "wall") {
-        grid.append(videoTile(it));
+        grid.append(mode === "wall" ? photoCell(it, "wall", () => openViewer(photos, i)) : sqCell(it, () => openViewer(photos, i)));
       } else {
-        const img = h("img", { loading: "lazy", alt: "", src: it.thumbs > 0 ? thumbUrl(it.id, 0, it.thumbs) : null, hidden: !(it.thumbs > 0) });
-        img.onerror = () => (img.hidden = true);
-        grid.append(h("a", { class: "pcard", href: `#/v/${it.id}` },
-          h("div", { class: "thumb" }, img, h("span", { class: "badge dur" }, "▶ " + (it.duration ? fmtDur(it.duration) : "")),
-            it.favorite ? h("span", { class: "badge fav" }, "♥") : null),
-          h("div", { class: "title", title: it.title }, it.title),
-          it.performers && it.performers.length ? h("div", { class: "sub" }, it.performers.join(", ")) : null));
+        grid.append(mode === "wall" ? videoTile(it) : sqCell(it, null));
       }
     }
     const shown = (page - 1) * d.per + d.items.length;
     more.replaceChildren(...(shown < d.total ? [h("button", { class: "btn", onclick: () => { page++; load(); } }, `더 보기 (${shown}/${d.total})`)] : []));
   }
+
+  /** 정사각형 칸: 영상은 ▶ 길이, 즐겨찾기는 ♥ */
+  function sqCell(it, open) {
+    const isPhoto = it.kind === "photo";
+    const src = isPhoto ? `/photothumb/${it.id}.jpg` : it.thumbs > 0 ? thumbUrl(it.id, 0, it.thumbs) : null;
+    const img = h("img", { loading: "lazy", alt: it.title || "", src, hidden: !src });
+    if (!isPhoto && !(it.thumbs > 0)) img.dataset.retry = thumbUrl(it.id, 0, "x");
+    img.onload = () => (img.hidden = false);
+    img.onerror = () => (img.hidden = true);
+    const kids = [img,
+      !isPhoto ? h("span", { class: "sq-dur" }, "▶ " + (it.duration ? fmtDur(it.duration) : "")) : null,
+      it.favorite ? h("span", { class: "sq-fav", "aria-label": "즐겨찾기" }, "♥") : null];
+    return isPhoto
+      ? h("button", { class: "sq", onclick: open, "aria-label": it.title || "사진" }, ...kids)
+      : h("a", { class: "sq", href: `#/v/${it.id}`, "aria-label": it.title || "영상" }, ...kids);
+  }
+
+  // ---- 필터 시트: 검색 · 출연자 · 태그 · 정렬 · 즐겨찾기
+  function openFilterSheet() {
+    const draft = {
+      q: params.get("q") || "", performer: new Set(params.getAll("performer")), tag: new Set(params.getAll("tag")),
+      sort, order, fav: params.get("fav") === "1", unwatched: params.get("unwatched") === "1",
+    };
+    const toParams = () => {
+      const p = new URLSearchParams();
+      if (draft.q.trim()) p.set("q", draft.q.trim());
+      draft.performer.forEach((x) => p.append("performer", x));
+      draft.tag.forEach((x) => p.append("tag", x));
+      if (draft.sort !== "added") p.set("sort", draft.sort);
+      if (draft.order !== (draft.sort === "title" ? "asc" : "desc")) p.set("order", draft.order);
+      if (draft.fav) p.set("fav", "1");
+      if (draft.unwatched && type === "video") p.set("unwatched", "1");
+      return p;
+    };
+    const resultBtn = h("button", { class: "btn primary sheet-go", onclick: () => { close(true); } }, "결과 보기");
+    let countTimer;
+    const refreshCount = () => {
+      clearTimeout(countTimer);
+      countTimer = setTimeout(async () => {
+        const p = toParams(); p.set("type", type); p.set("per", "1");
+        try { const d = await api("media?" + p); resultBtn.textContent = `${d.total.toLocaleString()}개 보기`; } catch (e) {}
+      }, 250);
+    };
+
+    const search = h("input", { type: "search", placeholder: "제목, 출연자, 폴더 검색", value: draft.q, "aria-label": "검색어",
+      oninput: (e) => { draft.q = e.target.value; refreshCount(); },
+      onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); close(true); } } });
+
+    // 출연자: 영상·사진이 많은 순, 처음엔 한 줄
+    const people = performers.filter((p) => p.count || p.photo_count).sort((a, b) => (b.count + (b.photo_count || 0)) - (a.count + (a.photo_count || 0)));
+    let peopleAll = false;
+    const peopleBox = h("div");
+    const drawPeople = () => {
+      const list = peopleAll ? people : people.slice(0, 12);
+      peopleBox.className = peopleAll ? "pick-people wrap" : "pick-people";
+      peopleBox.replaceChildren(...list.map((p) => {
+        const on = draft.performer.has(String(p.id));
+        return h("button", { class: "pick-person" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false",
+          onclick: () => { on ? draft.performer.delete(String(p.id)) : draft.performer.add(String(p.id)); drawPeople(); refreshCount(); } },
+          h("span", { class: "pf-avatar" }, entityCover(p, p.name.slice(0, 1))), h("span", { class: "nm" }, p.name));
+      }));
+    };
+    const peopleMore = people.length > 12 ? h("button", { class: "linkbtn", onclick: (e) => { peopleAll = !peopleAll; e.target.textContent = peopleAll ? "접기" : "모두 보기"; drawPeople(); } }, "모두 보기") : null;
+
+    // 태그
+    const tagList = tags.filter((t) => t.count || t.photo_count).sort((a, b) => (b.count + (b.photo_count || 0)) - (a.count + (a.photo_count || 0)));
+    let tagsAll = false;
+    const tagBox = h("div", { class: "chips" });
+    const drawTags = () => {
+      const list = tagsAll ? tagList : tagList.slice(0, 10);
+      tagBox.replaceChildren(...list.map((t) => {
+        const on = draft.tag.has(String(t.id));
+        return h("button", { class: "chip" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false",
+          onclick: () => { on ? draft.tag.delete(String(t.id)) : draft.tag.add(String(t.id)); drawTags(); refreshCount(); } }, "#" + t.name);
+      }), ...(!tagsAll && tagList.length > 10 ? [h("button", { class: "chip dashed", onclick: () => { tagsAll = true; drawTags(); } }, `+${tagList.length - 10}`)] : []));
+    };
+
+    // 정렬: 같은 것을 다시 누르면 방향이 바뀜
+    const sortBox = h("div", { class: "chips" });
+    const drawSort = () => sortBox.replaceChildren(...MEDIA_SORTS.concat(type === "video" ? VIDEO_SORTS : []).map(([v, l]) => {
+      const on = draft.sort === v;
+      return h("button", { class: "chip" + (on ? " sel" : ""), "aria-pressed": on ? "true" : "false", onclick: () => {
+        if (on && v !== "random") draft.order = draft.order === "asc" ? "desc" : "asc";
+        else { draft.sort = v; draft.order = v === "title" ? "asc" : "desc"; }
+        drawSort(); refreshCount();
+      } }, l + (on && v !== "random" ? (draft.order === "asc" ? " ↑" : " ↓") : ""));
+    }));
+
+    const toggle = (label, key) => {
+      const sw = h("button", { class: "switch" + (draft[key] ? " on" : ""), role: "switch", "aria-checked": draft[key] ? "true" : "false", "aria-label": label,
+        onclick: () => { draft[key] = !draft[key]; sw.classList.toggle("on", draft[key]); sw.setAttribute("aria-checked", draft[key] ? "true" : "false"); refreshCount(); } });
+      return h("div", { class: "sheet-row" }, h("span", {}, label), sw);
+    };
+
+    const sheet = h("section", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": "필터" },
+      h("div", { class: "sheet-grip", "aria-hidden": "true" }),
+      h("div", { class: "sheet-head" }, h("h2", {}, "필터"), h("button", { class: "round-btn", "aria-label": "닫기", onclick: () => close(false) }, icon("close"))),
+      h("div", { class: "sheet-body" },
+        h("label", { class: "sheet-search" }, h("span", { "aria-hidden": "true" }, "⌕"), search),
+        people.length ? h("div", { class: "sheet-sec" }, h("div", { class: "sheet-sec-head" }, h("h3", {}, "출연자"), peopleMore), peopleBox) : null,
+        tagList.length ? h("div", { class: "sheet-sec" }, h("h3", {}, "태그"), tagBox) : null,
+        h("div", { class: "sheet-sec" }, h("h3", {}, "정렬"), sortBox),
+        toggle("즐겨찾기만 보기", "fav"),
+        type === "video" ? toggle("안 본 영상만", "unwatched") : null),
+      h("div", { class: "sheet-foot" },
+        h("button", { class: "btn", onclick: () => {
+          draft.q = ""; search.value = ""; draft.performer.clear(); draft.tag.clear(); draft.fav = false; draft.unwatched = false;
+          draft.sort = "added"; draft.order = "desc";
+          sheet.querySelectorAll(".switch").forEach((x) => { x.classList.remove("on"); x.setAttribute("aria-checked", "false"); });
+          drawPeople(); drawTags(); drawSort(); refreshCount();
+        } }, "초기화"),
+        resultBtn));
+    const shade = h("div", { class: "sheet-shade", onclick: () => close(false) });
+    let closed = false, pending = null;
+    function close(apply) {   // 닫기는 ‘뒤로’로 처리하고, 적용할 필터는 닫힌 뒤에 반영
+      if (closed) return;
+      pending = apply ? toParams() : null;
+      history.back();
+    }
+    const onPop = () => {
+      if (closed) return;
+      closed = true;
+      window.removeEventListener("popstate", onPop);
+      sheet.classList.add("out"); shade.classList.add("out");
+      setTimeout(() => { sheet.remove(); shade.remove(); document.body.style.overflow = ""; }, 220);
+      if (pending) go(pending);
+    };
+    drawPeople(); drawTags(); drawSort(); refreshCount();
+    document.body.append(shade, sheet);
+    document.body.style.overflow = "hidden";
+    history.pushState({ sheet: true }, "");   // 휴대폰 뒤로 가기로 닫힘
+    window.addEventListener("popstate", onPop);
+  }
+
   await load();
 }
 
