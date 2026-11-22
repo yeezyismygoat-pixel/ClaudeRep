@@ -305,12 +305,16 @@ public class Library implements HttpServer.Handler {
             res.json(200, "{\"ok\":true}");
             return;
         }
-        if (action.equals("favorites") || action.equals("gallery")) {
+        if (action.equals("favorites") || action.equals("gallery") || action.equals("search")) {
             JSONArray items;
             JSONObject out = new JSONObject();
             try {
                 if (action.equals("favorites")) {
                     out = eh.favorites(r.param("favcat"), r.param("q"), r.param("next"));
+                    items = out.getJSONArray("items");
+                } else if (action.equals("search")) {
+                    String q = nz(r.param("q")).trim();
+                    out = eh.search("language:korean" + (q.isEmpty() ? "" : " " + q), r.param("next"));
                     items = out.getJSONArray("items");
                 } else {
                     List<Object[]> one = new ArrayList<>();
@@ -334,7 +338,7 @@ public class Library implements HttpServer.Handler {
                     g.put("read_page", pr == null ? 0 : pr.optInt("page", 0));
                 }
             }
-            res.json(200, (action.equals("favorites") ? out.put("logged_in", true) : items.getJSONObject(0)).toString());
+            res.json(200, (action.equals("gallery") ? items.getJSONObject(0) : out.put("logged_in", eh.loggedIn())).toString());
             return;
         }
         res.error(404, "unknown endpoint");

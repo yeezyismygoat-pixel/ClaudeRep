@@ -140,20 +140,8 @@ class EHentai {
         String html = get(url.toString());
         if (!html.contains("favorites.php") || html.contains("This page requires you to log on")) throw new NotLoggedIn();
 
-        // 갤러리 목록 (순서 유지, 중복 제거)
-        Set<String> seen = new LinkedHashSet<>();
-        List<Object[]> ids = new ArrayList<>();
-        Matcher m = GALLERY_LINK.matcher(html);
-        while (m.find()) if (seen.add(m.group(1))) ids.add(new Object[]{Long.parseLong(m.group(1)), m.group(2)});
-
-        // 다음 쪽
-        String nextCursor = null;
-        Matcher nm = NEXT_LINK.matcher(html);
-        if (nm.find()) {
-            String href = unescape(nm.group(1) != null ? nm.group(1) : nm.group(2));
-            Matcher c = Pattern.compile("[?&]next=([^&#]+)").matcher(href);
-            if (c.find()) nextCursor = java.net.URLDecoder.decode(c.group(1), "UTF-8");
-        }
+        List<Object[]> ids = galleryIds(html);
+        String nextCursor = nextCursor(html);
 
         // 즐겨찾기 폴더 이름과 개수
         JSONArray folders = new JSONArray();
@@ -171,6 +159,34 @@ class EHentai {
         }
         return new JSONObject().put("items", gdata(ids)).put("next", nextCursor == null ? JSONObject.NULL : nextCursor)
                 .put("folders", folders);
+    }
+
+    /** 목록 페이지의 갤러리 (순서 유지, 중복 제거) */
+    private static List<Object[]> galleryIds(String html) {
+        Set<String> seen = new LinkedHashSet<>();
+        List<Object[]> ids = new ArrayList<>();
+        Matcher m = GALLERY_LINK.matcher(html);
+        while (m.find()) if (seen.add(m.group(1))) ids.add(new Object[]{Long.parseLong(m.group(1)), m.group(2)});
+        return ids;
+    }
+
+    /** ‘다음 쪽’ 링크의 커서 */
+    private static String nextCursor(String html) throws IOException {
+        Matcher nm = NEXT_LINK.matcher(html);
+        if (!nm.find()) return null;
+        String href = unescape(nm.group(1) != null ? nm.group(1) : nm.group(2));
+        Matcher c = Pattern.compile("[?&]next=([^&#]+)").matcher(href);
+        return c.find() ? java.net.URLDecoder.decode(c.group(1), "UTF-8") : null;
+    }
+
+    /** e-hentai 전체 검색 (로그인 없이도 됨). */
+    JSONObject search(String query, String next) throws IOException, JSONException {
+        StringBuilder url = new StringBuilder(BASE + "/?f_search=").append(enc(query));
+        if (next != null && !next.isEmpty()) url.append("&next=").append(enc(next));
+        String html = get(url.toString());
+        if (html.contains("No hits found")) return new JSONObject().put("items", new JSONArray()).put("next", JSONObject.NULL);
+        String n = nextCursor(html);
+        return new JSONObject().put("items", gdata(galleryIds(html))).put("next", n == null ? JSONObject.NULL : n);
     }
 
     /** 갤러리 정보 (제목, 표지, 페이지 수, 태그 …). 25개씩 나눠서 요청. */

@@ -347,7 +347,7 @@ function icon(name) {
 
 /** 사진 크게 보기: 세로 화면에서는 가로를 꽉 채우고, 아래로 내리면 사진 정보. 좌우로 밀어 넘기기. */
 async function openViewer(items, start) {
-  let i = start, closed = false, cur = null;
+  let i = start, closed = false, cur = null, editing = false;
   const allPerformers = await api("performers").catch(() => []);
   const img = h("img", { alt: "" });
   const counter = h("span", { class: "count" });
@@ -381,10 +381,15 @@ async function openViewer(items, start) {
     info.replaceChildren(
       h("h2", {}, cur.filename || cur.title),
       h("dl", {}, ...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])),
-      h("div", { class: "chips" }, ...(cur.performer_refs.length ? cur.performer_refs.map((p) => h("span", { class: "chip" }, p.name,
-        h("button", { "aria-label": `${p.name} 제거`, onclick: () => save({ performers: cur.performer_refs.filter((x) => x.id !== p.id).map((x) => x.name) }) }, "×")))
-        : [h("span", { class: "meta" }, "출연자 없음")])),
-      input,
+      h("div", { class: "row", style: "justify-content:space-between" },
+        h("span", { class: "meta" }, "출연자"),
+        h("button", { class: "btn sm" + (editing ? " primary" : ""), onclick: () => { editing = !editing; draw(); } }, editing ? "완료" : "✎ 수정")),
+      h("div", { class: "chips" }, ...(cur.performer_refs.length ? cur.performer_refs.map((p) => editing
+        ? h("span", { class: "chip" }, p.name,
+            h("button", { "aria-label": `${p.name} 제거`, onclick: () => save({ performers: cur.performer_refs.filter((x) => x.id !== p.id).map((x) => x.name) }) }, "×"))
+        : h("button", { class: "chip", onclick: () => { close(); location.hash = `#/performer?id=${p.id}`; } }, p.name))
+        : [h("span", { class: "meta" }, editing ? "출연자 없음 — 아래에 이름을 입력하세요" : "출연자 없음")])),
+      ...(editing ? [input] : []),
       h("div", { class: "vnav" }, prevBtn, nextBtn),
       h("datalist", { id: "dl-viewer-perf" }, allPerformers.map((p) => h("option", { value: p.name }))));
     prevBtn.disabled = i === 0; nextBtn.disabled = i === items.length - 1;
@@ -553,110 +558,119 @@ async function renderVideo(id, params) {
     ? h("button", { class: "btn sm", onclick: (e) => { e.target.remove(); seekTo(v.resume_pos); } }, `▶ ${fmtDur(v.resume_pos)}부터 이어보기`)
     : null;
 
-  // --- title / rating / favorite
-  const titleIn = h("input", { type: "text", value: v.title, onchange: (e) => save({ title: e.target.value.trim() || v.title }) });
-  const stars = h("div", { class: "stars" });
-  const drawStars = () => stars.replaceChildren(...[1, 2, 3, 4, 5].map((n) =>
-    h("button", { class: n <= v.rating ? "on" : "", title: `${n}점`, onclick: () => save({ rating: v.rating === n ? 0 : n }) }, "★")));
-  const favBtn = h("button", { class: "favbtn", onclick: () => save({ favorite: !v.favorite }) });
-  const drawFav = () => { favBtn.classList.toggle("on", !!v.favorite); favBtn.textContent = v.favorite ? "♥ 즐겨찾기" : "♡ 즐겨찾기"; };
-
+  // --- 아래 정보: 평소에는 간단히, ‘수정’을 누르면 고칠 수 있게
+  let editing = false;
+  const infoBox = h("div", { class: "vinfo-box" });
   async function save(patch) {
     v = Object.assign(v, await api(`videos/${v.id}`, { method: "PATCH", body: patch }));
-    drawStars(); drawFav(); drawTags(); drawPerformers();
+    drawInfo();
   }
+  const setEditing = (on) => { editing = on; drawInfo(); };
 
-  // --- tags / performers editor
-  function linkEditor(field, all, label, filterKey, prefix) {
-    const box = h("div", { class: "chips" });
-    const listId = "dl-" + field;
-    const input = h("input", { type: "text", list: listId, placeholder: `${label} 추가 (Enter)` });
-    const add = () => {
-      const names = input.value.split(",").map((s) => s.trim()).filter(Boolean);
-      if (!names.length) return;
-      input.value = "";
-      save({ [field]: v[field].map((t) => t.name).concat(names) });
-    };
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
-    const draw = () => box.replaceChildren(...(v[field].length ? v[field].map((t) =>
-      h("span", { class: "chip" },
-        h("a", { href: `#/?${filterKey}=${t.id}` }, prefix + t.name),
-        h("button", { title: "제거", onclick: () => save({ [field]: v[field].filter((x) => x.id !== t.id).map((x) => x.name) }) }, "×")))
-      : [h("span", { class: "meta" }, "없음")]));
-    const panel = h("div", { class: "panel" }, h("h3", {}, label), box,
-      h("div", { class: "taginput" }, input, h("button", { class: "btn", onclick: add }, "추가")),
-      h("datalist", { id: listId }, all.map((t) => h("option", { value: t.name }))));
-    return [panel, draw];
-  }
-  const [tagPanel, drawTags] = linkEditor("tags", allTags, "태그", "tag", "# ");
-  const [perfPanel, drawPerformers] = linkEditor("performers", allPerformers, "출연자", "performer", "");
-
-  // --- markers
-  const markerList = h("ul", { class: "markers" });
-  const markerTitle = h("input", { type: "text", placeholder: "북마크 이름 (선택)" });
-  const drawMarkers = () => markerList.replaceChildren(...(v.markers.length ? v.markers.map((m) =>
-    h("li", {},
-      h("button", { class: "btn sm t", onclick: () => seekTo(m.seconds) }, fmtDur(m.seconds)),
-      h("span", { class: "mt" }, m.title || ""),
-      h("button", { class: "btn sm danger", title: "삭제", onclick: async () => {
-        await api(`markers/${m.id}`, { method: "DELETE" });
-        v.markers = v.markers.filter((x) => x.id !== m.id); drawMarkers();
-      } }, "×")))
-    : [h("li", { class: "meta" }, "재생 중 원하는 장면에서 ‘현재 위치 추가’를 누르세요.")]));
-  const addMarker = async () => {
-    v.markers = await api(`videos/${v.id}/markers`, { method: "POST", body: { seconds: currentTime(), title: markerTitle.value.trim() } });
-    markerTitle.value = ""; drawMarkers(); toast("북마크를 추가했습니다");
-  };
-
-  // --- frames strip (클릭하면 그 지점으로 이동)
+  // 장면 (누르면 그 지점으로)
   const nFrames = Math.max(0, (v.thumbs || 0) - 1);
   const frames = nFrames ? h("div", { class: "framestrip" }, Array.from({ length: nFrames }, (_, i) => {
     const t = v.duration * ((i + 1 - 0.5) / nFrames);
     return h("img", { src: thumbUrl(v.id, i + 1, v.thumbs), loading: "lazy", title: fmtDur(t), onclick: () => seekTo(t) });
   })) : null;
 
-  // --- details
-  const details = h("textarea", { rows: 3, placeholder: "메모", onchange: (e) => save({ details: e.target.value }) });
-  details.value = v.details || "";
+  const favBtn = () => h("button", { class: "favbtn" + (v.favorite ? " on" : ""), onclick: () => save({ favorite: !v.favorite }) }, v.favorite ? "♥ 즐겨찾기" : "♡ 즐겨찾기");
+  const dlBtn = () => v.source === "mega" ? h("a", { class: "btn sm", href: `/media/${v.id}?dl=1` }, "휴대폰에 저장")
+    : v.can_delete === false ? null : h("a", { class: "btn sm", href: `/media/${v.id}`, download: v.filename }, "다운로드");
+  const addMarker = async (titleIn) => {
+    v.markers = await api(`videos/${v.id}/markers`, { method: "POST", body: { seconds: currentTime(), title: titleIn ? titleIn.value.trim() : "" } });
+    toast(`${fmtDur(currentTime())} 북마크를 추가했습니다`); drawInfo();
+  };
 
-  const info = h("dl", { class: "info" },
-    ...[["파일", v.filename], ["폴더", v.folder], ["길이", fmtDur(v.duration)],
-      ["해상도", v.width ? `${v.width}×${v.height} (${resLabel(v.width, v.height)})` : "-"],
-      ["코덱", [v.vcodec, v.acodec].filter(Boolean).join(" / ") || "-"],
-      ["프레임", v.fps ? `${v.fps} fps` : "-"], ["비트레이트", v.bitrate ? `${(v.bitrate / 1e6).toFixed(1)} Mbps` : "-"],
-      ["크기", fmtSize(v.size)], ["재생", `${v.play_count}회 · 마지막 ${fmtDate(v.last_played)}`],
-      ["추가", fmtDate(v.added_at)]].flatMap(([k, val]) => [h("dt", {}, k), h("dd", {}, val)]));
+  function readView() {
+    const meta = [v.duration ? fmtDur(v.duration) : "", resLabel(v.width, v.height), v.size ? fmtSize(v.size) : "",
+      v.play_count ? `${v.play_count}회 재생` : "", v.source === "mega" ? "MEGA" : ""].filter(Boolean).join(" · ");
+    const people = v.performers.map((p) => h("a", { class: "chip", href: `#/performer?id=${p.id}` }, p.name));
+    const tags = v.tags.map((t) => h("a", { class: "chip", href: `#/?tag=${t.id}` }, "# " + t.name));
+    return [
+      h("div", { class: "vhead" },
+        h("h1", { class: "vtitle" }, v.title),
+        h("button", { class: "btn sm", onclick: () => setEditing(true) }, "✎ 수정")),
+      h("div", { class: "vmeta" }, v.rating ? h("span", { class: "stars-mini" }, "★".repeat(v.rating)) : null, h("span", {}, meta)),
+      h("div", { class: "actions" }, favBtn(), dlBtn(),
+        h("button", { class: "btn sm", onclick: () => addMarker(null) }, "🔖 지금 위치 북마크")),
+      people.length || tags.length ? h("div", { class: "chips vchips" }, ...people, ...tags) : null,
+      v.details ? h("p", { class: "vmemo" }, v.details) : null,
+      v.markers.length ? h("div", { class: "vmarks" }, v.markers.map((m) =>
+        h("button", { class: "chip", onclick: () => seekTo(m.seconds) }, h("b", {}, fmtDur(m.seconds)), m.title ? " " + m.title : ""))) : null,
+      frames ? h("div", { class: "panel", style: "margin-top:14px" }, h("h3", {}, "장면"), frames) : null,
+    ];
+  }
 
-  const removeBtn = h("button", { class: "btn danger sm", onclick: async () => {
-    if (!confirm("라이브러리에서 이 영상을 제거할까요?\n(파일은 지우지 않습니다. 다음 스캔 때 다시 추가될 수 있습니다)")) return;
-    await api(`videos/${v.id}`, { method: "DELETE" }); toast("제거했습니다"); history.back();
-  } }, "라이브러리에서 제거");
-  const deleteFileBtn = h("button", { class: "btn danger sm", onclick: async () => {
-    if (!confirm(`파일을 휴대폰에서 완전히 삭제합니다.\n${v.filename}\n\n되돌릴 수 없습니다. 계속할까요?`)) return;
-    await api(`videos/${v.id}?file=1`, { method: "DELETE" }); toast("파일을 삭제했습니다"); location.hash = "#/";
-  } }, "파일 삭제");
-  const regenBtn = h("button", { class: "btn sm", onclick: async () => {
-    await api(`videos/${v.id}/thumbs`, { method: "POST" }); toast("미리보기를 다시 만듭니다");
-  } }, "미리보기 다시 만들기");
-
-  $app.replaceChildren(h("div", { class: "watch" },
-    h("div", {},
-      h("div", { class: "player" }, video),
-      seekRow,
-      h("div", { class: "player-note" }, canTranscode ? modeNote : null, canTranscode ? modeBtn : null, resume),
-      h("div", { class: "titlebox" }, titleIn),
-      h("div", { class: "actions" }, stars, favBtn,
-        v.source === "mega" ? h("a", { class: "btn sm", href: `/media/${v.id}?dl=1` }, "휴대폰에 저장")
-          : v.can_delete === false ? null : h("a", { class: "btn sm", href: `/media/${v.id}`, download: v.filename }, "다운로드")),
-      frames ? h("div", { class: "panel", style: "margin-top:14px" }, h("h3", {}, "장면"), frames) : null),
-    h("div", {},
-      tagPanel, perfPanel,
-      h("div", { class: "panel" }, h("h3", {}, "북마크"), markerList,
-        h("div", { class: "taginput" }, markerTitle, h("button", { class: "btn", onclick: addMarker }, "현재 위치 추가"))),
+  function editView() {
+    const titleIn = h("input", { type: "text", value: v.title, onchange: (e) => save({ title: e.target.value.trim() || v.title }) });
+    const stars = h("div", { class: "stars" }, ...[1, 2, 3, 4, 5].map((n) =>
+      h("button", { class: n <= v.rating ? "on" : "", title: `${n}점`, onclick: () => save({ rating: v.rating === n ? 0 : n }) }, "★")));
+    const editor = (field, all, label, prefix) => {
+      const listId = "dl-" + field;
+      const input = h("input", { type: "text", list: listId, placeholder: `${label} 추가 (Enter)` });
+      const add = () => {
+        const names = input.value.split(",").map((x) => x.trim()).filter(Boolean);
+        if (names.length) save({ [field]: v[field].map((t) => t.name).concat(names) });
+      };
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+      return h("div", { class: "panel" }, h("h3", {}, label),
+        h("div", { class: "chips" }, ...(v[field].length ? v[field].map((t) => h("span", { class: "chip" }, prefix + t.name,
+          h("button", { title: "제거", "aria-label": `${t.name} 제거`, onclick: () => save({ [field]: v[field].filter((x) => x.id !== t.id).map((x) => x.name) }) }, "×")))
+          : [h("span", { class: "meta" }, "없음")])),
+        h("div", { class: "taginput" }, input, h("button", { class: "btn", onclick: add }, "추가")),
+        h("datalist", { id: listId }, all.map((t) => h("option", { value: t.name }))));
+    };
+    const markerTitle = h("input", { type: "text", placeholder: "북마크 이름 (선택)" });
+    const markers = h("ul", { class: "markers" }, ...(v.markers.length ? v.markers.map((m) => h("li", {},
+      h("button", { class: "btn sm t", onclick: () => seekTo(m.seconds) }, fmtDur(m.seconds)),
+      h("span", { class: "mt" }, m.title || ""),
+      h("button", { class: "btn sm danger", title: "삭제", onclick: async () => {
+        await api(`markers/${m.id}`, { method: "DELETE" });
+        v.markers = v.markers.filter((x) => x.id !== m.id); drawInfo();
+      } }, "×"))) : [h("li", { class: "meta" }, "북마크가 없습니다.")]));
+    const details = h("textarea", { rows: 3, placeholder: "메모", onchange: (e) => save({ details: e.target.value }) });
+    details.value = v.details || "";
+    const info = h("dl", { class: "info" },
+      ...[["파일", v.filename], ["폴더", v.folder], ["길이", fmtDur(v.duration)],
+        ["해상도", v.width ? `${v.width}×${v.height} (${resLabel(v.width, v.height)})` : "-"],
+        ["코덱", [v.vcodec, v.acodec].filter(Boolean).join(" / ") || "-"],
+        ["프레임", v.fps ? `${v.fps} fps` : "-"], ["비트레이트", v.bitrate ? `${(v.bitrate / 1e6).toFixed(1)} Mbps` : "-"],
+        ["크기", fmtSize(v.size)], ["재생", `${v.play_count}회 · 마지막 ${fmtDate(v.last_played)}`],
+        ["추가", fmtDate(v.added_at)]].flatMap(([k, val]) => [h("dt", {}, k), h("dd", {}, val)]));
+    const removeBtn = h("button", { class: "btn danger sm", onclick: async () => {
+      if (!confirm("라이브러리에서 이 영상을 제거할까요?\n(파일은 지우지 않습니다. 다음 스캔 때 다시 추가될 수 있습니다)")) return;
+      await api(`videos/${v.id}`, { method: "DELETE" }); toast("제거했습니다"); history.back();
+    } }, "라이브러리에서 제거");
+    const deleteFileBtn = v.can_delete === false ? null : h("button", { class: "btn danger sm", onclick: async () => {
+      if (!confirm(`파일을 휴대폰에서 완전히 삭제합니다.\n${v.filename}\n\n되돌릴 수 없습니다. 계속할까요?`)) return;
+      await api(`videos/${v.id}?file=1`, { method: "DELETE" }); toast("파일을 삭제했습니다"); location.hash = "#/";
+    } }, "파일 삭제");
+    const regenBtn = h("button", { class: "btn sm", onclick: async () => {
+      await api(`videos/${v.id}/thumbs`, { method: "POST" }); toast("미리보기를 다시 만듭니다");
+    } }, "미리보기 다시 만들기");
+    return [
+      h("div", { class: "vhead" }, h("h2", { style: "margin:0;font-size:17px" }, "영상 정보 수정"),
+        h("button", { class: "btn sm primary", onclick: () => setEditing(false) }, "완료")),
+      h("div", { class: "panel" }, h("h3", {}, "제목"), titleIn,
+        h("div", { class: "actions", style: "margin-top:10px" }, stars, favBtn())),
+      editor("performers", allPerformers, "출연자", ""),
+      editor("tags", allTags, "태그", "# "),
+      h("div", { class: "panel" }, h("h3", {}, "북마크"), markers,
+        h("div", { class: "taginput" }, markerTitle, h("button", { class: "btn", onclick: () => addMarker(markerTitle) }, "현재 위치 추가"))),
       h("div", { class: "panel" }, h("h3", {}, "메모"), details),
       h("div", { class: "panel" }, h("h3", {}, "파일 정보"), info,
-        h("div", { class: "row", style: "margin-top:12px" }, regenBtn, removeBtn, v.can_delete === false ? null : deleteFileBtn)))));
-  drawStars(); drawFav(); drawTags(); drawPerformers(); drawMarkers();
+        h("div", { class: "row", style: "margin-top:12px" }, regenBtn, removeBtn, deleteFileBtn)),
+    ];
+  }
+  function drawInfo() { infoBox.replaceChildren(...(editing ? editView() : readView()).filter(Boolean)); }
+
+  $app.replaceChildren(h("div", { class: "watch1" },
+    h("div", { class: "player" }, video),
+    seekRow,
+    h("div", { class: "player-note" }, canTranscode ? modeNote : null, canTranscode ? modeBtn : null, resume),
+    infoBox));
+  drawInfo();
 }
 
 // ---------------------------------------------------------------- tags / performers
@@ -1144,8 +1158,13 @@ function comicCard(g) {
 
 async function renderComics(params) {
   setTab("comics");
+  const tab = params.get("tab") === "fav" ? "fav" : "ko";
   const st = await api("eh/status");
-  if (!st.logged_in) { $app.replaceChildren(ehLoginForm(st.in_app)); return; }
+  const tabs = h("div", { class: "seg comic-tabs", role: "tablist" },
+    h("a", { class: tab === "ko" ? "on" : "", href: "#/comics" }, "한국어 만화"),
+    h("a", { class: tab === "fav" ? "on" : "", href: "#/comics?tab=fav" }, "♥ 즐겨찾기"));
+  if (tab === "fav" && !st.logged_in) { $app.replaceChildren(h("div", {}, tabs, ehLoginForm(st.in_app))); return; }
+
   const favcat = params.get("favcat") || "all", q = params.get("q") || "";
   const update = (ch) => {
     const p = new URLSearchParams(params);
@@ -1153,38 +1172,46 @@ async function renderComics(params) {
     location.hash = "#/comics" + (p.toString() ? "?" + p : "");
   };
   let t;
-  const search = h("input", { type: "search", class: "search", placeholder: "즐겨찾기에서 검색 (제목, 태그)", value: q,
-    oninput: (e) => { clearTimeout(t); t = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 600); } });
+  const search = h("input", { type: "search", class: "search", value: q,
+    placeholder: tab === "fav" ? "즐겨찾기에서 검색 (제목, 태그)" : "한국어 만화 검색 (제목, 태그, 작가)",
+    oninput: (e) => { clearTimeout(t); t = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 700); } });
   const folderChips = h("div", { class: "chips" });
   const grid = h("div", { class: "cgrid" });
   const more = h("div", { class: "more" });
-  const logout = h("button", { class: "btn sm", onclick: async () => {
+  const logout = st.logged_in ? h("button", { class: "btn sm", onclick: async () => {
     if (!confirm("e-hentai 에서 로그아웃할까요? (이 앱에 저장한 로그인 쿠키를 지웁니다)")) return;
     await api("eh/logout", { method: "POST" }); route();
-  } }, "로그아웃");
+  } }, "로그아웃") : null;
   $app.replaceChildren(h("div", {},
-    h("div", { class: "toolbar" }, search, logout),
-    h("div", { class: "toolbar" }, folderChips),
+    h("div", { class: "toolbar" }, tabs, h("span", { style: "flex:1" }), tab === "fav" ? logout : null),
+    h("div", { class: "toolbar" }, search),
+    tab === "fav" ? h("div", { class: "toolbar" }, folderChips) : null,
     grid, more));
   keepTypingFocus(search);
   let next = null, first = true;
   async function load() {
-    const qs = new URLSearchParams({ favcat });
+    const qs = new URLSearchParams();
+    if (tab === "fav") qs.set("favcat", favcat);
     if (q) qs.set("q", q);
     if (next) qs.set("next", next);
     more.replaceChildren(h("span", { class: "meta" }, "불러오는 중…"));
     let d;
-    try { d = await api("eh/favorites?" + qs); }
+    try { d = await api((tab === "fav" ? "eh/favorites?" : "eh/search?") + qs); }
     catch (e) { more.replaceChildren(h("span", { class: "warn" }, e.message), h("button", { class: "btn sm", style: "margin-left:8px", onclick: load }, "다시 시도")); return; }
-    if (d.logged_in === false) { $app.replaceChildren(h("p", { class: "warn" }, "로그인이 풀렸습니다. 다시 로그인하세요."), ehLoginForm(st.in_app)); return; }
+    if (tab === "fav" && d.logged_in === false) { $app.replaceChildren(h("div", {}, tabs, h("p", { class: "warn" }, "로그인이 풀렸습니다. 다시 로그인하세요."), ehLoginForm(st.in_app))); return; }
     if (first) {
       first = false;
-      const total = d.folders.reduce((n, f) => n + f.count, 0);
-      folderChips.replaceChildren(
-        h("button", { class: "chip" + (favcat === "all" ? " on" : ""), onclick: () => update({ favcat: null }) }, `전체${total ? " " + total : ""}`),
-        ...d.folders.filter((f) => f.count > 0 || f.cat === favcat).map((f) =>
-          h("button", { class: "chip" + (favcat === f.cat ? " on" : ""), onclick: () => update({ favcat: f.cat }) }, `${f.name} ${f.count}`)));
-      if (!d.items.length) { grid.replaceWith(h("div", { class: "empty" }, q ? "검색 결과가 없습니다." : "즐겨찾기한 만화가 없습니다.")); more.replaceChildren(); return; }
+      if (tab === "fav") {
+        const total = d.folders.reduce((n, f) => n + f.count, 0);
+        folderChips.replaceChildren(
+          h("button", { class: "chip" + (favcat === "all" ? " on" : ""), onclick: () => update({ favcat: null }) }, `전체${total ? " " + total : ""}`),
+          ...d.folders.filter((f) => f.count > 0 || f.cat === favcat).map((f) =>
+            h("button", { class: "chip" + (favcat === f.cat ? " on" : ""), onclick: () => update({ favcat: f.cat }) }, `${f.name} ${f.count}`)));
+      }
+      if (!d.items.length) {
+        grid.replaceWith(h("div", { class: "empty" }, q ? "검색 결과가 없습니다." : tab === "fav" ? "즐겨찾기한 만화가 없습니다." : "만화를 찾지 못했습니다."));
+        more.replaceChildren(); return;
+      }
     }
     d.items.forEach((g) => grid.append(comicCard(g)));
     next = d.next;
