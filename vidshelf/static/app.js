@@ -74,7 +74,7 @@ function parseHash() {
   const [path, qs] = raw.split("?");
   return { path, params: new URLSearchParams(qs || "") };
 }
-const TAB_GROUP = { photos: "library", tags: "library", performers: "library", settings: "library", library: "library" };
+const TAB_GROUP = { videos: "media", photos: "media", media: "media", tags: "library", performers: "library", settings: "library", library: "library" };
 function setTab(name) {
   const t = TAB_GROUP[name] || name;   // 사진·출연자·태그·설정은 ‘보관함’ 탭 안에 있음
   document.querySelectorAll(".tabs a").forEach((a) => a.classList.toggle("on", a.dataset.tab === t));
@@ -132,6 +132,14 @@ function refreshMissingThumbs() {
 // ---------------------------------------------------------------- router
 window.addEventListener("hashchange", route);
 let pageCleanup = null;   // 화면을 떠날 때 정리할 일 (숏폼 영상 멈추기 등)
+/** 화면이 바뀔 때 살짝 떠오르며 나타나게 */
+function pageIn() {
+  $app.classList.remove("page-in");
+  void $app.offsetWidth;   // 애니메이션 다시 시작
+  $app.classList.add("page-in");
+}
+window.addEventListener("hashchange", () => requestAnimationFrame(pageIn));
+
 async function route() {
   const { path, params } = parseHash();
   stopPlayer();
@@ -151,6 +159,7 @@ async function route() {
     if (path === "/photos") return await renderPhotos(params);
     if (path === "/shorts") return await renderShorts(params);
     if (path === "/library") return await renderLibraryHub();
+    if (path === "/media") return await renderMedia(params);
     if (path === "/duplicates") return await renderDuplicates();
     if (path === "/hidden") return await renderHidden();
     if (path === "/comics") return await renderComics(params);
@@ -217,6 +226,7 @@ async function renderLibrary(params) {
   const grid = h("div", { class: mode === "wall" ? "wall" : "grid" });
   const moreWrap = h("div", { class: "more" });
   $app.replaceChildren(
+    h("div", { class: "toolbar" }, mediaSeg("video")),
     h("div", { class: "toolbar" }, search, sortSel, orderBtn, reshuffle, modeToggle("videos", () => route())),
     h("div", { class: "toolbar" }, h("div", { class: "chips" }, toggles, filterChips), countEl),
     grid, moreWrap);
@@ -247,6 +257,77 @@ async function renderLibrary(params) {
   }
   await load();
   keepTypingFocus(search);
+}
+
+// ---------------------------------------------------------------- 미디어 탭: 전체 / 동영상 / 사진
+function mediaSeg(cur) {
+  return h("div", { class: "seg media-seg", role: "tablist", "aria-label": "미디어 종류" },
+    h("a", { class: cur === "all" ? "on" : "", href: "#/media", role: "tab", "aria-selected": cur === "all" ? "true" : "false" }, "전체"),
+    h("a", { class: cur === "video" ? "on" : "", href: "#/", role: "tab", "aria-selected": cur === "video" ? "true" : "false" }, "동영상"),
+    serverCaps.photos === false ? null : h("a", { class: cur === "photo" ? "on" : "", href: "#/photos", role: "tab", "aria-selected": cur === "photo" ? "true" : "false" }, "사진"));
+}
+
+const MEDIA_SORTS = [["added", "추가한 날짜"], ["title", "이름"], ["size", "파일 크기"], ["rating", "별점"], ["random", "무작위"]];
+
+async function renderMedia(params) {
+  setTab("media");
+  if (!Object.keys(serverCaps).length) serverCaps = await api("settings").catch(() => ({}));
+  const sort = params.get("sort") || "added";
+  const order = params.get("order") || (sort === "title" ? "asc" : "desc");
+  const update = (changes) => {
+    const p = new URLSearchParams(params);
+    for (const [k, v] of Object.entries(changes)) (v == null || v === "") ? p.delete(k) : p.set(k, v);
+    location.hash = "#/media" + (p.toString() ? "?" + p : "");
+  };
+  let t;
+  const search = h("input", { type: "search", class: "search", placeholder: "제목, 출연자, 폴더 검색", value: params.get("q") || "",
+    oninput: (e) => { clearTimeout(t); t = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 400); } });
+  const sortSel = h("select", { "aria-label": "정렬", onchange: (e) => update({ sort: e.target.value, order: null }) },
+    MEDIA_SORTS.map(([v, l]) => h("option", { value: v, selected: v === sort }, l)));
+  const orderBtn = sort === "random" ? h("button", { class: "btn", onclick: () => update({ seed: Date.now() % 100000 }) }, "섞기")
+    : h("button", { class: "btn", onclick: () => update({ order: order === "asc" ? "desc" : "asc" }) }, order === "asc" ? "↑ 오름차순" : "↓ 내림차순");
+  const fav = h("button", { class: "chip" + (params.get("fav") === "1" ? " on" : ""), onclick: () => update({ fav: params.get("fav") === "1" ? null : "1" }) }, "♥ 즐겨찾기");
+  const mode = viewMode("media");
+  const count = h("span", { class: "meta" });
+  const grid = h("div", { class: mode === "wall" ? "wall" : "pgrid mgrid" });
+  const more = h("div", { class: "more" });
+  $app.replaceChildren(h("div", {},
+    h("div", { class: "toolbar" }, mediaSeg("all")),
+    h("div", { class: "toolbar" }, search, sortSel, orderBtn, modeToggle("media", () => route())),
+    h("div", { class: "toolbar" }, h("div", { class: "chips" }, fav), count),
+    grid, more));
+  keepTypingFocus(search);
+  const photos = [];
+  let page = 1;
+  const base = new URLSearchParams(params);
+  base.set("sort", sort); base.set("order", order); base.set("per", "60");
+  if (sort === "random" && !base.get("seed")) base.set("seed", "7");
+  async function load() {
+    base.set("page", page);
+    const d = await api("media?" + base.toString());
+    count.textContent = `${d.total.toLocaleString()}개`;
+    if (page === 1 && !d.total) { grid.replaceWith(h("div", { class: "empty" }, params.toString() ? "조건에 맞는 항목이 없습니다." : "영상과 사진이 아직 없습니다.")); return; }
+    for (const it of d.items) {
+      if (it.kind === "photo") {
+        const i = photos.length;
+        photos.push(it);
+        grid.append(photoCell(it, mode, () => openViewer(photos, i)));
+      } else if (mode === "wall") {
+        grid.append(videoTile(it));
+      } else {
+        const img = h("img", { loading: "lazy", alt: "", src: it.thumbs > 0 ? thumbUrl(it.id, 0, it.thumbs) : null, hidden: !(it.thumbs > 0) });
+        img.onerror = () => (img.hidden = true);
+        grid.append(h("a", { class: "pcard", href: `#/v/${it.id}` },
+          h("div", { class: "thumb" }, img, h("span", { class: "badge dur" }, "▶ " + (it.duration ? fmtDur(it.duration) : "")),
+            it.favorite ? h("span", { class: "badge fav" }, "♥") : null),
+          h("div", { class: "title", title: it.title }, it.title),
+          it.performers && it.performers.length ? h("div", { class: "sub" }, it.performers.join(", ")) : null));
+      }
+    }
+    const shown = (page - 1) * d.per + d.items.length;
+    more.replaceChildren(...(shown < d.total ? [h("button", { class: "btn", onclick: () => { page++; load(); } }, `더 보기 (${shown}/${d.total})`)] : []));
+  }
+  await load();
 }
 
 // ---------------------------------------------------------------- 보기 방식 (그리드 / 이미지 벽)
@@ -325,6 +406,7 @@ async function renderPhotos(params) {
   const grid = h("div", { class: mode === "wall" ? "wall" : "pgrid" });
   const more = h("div", { class: "more" });
   $app.replaceChildren(h("div", {},
+    h("div", { class: "toolbar" }, mediaSeg("photo")),
     h("div", { class: "toolbar" }, search, sortSel, orderBtn, modeToggle("photos", () => route())),
     h("div", { class: "toolbar" }, h("div", { class: "chips" }, fav, chips), count),
     grid, more));
@@ -617,7 +699,12 @@ async function renderVideo(id, params) {
     v = Object.assign(v, await api(`videos/${v.id}`, { method: "PATCH", body: patch }));
     drawInfo();
   }
-  const setEditing = (on) => { editing = on; drawInfo(); };
+  const setEditing = (on) => {
+    editing = on;
+    infoBox.classList.add("switch");   // 보기 ↔ 수정 전환할 때만 살짝 움직임
+    drawInfo();
+    setTimeout(() => infoBox.classList.remove("switch"), 400);
+  };
 
   // 장면 (누르면 그 지점으로)
   const nFrames = Math.max(0, (v.thumbs || 0) - 1);
@@ -1258,9 +1345,8 @@ async function renderLibraryHub() {
   const tile = (href, icon, title, sub) => h("a", { class: "lib-tile", href }, libIcon(icon), h("div", {}, h("b", {}, title), h("br"), h("span", {}, sub)));
   const photoSub = h("span", {}, "…"), peopleSub = h("span", {}, "…"), tagSub = h("span", {}, "…");
   $app.replaceChildren(h("div", {},
-    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "사진 · 출연자 · 태그 · 설정"), h("h1", {}, "보관함"))),
+    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "출연자 · 태그 · 설정"), h("h1", {}, "보관함"))),
     h("div", { class: "lib-grid" },
-      serverCaps.photos ? h("a", { class: "lib-tile", href: "#/photos" }, libIcon("photos"), h("div", {}, h("b", {}, "사진"), h("br"), photoSub)) : null,
       h("a", { class: "lib-tile", href: "#/performers" }, libIcon("people"), h("div", {}, h("b", {}, "출연자"), h("br"), peopleSub)),
       h("a", { class: "lib-tile", href: "#/tags" }, libIcon("tags"), h("div", {}, h("b", {}, "태그"), h("br"), tagSub)),
       tile("#/settings", "settings", "설정", "폴더 · MEGA · 백업 · 화면")),
@@ -1269,7 +1355,6 @@ async function renderLibraryHub() {
       serverCaps.duplicates ? h("a", { href: "#/duplicates" }, "중복 영상 찾기", h("span", {}, "›")) : null,
       serverCaps.hidden_count !== undefined ? h("a", { href: "#/hidden" }, "숨긴 영상", h("span", {}, `${serverCaps.hidden_count}개 ›`)) : null,
       h("a", { href: "#/?fav=1" }, "즐겨찾기 영상", h("span", {}, "›")))));
-  if (serverCaps.photos) api("photos?per=1").then((d) => (photoSub.textContent = `${d.total.toLocaleString()}장`)).catch(() => {});
   api("performers").then((l) => (peopleSub.textContent = `${l.length}명`)).catch(() => {});
   api("tags").then((l) => (tagSub.textContent = `${l.length}개`)).catch(() => {});
 }

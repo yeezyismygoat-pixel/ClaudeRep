@@ -421,3 +421,60 @@ main { padding-bottom: calc(110px + env(safe-area-inset-bottom)) !important; }
 .theme-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: var(--panel); }
 .theme-seg button { border: 0; background: transparent; padding: 9px 16px; color: var(--muted); }
 .theme-seg button.on { background: var(--text); color: var(--bg); font-weight: 600; }
+
+/* 미디어 탭: 전체 / 동영상 / 사진 */
+.media-seg a { display: inline-block; padding: 8px 18px; color: var(--muted); font-size: 14px; border-radius: 999px; }
+.media-seg a.on { background: var(--text); color: var(--bg); font-weight: 600; }
+.media-seg { padding: 3px; border: 1px solid var(--line); }
+.mgrid .badge.dur { font-size: 10px; }
+
+/* ================= 움직임: 전체적으로 부드럽게 ================= */
+:root { --ease: cubic-bezier(.2, .8, .2, 1); }
+html { scroll-behavior: smooth; }
+#app.page-in > * { animation: pageIn .32s var(--ease) both; }
+@keyframes pageIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* 썸네일·사진은 나타날 때 살며시 */
+.thumb img, .tile-img img, .cthumb img, .pcard img, .pf-avatar img, .comic-cover img { animation: fadeIn .4s ease both; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* 누르는 느낌 */
+.btn, .chip, .card, .pcard, .ccard, .tile, .ecard, .lib-tile, .favbtn, .favround, .sbtn, .vbtn, .stat, .lib-list a, .seg a, .seg button, .theme-seg button {
+  transition: transform .18s var(--ease), background-color .2s ease, color .2s ease, border-color .2s ease, opacity .2s ease, box-shadow .2s ease; }
+.btn:active, .chip:active, .favbtn:active, .favround:active, .sbtn:active, .vbtn:active, .seg a:active, .seg button:active, .theme-seg button:active { transform: scale(.95); }
+.card:active, .pcard:active, .ccard:active, .tile:active, .ecard:active, .lib-tile:active, .stat:active, .lib-list a:active { transform: scale(.98); }
+@media (hover: hover) { .card:hover .thumb img, .pcard:hover .thumb img { transform: scale(1.03); } }
+.thumb img { transition: transform .35s var(--ease); }
+
+/* 하단 메뉴: 선택 표시가 부드럽게 바뀜 */
+.topbar .tabs a { transition: background-color .25s var(--ease), color .25s var(--ease), transform .18s var(--ease) !important; }
+.topbar .tabs a:active { transform: scale(.9); }
+.topbar .jobbar:not([hidden]) { animation: popUp .25s var(--ease) both; }
+@keyframes popUp { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+
+/* 사진 보기·만화 보기 열기 */
+.viewer { animation: viewerIn .26s var(--ease) both; }
+@keyframes viewerIn { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
+.viewer .stage img { animation: fadeIn .3s ease both; }
+.reader .vtop { transition: opacity .25s ease, transform .25s var(--ease); }
+.reader .vtop.hide { transform: translateY(-12px); }
+
+/* 창(폴더 고르기 등), 알림 */
+.modal { animation: fadeIn .2s ease both; }
+.modal .box { animation: popUp .28s var(--ease) both; }
+.toast:not([hidden]) { animation: toastIn .3s var(--ease) both; }
+@keyframes toastIn { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* 영상 정보 ↔ 수정 화면 전환, 펼쳐지는 패널 */
+.vinfo-box.switch > * { animation: pageIn .28s var(--ease) both; }
+details.panel[open] > :not(summary) { animation: pageIn .25s var(--ease) both; }
+.splay { transition: opacity .2s ease, transform .2s var(--ease); transform: scale(.9); }
+.splay.show { transform: none; }
+
+/* 테마 바꿀 때 색이 부드럽게 */
+body, .panel, .topbar .tabs, .vcard, .lib-tile, .lib-list { transition: background-color .3s ease, color .3s ease, border-color .3s ease; }
+
+/* 움직임 줄이기 설정을 켠 경우 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}

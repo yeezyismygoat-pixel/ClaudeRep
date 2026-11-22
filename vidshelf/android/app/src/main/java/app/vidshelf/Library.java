@@ -1111,6 +1111,56 @@ public class Library implements HttpServer.Handler {
         return new JSONObject().put("total", list.size()).put("page", page).put("per", per).put("items", items);
     }
 
+    /** 미디어 탭 ‘전체’: 영상과 사진을 한 목록으로. type = all | video | photo */
+    private synchronized JSONObject listMedia(HttpServer.Request r) throws JSONException {
+        String type = nz(r.param("type"));
+        String q = nz(r.param("q")).trim().toLowerCase(Locale.ROOT);
+        String[] words = q.isEmpty() ? new String[0] : q.split("\\s+");
+        Set<Long> perfFilter = longs(r.params("performer")), tagFilter = longs(r.params("tag"));
+        boolean fav = "1".equals(r.param("fav"));
+        List<Video> list = new ArrayList<>();
+        Set<Long> photoIds = new HashSet<>();
+        List<Video> src = new ArrayList<>();
+        if (!type.equals("photo")) src.addAll(visible());
+        if (!type.equals("video")) for (Video p : visiblePhotos()) { src.add(p); photoIds.add(p.id); }
+        for (Video v : src) {
+            JSONObject m = meta(v);
+            if (fav && !m.optBoolean("favorite", false)) continue;
+            if (!containsAll(m.optJSONArray("performers"), perfFilter) || !containsAll(m.optJSONArray("tags"), tagFilter)) continue;
+            if (words.length > 0) {
+                String hay = (title(v) + " " + v.relPath + v.name + " " + performerNames(m).join(" ")).toLowerCase(Locale.ROOT);
+                boolean ok = true;
+                for (String w : words) if (!hay.contains(w)) { ok = false; break; }
+                if (!ok) continue;
+            }
+            list.add(v);
+        }
+        String sort = r.param("sort") == null ? "added" : r.param("sort");
+        boolean asc = "asc".equals(r.param("order"));
+        if ("random".equals(sort)) {
+            Collections.shuffle(list, new Random(parseInt(r.param("seed"), 7)));
+        } else {
+            Comparator<Video> cmp;
+            switch (sort) {
+                case "title": cmp = Comparator.comparing(v -> title(v).toLowerCase(Locale.ROOT)); break;
+                case "size": cmp = Comparator.comparingLong(v -> v.size); break;
+                case "rating": cmp = Comparator.comparingInt(v -> meta(v).optInt("rating", 0)); break;
+                default: cmp = Comparator.comparingLong(v -> v.dateAdded);
+            }
+            cmp = cmp.thenComparingLong(v -> v.id);
+            list.sort(asc ? cmp : cmp.reversed());
+        }
+        int page = Math.max(1, parseInt(r.param("page"), 1));
+        int per = Math.min(300, Math.max(1, parseInt(r.param("per"), 60)));
+        JSONArray items = new JSONArray();
+        for (int i = (page - 1) * per; i < Math.min(list.size(), page * per); i++) {
+            Video v = list.get(i);
+            boolean photo = photoIds.contains(v.id);
+            items.put((photo ? photoSummary(v) : summary(v)).put("kind", photo ? "photo" : "video"));
+        }
+        return new JSONObject().put("total", list.size()).put("page", page).put("per", per).put("items", items);
+    }
+
     private void photoThumb(Video v, HttpServer.Request r, HttpServer.Response res) throws Exception {
         File f = new File(new File(thumbDir, "photos"), Long.toHexString(v.id) + ".jpg");
         if (!f.exists() || f.length() == 0) {
@@ -1960,6 +2010,7 @@ public class Library implements HttpServer.Handler {
             res.json(200, "{\"ok\":true}");
             return;
         }
+        if (p0.equals("media") && m.equals("GET")) { res.json(200, listMedia(r).toString()); return; }
         if (p0.equals("hidden") && m.equals("GET")) { res.json(200, hiddenVideos().toString()); return; }
         if (p0.equals("backup") && m.equals("GET")) {
             String day = new java.text.SimpleDateFormat("yyyyMMdd-HHmm", Locale.ROOT).format(new java.util.Date());
