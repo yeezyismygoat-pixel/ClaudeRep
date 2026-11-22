@@ -200,6 +200,21 @@ function attachScrub(track, fill, { duration, onSeek, previewSrc, onDrag }) {
   return { isDragging: () => dragging };
 }
 
+/** 영상을 받아 오는 동안(클라우드 등) 가운데에 도는 로딩 표시 */
+function attachLoading(video, box) {
+  const sp = h("div", { class: "vloading", hidden: true, "aria-label": "불러오는 중" }, h("i"));
+  box.append(sp);
+  let t = null;
+  const on = () => { clearTimeout(t); t = setTimeout(() => { sp.hidden = false; }, 250); };   // 잠깐 멈칫하는 정도는 표시 안 함
+  const off = () => { clearTimeout(t); sp.hidden = true; };
+  video.addEventListener("loadstart", () => { if (video.getAttribute("src") && (video.autoplay || !video.paused || video.preload === "auto")) on(); });
+  video.addEventListener("waiting", on);
+  video.addEventListener("seeking", on);
+  ["playing", "canplay", "seeked", "pause", "error", "emptied"].forEach((ev) => video.addEventListener(ev, off));
+  video.addEventListener("play", () => { if (video.readyState < 3) on(); });
+  return sp;
+}
+
 /** 영상 칸을 꾹 누르면 그 자리에서 소리 없이 미리보기 재생 (손을 떼도 계속, 화면에서 벗어나면 멈춤) */
 let holdPreviewCur = null;
 const holdPreviewWatch = "IntersectionObserver" in window ? new IntersectionObserver((ents) => ents.forEach((e) => {
@@ -1740,6 +1755,7 @@ async function renderVideo(id, params) {
     h("div", { class: "vp-times" }, timeEl, remainEl));
   // 재생 막대는 항상 영상 바닥에 있고 바로 끌어서 옮길 수 있음
   const playerBox = h("div", { class: "player vp" }, video, ui, track, upNext);
+  attachLoading(video, playerBox);
   const dur = () => v.duration || (isFinite(video.duration) ? video.duration : 0);
   const drawPlay = () => {
     const d = video.paused ? PLAY : PAUSE;
@@ -2629,13 +2645,15 @@ async function renderShorts(params) {
       }, 260);
     }
 
-    const el = h("section", { class: "short" }, video, h("div", { class: "sshade", "aria-hidden": "true" }), icon, errBox,
+    const loadingEl = h("div");
+    const el = h("section", { class: "short" }, video, loadingEl, h("div", { class: "sshade", "aria-hidden": "true" }), icon, errBox,
       h("div", { class: "sinfo" },
         h("a", { class: "stitle", href: `#/v/${v.id}` }, v.title),
         v.performers && v.performers.length ? h("div", { class: "sperf" }, v.performers.join(", ")) : null),
       h("div", { class: "sside" }, favBtn, delBtn, muteBtn,
         h("a", { class: "sbtn", href: `#/v/${v.id}`, "aria-label": "자세히" }, "ⓘ")),
       sbarWrap);
+    loadingEl.replaceWith(attachLoading(video, h("div")));
     // 한 번 누르면 재생/일시정지, 두 번 빠르게 누르면 하트 (인스타처럼)
     let tapTimer = null, lastTap = 0;
     el.addEventListener("click", (e) => {
@@ -2752,13 +2770,27 @@ async function renderExplore(params0) {
   const tagName = (id) => (tags.find((t) => String(t.id) === String(id)) || { name: "#" + id }).name;
   const ageOf = (p) => (p.birthdate ? age(p.birthdate) : null);
   const urlFor = () => "#/explore" + (params.toString() ? "?" + params : "");
+  const isTags = () => params.get("t") === "tags";   // 출연자 / 태그
 
   const countLine = h("div", { class: "meta" }, "");
-  const search = h("input", { type: "search", class: "ex-search", placeholder: "출연자 이름 검색", value: params.get("q") || "", "aria-label": "출연자 이름 검색" });
+  const search = h("input", { type: "search", class: "ex-search", value: params.get("q") || "" });
+  const segInd = h("span", { class: "type-ind", "aria-hidden": "true", style: "width: calc((100% - 6px) / 2)" });
+  const segBtns = [["people", "출연자"], ["tags", "태그"]].map(([k, l]) => h("button", { role: "tab", onclick: () => setMode(k) }, l));
+  const typeSeg = h("div", { class: "type-seg two", role: "tablist" }, segInd, ...segBtns);
+  function setMode(k, anim) {
+    if ((k === "tags") === isTags()) return;
+    const p = new URLSearchParams();
+    if (k === "tags") p.set("t", "tags");
+    search.value = "";
+    update(p, anim || (k === "tags" ? "left" : "right"));
+  }
+  window.__mediaSwipeTarget = (dir) => ((dir > 0 && !isTags()) || (dir < 0 && isTags()) ? content : null);
+  window.__mediaSwipe = (dir) => { setMode(dir > 0 ? "tags" : "people"); return true; };
   const filterBtn = h("button", { class: "filter-btn", onclick: () => openFilter() });
   const chipsBox = h("div", { class: "fchips" });
   const grid = h("div", { class: "ex-grid" });
   const more = h("div", { class: "more" });
+  const content = h("div", { class: "ex-content" }, grid, more);
   const PER = 24;
   let list = [], shown = 0;
 
@@ -2819,7 +2851,49 @@ async function renderExplore(params0) {
     filterBtn.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>';
     filterBtn.append("필터", nFilters() ? h("span", { class: "fbadge" }, nFilters()) : "");
   }
-  function draw(restore) {
+  function tagList() {
+    const q = (params.get("q") || "").trim().toLowerCase();
+    const out = tags.filter((t) => !q || t.name.toLowerCase().includes(q));
+    return (params.get("sort") || "count") === "name" ? out.sort((a, b) => a.name.localeCompare(b.name, "ko"))
+      : out.sort((a, b) => (b.count + (b.photo_count || 0)) - (a.count + (a.photo_count || 0)) || a.name.localeCompare(b.name, "ko"));
+  }
+  let editingTags = false;
+  function tagRow(t) {
+    const n = [t.count ? `영상 ${t.count}` : null, t.photo_count ? `사진 ${t.photo_count}` : null].filter(Boolean).join(" · ") || "항목 없음";
+    const kids = [h("span", { class: "ex-hash", "aria-hidden": "true" }, "#"), h("div", { class: "ex-tmain" }, h("b", {}, t.name), h("span", { class: "meta" }, n))];
+    if (!editingTags) return h("a", { class: "ex-tag", href: `#/?tag=${t.id}` }, ...kids, h("span", { class: "chev", "aria-hidden": "true" }, "›"));
+    return h("div", { class: "ex-tag editing" }, ...kids,
+      h("button", { class: "btn sm", onclick: async () => {
+        const nn = prompt("새 태그 이름", t.name);
+        if (!nn || !nn.trim() || nn.trim() === t.name) return;
+        try { const r = await api(`tags/${t.id}`, { method: "PATCH", body: { name: nn.trim() } }); toast(r.merged ? "같은 이름의 태그와 합쳤습니다" : "이름을 바꿨습니다"); route(); } catch (e) { toast(e.message); }
+      } }, "이름 변경"),
+      h("button", { class: "btn sm danger", onclick: async () => {
+        if (!confirm(`#${t.name} 태그를 삭제할까요?\n영상과 사진은 그대로 남고 태그만 없어집니다.`)) return;
+        await api(`tags/${t.id}`, { method: "DELETE" }); toast("삭제했습니다"); route();
+      } }, "삭제"));
+  }
+  function draw(restore, anim) {
+    segBtns.forEach((b, i) => { const on = (i === 1) === isTags(); b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
+    segInd.style.transform = `translateX(${isTags() ? 100 : 0}%)`;
+    search.placeholder = isTags() ? "태그 검색" : "출연자 이름 검색";
+    search.setAttribute("aria-label", search.placeholder);
+    content.classList.remove("in-left", "in-right"); content.style.transform = ""; content.style.opacity = "";
+    if (anim) { void content.offsetWidth; content.classList.add("in-" + anim); }
+    if (isTags()) {
+      const tl = tagList();
+      countLine.textContent = `태그 ${tl.length.toLocaleString()}개 · ${(params.get("sort") || "count") === "name" ? "이름" : "많이 쓴 순"}`;
+      chipsBox.replaceChildren(); chipsBox.hidden = true;
+      filterBtn.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>';
+      filterBtn.append("정렬");
+      const editBtn = h("button", { class: "btn sm" + (editingTags ? " primary" : ""), onclick: () => { editingTags = !editingTags; draw(); } }, editingTags ? "완료" : "✎ 편집");
+      grid.className = "ex-tags";
+      grid.replaceChildren(h("div", { class: "ex-tags-head" }, h("span", { class: "meta" }, "누르면 그 태그의 영상·사진을 봅니다"), tags.length ? editBtn : null),
+        ...(tl.length ? tl.map(tagRow) : [h("div", { class: "empty" }, tags.length ? "검색과 맞는 태그가 없습니다." : "아직 태그가 없습니다.")]));
+      more.replaceChildren();
+      return;
+    }
+    grid.className = "ex-grid";
     list = filtered(); shown = 0;
     grid.replaceChildren();
     const sortLabel = (EX_SORTS.find(([v]) => v === (params.get("sort") || "videos")) || [0, ""])[1];
@@ -2833,12 +2907,12 @@ async function renderExplore(params0) {
     window.__mediaPages = Math.ceil(shown / PER);
     if (shown < list.length) autoMore(more, drawMore); else more.replaceChildren();
   }
-  function update(p) {
+  function update(p, anim) {
     params = p;
     history.replaceState(history.state, "", urlFor());
     lastHash = location.hash;
     window.scrollTo({ top: 0, behavior: "instant" });
-    draw();
+    draw(null, anim);
   }
   let typing;
   search.addEventListener("input", () => {
@@ -2847,6 +2921,12 @@ async function renderExplore(params0) {
   });
 
   function openFilter() {
+    if (isTags()) {
+      const cur = params.get("sort") || "count";
+      const close = openSheet("정렬", [h("div", { class: "chips" }, ...[["count", "많이 쓴 순"], ["name", "이름"]].map(([k, l]) =>
+        h("button", { class: "chip" + (cur === k ? " on" : ""), onclick: () => close(() => { const p = new URLSearchParams(params); if (k === "count") p.delete("sort"); else p.set("sort", k); update(p); }) }, l)))]);
+      return;
+    }
     const draft = { tag: new Set(params.getAll("tag")), age: new Set(params.getAll("age")), sort: params.get("sort") || "videos" };
     const goBtn = h("button", { class: "btn primary sheet-go" });
     const toParams = () => {
@@ -2854,7 +2934,7 @@ async function renderExplore(params0) {
       if (params.get("q")) p.set("q", params.get("q"));
       draft.tag.forEach((t) => p.append("tag", t)); draft.age.forEach((a) => p.append("age", a));
       if (draft.sort !== "videos") p.set("sort", draft.sort);
-      return p;
+      return p;   // (태그 화면 설정은 따로)
     };
     const refresh = () => { const save = params; params = toParams(); const n = filtered().length; params = save; goBtn.textContent = `${n.toLocaleString()}명 보기`; };
     const chipSet = (items, set, label) => h("div", { class: "chips" }, ...items.map(([k, l]) => {
@@ -2883,9 +2963,10 @@ async function renderExplore(params0) {
   $app.replaceChildren(h("div", { class: "explore" },
     h("div", { class: "home-head media-title" }, h("div", {}, countLine, h("h1", {}, "탐색"))),
     h("div", { class: "media-bar" },
-      h("div", { class: "media-bar-row" }, h("label", { class: "ex-search-box" }, h("span", { "aria-hidden": "true" }, "⌕"), search), filterBtn),
+      h("div", { class: "media-bar-row" }, typeSeg, filterBtn),
+      h("label", { class: "ex-search-box" }, h("span", { "aria-hidden": "true" }, "⌕"), search),
       chipsBox),
-    grid, more));
+    content));
 
   const mem = scrollMemory[location.hash];
   delete scrollMemory[location.hash];

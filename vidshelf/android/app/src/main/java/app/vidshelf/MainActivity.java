@@ -110,11 +110,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        getWindow().setStatusBarColor(BG);
-        getWindow().setNavigationBarColor(BG);
         root = new FrameLayout(this);
-        root.setBackgroundColor(BG);
+        root.setBackgroundColor(systemDark() ? DARK_BG : LIGHT_BG);
         setContentView(root);
+        applyBars(systemDark());
     }
 
     @Override
@@ -133,7 +132,7 @@ public class MainActivity extends Activity {
             getPreferences(MODE_PRIVATE).edit().putBoolean("asked_images", true).apply();
             requestPermissions(new String[]{Manifest.permission.READ_MEDIA_IMAGES}, 2);
         }
-        if (web == null) showLoading("불러오는 중…");
+        if (web == null) showSplash();
         else web.onResume();
         ui.removeCallbacks(watcher);
         ui.post(watcher);
@@ -190,6 +189,11 @@ public class MainActivity extends Activity {
         if (!systemDark()) web.setBackgroundColor(LIGHT_BG);
         web.setWebViewClient(new WebViewClient() {
             @Override
+            public void onPageFinished(WebView view, String url) {   // 화면이 그려지면 아이콘 화면을 부드럽게 걷어 냄
+                ui.postDelayed(MainActivity.this::hideSplash, 250);
+            }
+
+            @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
                 Uri u = req.getUrl();
                 if ("vidshelf".equals(u.getScheme()) && "manage-media".equals(u.getHost()) && Build.VERSION.SDK_INT >= 31) {
@@ -238,8 +242,10 @@ public class MainActivity extends Activity {
         });
         web.setDownloadListener((url, userAgent, contentDisposition, mimetype, length) ->
                 download(url, URLUtil.guessFileName(url, contentDisposition, mimetype), mimetype));
+        View splash = root.getChildCount() > 0 && "splash".equals(root.getChildAt(0).getTag()) ? root.getChildAt(0) : null;
         root.removeAllViews();
         root.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        if (splash != null) root.addView(splash);   // 웹 화면이 다 불러와질 때까지 아이콘을 위에 둠
     }
 
     private void exitFullscreen() {
@@ -414,10 +420,42 @@ public class MainActivity extends Activity {
         show(box);
     }
 
-    private void showLoading(String msg) {
-        LinearLayout box = column();
-        box.addView(text(msg, 16, MUTED, false));
-        show(box);
+    private void hideSplash() {
+        for (int i = root.getChildCount() - 1; i >= 0; i--) {
+            View c = root.getChildAt(i);
+            if (!"splash".equals(c.getTag())) continue;
+            c.setTag("splash-out");
+            c.animate().alpha(0f).setDuration(220).withEndAction(() -> root.removeView(c)).start();
+        }
+    }
+
+    /** 켜는 동안: 가운데에 앱 아이콘 (천천히 숨 쉬듯 커졌다 작아짐) */
+    private void showSplash() {
+        if (web != null || (root.getChildCount() > 0 && "splash".equals(root.getChildAt(0).getTag()))) return;
+        boolean dark = systemDark();
+        FrameLayout box = new FrameLayout(this);
+        box.setTag("splash");
+        box.setBackgroundColor(dark ? DARK_BG : LIGHT_BG);
+        android.widget.ImageView icon = new android.widget.ImageView(this);
+        icon.setImageResource(R.drawable.ic_launcher_fg);
+        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{0xFF26272D, 0xFF121316});
+        bg.setCornerRadius(dp(30));
+        icon.setBackground(bg);
+        icon.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        icon.setClipToOutline(true);
+        icon.setOutlineProvider(android.view.ViewOutlineProvider.BACKGROUND);
+        icon.setElevation(dp(6));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(112), dp(112), Gravity.CENTER);
+        box.addView(icon, lp);
+        root.removeAllViews();
+        root.addView(box, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        applyBars(dark);
+        android.view.animation.ScaleAnimation pulse = new android.view.animation.ScaleAnimation(1f, 1.06f, 1f, 1.06f,
+                android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f, android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f);
+        pulse.setDuration(900);
+        pulse.setRepeatMode(android.view.animation.Animation.REVERSE);
+        pulse.setRepeatCount(android.view.animation.Animation.INFINITE);
+        icon.startAnimation(pulse);
     }
 
     private void showError(String err) {
@@ -427,7 +465,7 @@ public class MainActivity extends Activity {
         box.addView(button("다시 시도", v -> {
             ServerService.lastError = null;
             ServerService.start(this);
-            showLoading("불러오는 중…");
+            showSplash();
         }));
         show(box);
     }
@@ -435,6 +473,9 @@ public class MainActivity extends Activity {
     private void show(View v) {
         if (web != null) return;
         root.removeAllViews();
+        root.setBackgroundColor(BG);
+        getWindow().setStatusBarColor(BG);
+        getWindow().setNavigationBarColor(BG);
         root.addView(v, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
