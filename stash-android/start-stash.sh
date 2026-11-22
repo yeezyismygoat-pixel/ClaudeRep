@@ -37,6 +37,9 @@ if [ ! -s "$RESOLV" ]; then
   printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > "$RESOLV"
 fi
 
+# Termux에는 $USER가 없어서 Stash가 "user: Current requires cgo or $USER" 로 종료됨
+export USER="${USER:-$(id -un 2>/dev/null || echo termux)}"
+export HOME="${HOME:-/data/data/com.termux/files/home}"
 export SSL_CERT_FILE="$PREFIX/etc/tls/cert.pem"   # HTTPS 인증서
 export PATH="$PREFIX/bin:$PATH"                    # ffmpeg/ffprobe 찾기
 export TMPDIR="${TMPDIR:-$PREFIX/tmp}"
