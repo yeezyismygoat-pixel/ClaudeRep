@@ -24,6 +24,8 @@ import java.util.List;
 public class ServerService extends Service {
 
     public static final int PORT = 8899;
+    /** 실제로 열린 포트. 8899 를 다른 공간(일반 공간 등)의 VidShelf 가 쓰고 있으면 다음 번호를 씀. */
+    static volatile int port = PORT;
     static final String ACTION_STOP = "app.vidshelf.STOP";
     private static final String CHANNEL = "server";
 
@@ -58,7 +60,19 @@ public class ServerService extends Service {
             startForeground(1, buildNotification(lan));
         try {
             if (server == null) server = new HttpServer(lib);
-            server.start(lan ? "0.0.0.0" : "127.0.0.1", PORT);
+            Exception last = null;
+            boolean ok = false;
+            for (int p = PORT; p < PORT + 10 && !ok; p++) {
+                try {
+                    server.start(lan ? "0.0.0.0" : "127.0.0.1", p);
+                    port = p;
+                    ok = true;
+                } catch (java.net.BindException e) {
+                    last = e;
+                }
+            }
+            if (!ok) throw last;
+            getSystemService(NotificationManager.class).notify(1, buildNotification(lan));
             running = true;
             lastError = null;
             acquireLocks(lan);
@@ -111,12 +125,12 @@ public class ServerService extends Service {
         nm.createNotificationChannel(new NotificationChannel(CHANNEL, "VidShelf 서버", NotificationManager.IMPORTANCE_LOW));
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stop = PendingIntent.getService(this, 1, new Intent(this, ServerService.class).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE);
-        String text = "이 폰: http://localhost:" + PORT;
+        String text = "이 폰: http://localhost:" + port;
         List<String> ips = lanAddresses();
-        if (lan && !ips.isEmpty()) text += "  ·  다른 기기: http://" + ips.get(0) + ":" + PORT;
+        if (lan && !ips.isEmpty()) text += "  ·  다른 기기: http://" + ips.get(0) + ":" + port;
         return new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle("VidShelf 실행 중")
+                .setContentTitle("VidShelf 실행 중 · " + spaceName())
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setContentIntent(open)
@@ -124,6 +138,11 @@ public class ServerService extends Service {
                 .setOngoing(true)
                 .build();
     }
+
+    /** 안드로이드 사용자 번호: 0 = 일반 공간, 그 외(보통 150 이상) = 보안 폴더 등 별도 공간. */
+    static int userId() { return android.os.Process.myUid() / 100000; }
+
+    static String spaceName() { return userId() == 0 ? "일반 공간" : "보안 폴더"; }
 
     /** 같은 Wi-Fi 의 다른 기기가 접속할 수 있는 이 폰의 주소들. */
     static List<String> lanAddresses() {

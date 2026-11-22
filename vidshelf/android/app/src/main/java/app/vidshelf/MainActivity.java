@@ -93,6 +93,13 @@ public class MainActivity extends Activity {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(title);
         root.addView(text("이 앱이 설치된 공간의 영상만 보여 줍니다. 보안 폴더에 설치하면 보안 폴더의 영상만 연결됩니다.", 14, MUTED));
+        boolean secure = ServerService.userId() != 0;
+        LinearLayout where = panel();
+        where.addView(text(secure ? "🔒 보안 폴더에서 실행 중" : "⚠ 일반 공간에서 실행 중", 17, secure ? ACCENT : 0xFFEF6A62));
+        where.addView(text(secure
+                ? "보안 폴더의 영상만 보입니다."
+                : "지금은 일반 공간의 영상이 보입니다. 보안 폴더 영상만 보려면 보안 폴더 안의 VidShelf 를 쓰고, 이 앱은 지우거나 서버를 중지하세요.", 14, MUTED));
+        root.addView(where);
         space(16);
 
         // --- 권한
@@ -113,16 +120,18 @@ public class MainActivity extends Activity {
         if (ServerService.lastError != null) status.addView(text("오류: " + ServerService.lastError, 14, 0xFFEF6A62));
         status.addView(text("영상 " + lib.videoCount() + "개 · 폴더: " + String.join(", ", lib.libraryPaths()), 14, MUTED));
         status.addView(label("이 폰에서"));
-        status.addView(selectable("http://localhost:" + ServerService.PORT));
+        status.addView(selectable("http://localhost:" + ServerService.port));
+        if (running && ServerService.port != ServerService.PORT)
+            status.addView(text("8899 번은 다른 공간의 VidShelf 가 쓰고 있어 " + ServerService.port + " 번으로 열었습니다. 8899 번 주소로 열면 다른 공간의 영상이 보이니 주의하세요.", 13, 0xFFEF6A62));
         if (lan) {
             status.addView(label("같은 Wi-Fi 의 다른 기기에서"));
             List<String> ips = ServerService.lanAddresses();
             if (ips.isEmpty()) status.addView(text("Wi-Fi 에 연결되어 있지 않습니다", 14, MUTED));
-            for (String ip : ips) status.addView(selectable("http://" + ip + ":" + ServerService.PORT));
+            for (String ip : ips) status.addView(selectable("http://" + ip + ":" + ServerService.port));
         }
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.addView(button("브라우저로 열기", true, v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("http://localhost:" + ServerService.PORT)))));
+        row.addView(button("브라우저로 열기", true, v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("http://localhost:" + ServerService.port)))));
         row.addView(button(running ? "서버 중지" : "서버 시작", false, v -> {
             if (ServerService.running) ServerService.stop(this); else ServerService.start(this);
             ui.postDelayed(this::render, 800);
