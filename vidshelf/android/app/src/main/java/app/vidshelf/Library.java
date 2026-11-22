@@ -76,7 +76,14 @@ public class Library implements HttpServer.Handler {
         Uri uri;
         Mega.Link link;      // MEGA 영상이면 설정됨
         Mega.Node node;
+        long taken;          // 사진: 촬영 시각 (초)
     }
+
+    static final long PHOTO_ID_BASE = 1L << 51;   // 기기 사진 id (영상 id 와 겹치지 않게)
+    private List<Video> allPhotos = new ArrayList<>();
+    private final Map<Long, Video> photoById = new HashMap<>();
+    private static final Set<String> MEGA_IMAGE_EXTS = new HashSet<>(java.util.Arrays.asList(
+            "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp"));
 
     private final Context ctx;
     private final File storeFile, thumbDir;
@@ -122,7 +129,9 @@ public class Library implements HttpServer.Handler {
         int assigned = 0;
         Set<String> people = new TreeSet<>();
         try {
-            for (Video v : all) {
+            List<Video> targets = new ArrayList<>(all);
+            targets.addAll(allPhotos);
+            for (Video v : targets) {
                 if (v.node == null) continue;
                 JSONObject m = meta(v);
                 if (m.optBoolean("auto_perf", false)) continue;
@@ -458,7 +467,188 @@ public class Library implements HttpServer.Handler {
         all = list;
         byId.clear();
         for (Video v : list) byId.put(v.id, v);
+        scanPhotos();
         lastScan = System.currentTimeMillis();
+    }
+
+    private synchronized void scanPhotos() {
+        List<Video> list = new ArrayList<>();
+        Uri base = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+        String[] proj = {
+                MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.RELATIVE_PATH,
+                MediaStore.Images.Media.SIZE, MediaStore.Images.Media.WIDTH, MediaStore.Images.Media.HEIGHT,
+                MediaStore.Images.Media.DATE_ADDED, MediaStore.Images.Media.DATE_TAKEN, MediaStore.Images.Media.MIME_TYPE,
+                MediaStore.Images.Media.ORIENTATION};
+        try (Cursor c = ctx.getContentResolver().query(base, proj, null, null, null)) {
+            if (c != null) {
+                while (c.moveToNext()) {
+                    Video v = new Video();
+                    long mid = c.getLong(0);
+                    v.id = PHOTO_ID_BASE | mid;
+                    v.name = nz(c.getString(1));
+                    v.relPath = nz(c.getString(2));
+                    v.size = c.getLong(3);
+                    v.width = c.getInt(4);
+                    v.height = c.getInt(5);
+                    if (c.getInt(9) == 90 || c.getInt(9) == 270) { int t = v.width; v.width = v.height; v.height = t; }
+                    v.dateAdded = c.getLong(6);
+                    v.taken = c.getLong(7) > 0 ? c.getLong(7) / 1000 : v.dateAdded;
+                    v.mime = c.getString(8);
+                    v.uri = ContentUris.withAppendedId(base, mid);
+                    v.key = v.relPath + v.name + "|" + v.size;
+                    list.add(v);
+                }
+            }
+        } catch (SecurityException e) {
+            // 사진 권한 없음 — 빈 목록
+        }
+        for (Mega.Link l : megaLinks) {
+            List<Mega.Node> nodes;
+            synchronized (l) { nodes = new ArrayList<>(l.nodes); }
+            for (Mega.Node n : nodes) {
+                if (n.folder || !MEGA_IMAGE_EXTS.contains(ext(n.name))) continue;
+                Video v = new Video();
+                v.id = n.id;
+                v.name = n.name;
+                v.relPath = "MEGA/" + n.path;
+                v.size = n.size;
+                v.dateAdded = n.ts;
+                v.taken = n.ts;
+                v.mime = mimeFor(ext(n.name));
+                v.key = "mega:" + n.handle;
+                v.link = l;
+                v.node = n;
+                list.add(v);
+            }
+        }
+        allPhotos = list;
+        photoById.clear();
+        for (Video v : list) photoById.put(v.id, v);
+    }
+
+    private synchronized List<Video> visiblePhotos() {
+        if (lastScan == 0 || System.currentTimeMillis() - lastScan > 60_000) scan();
+        List<String> paths = libraryPaths();
+        List<Video> out = new ArrayList<>();
+        for (Video v : allPhotos) {
+            if (meta(v).optBoolean("hidden", false)) continue;
+            if (v.node == null) {
+                boolean in = false;
+                for (String p : paths) if (v.relPath.startsWith(p)) { in = true; break; }
+                if (!in) continue;
+            }
+            out.add(v);
+        }
+        return out;
+    }
+
+    private JSONArray performerNames(JSONObject m) throws JSONException {
+        JSONArray refs = entityRefs(m, "performers"), out = new JSONArray();
+        for (int i = 0; i < refs.length(); i++) out.put(refs.getJSONObject(i).optString("name"));
+        return out;
+    }
+
+    private JSONObject photoSummary(Video v) throws JSONException {
+        JSONObject m = meta(v);
+        return new JSONObject().put("id", v.id).put("title", title(v)).put("width", v.width).put("height", v.height)
+                .put("size", v.size).put("favorite", m.optBoolean("favorite", false) ? 1 : 0)
+                .put("performers", performerNames(m)).put("added_at", v.dateAdded).put("taken", v.taken)
+                .put("source", v.node != null ? "mega" : "local");
+    }
+
+    private synchronized JSONObject photoDetail(Video v) throws JSONException {
+        return photoSummary(v).put("filename", v.name).put("folder", v.relPath)
+                .put("performer_refs", entityRefs(meta(v), "performers"));
+    }
+
+    private synchronized JSONObject listPhotos(HttpServer.Request r) throws JSONException {
+        String q = nz(r.param("q")).trim().toLowerCase(Locale.ROOT);
+        String[] words = q.isEmpty() ? new String[0] : q.split("\\s+");
+        Set<Long> perfFilter = longs(r.params("performer"));
+        boolean fav = "1".equals(r.param("fav"));
+        List<Video> list = new ArrayList<>();
+        for (Video v : visiblePhotos()) {
+            JSONObject m = meta(v);
+            if (fav && !m.optBoolean("favorite", false)) continue;
+            if (!containsAll(m.optJSONArray("performers"), perfFilter)) continue;
+            if (words.length > 0) {
+                String hay = (title(v) + " " + v.relPath + v.name + " " + performerNames(m).join(" ")).toLowerCase(Locale.ROOT);
+                boolean ok = true;
+                for (String w : words) if (!hay.contains(w)) { ok = false; break; }
+                if (!ok) continue;
+            }
+            list.add(v);
+        }
+        String sort = r.param("sort") == null ? "taken" : r.param("sort");
+        boolean asc = "asc".equals(r.param("order"));
+        if ("random".equals(sort)) {
+            Collections.shuffle(list, new Random(parseInt(r.param("seed"), 7)));
+        } else {
+            Comparator<Video> cmp;
+            switch (sort) {
+                case "title": cmp = Comparator.comparing(v -> title(v).toLowerCase(Locale.ROOT)); break;
+                case "size": cmp = Comparator.comparingLong(v -> v.size); break;
+                case "added": cmp = Comparator.comparingLong(v -> v.dateAdded); break;
+                default: cmp = Comparator.comparingLong(v -> v.taken);
+            }
+            cmp = cmp.thenComparingLong(v -> v.id);
+            list.sort(asc ? cmp : cmp.reversed());
+        }
+        int page = Math.max(1, parseInt(r.param("page"), 1));
+        int per = Math.min(300, Math.max(1, parseInt(r.param("per"), 60)));
+        JSONArray items = new JSONArray();
+        for (int i = (page - 1) * per; i < Math.min(list.size(), page * per); i++) items.put(photoSummary(list.get(i)));
+        return new JSONObject().put("total", list.size()).put("page", page).put("per", per).put("items", items);
+    }
+
+    private void photoThumb(Video v, HttpServer.Request r, HttpServer.Response res) throws Exception {
+        File f = new File(new File(thumbDir, "photos"), Long.toHexString(v.id) + ".jpg");
+        if (!f.exists() || f.length() == 0) {
+            byte[] jpg = null;
+            if (v.node != null) {
+                if (v.node.thumbHandle != null) jpg = Mega.thumbnail(v.link, v.node);
+                if (jpg == null) { megaStream(v.link, v.node, v.mime, r, res, false); return; }   // 썸네일이 없으면 원본
+            } else {
+                Bitmap bmp = null;
+                frameLock.acquire();
+                try {
+                    bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(512, 512), null);
+                } catch (Exception ignored) {
+                } finally {
+                    frameLock.release();
+                }
+                if (bmp == null) { res.error(404, "no thumbnail"); return; }
+                ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                bmp.compress(Bitmap.CompressFormat.JPEG, 80, bo);
+                bmp.recycle();
+                jpg = bo.toByteArray();
+            }
+            f.getParentFile().mkdirs();
+            try (FileOutputStream o = new FileOutputStream(f)) { o.write(jpg); }
+        }
+        res.header("Cache-Control", "max-age=86400");
+        res.send(200, "image/jpeg", readAll(new FileInputStream(f)));
+    }
+
+    private void photoFull(Video v, HttpServer.Request r, HttpServer.Response res) throws Exception {
+        String mime = v.mime == null ? "image/jpeg" : v.mime;
+        boolean heic = mime.contains("heic") || mime.contains("heif");
+        if (v.node != null) { megaStream(v.link, v.node, mime, r, res, "1".equals(r.param("dl"))); return; }
+        if (!heic) { media(v, r, res); return; }
+        // 웹 화면은 HEIC 를 못 보여 주므로 JPEG 로 바꿔서 보냄
+        File f = new File(new File(thumbDir, "photos"), Long.toHexString(v.id) + "-full.jpg");
+        if (!f.exists() || f.length() == 0) {
+            Bitmap bmp = android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(ctx.getContentResolver(), v.uri),
+                    (decoder, info, src) -> {
+                        int w = info.getSize().getWidth(), h = info.getSize().getHeight(), max = Math.max(w, h);
+                        if (max > 2560) decoder.setTargetSize(w * 2560 / max, h * 2560 / max);
+                    });
+            f.getParentFile().mkdirs();
+            try (FileOutputStream o = new FileOutputStream(f)) { bmp.compress(Bitmap.CompressFormat.JPEG, 88, o); }
+            bmp.recycle();
+        }
+        res.header("Cache-Control", "max-age=86400");
+        res.send(200, "image/jpeg", readAll(new FileInputStream(f)));
     }
 
     private synchronized List<Video> visible() {
@@ -505,6 +695,7 @@ public class Library implements HttpServer.Handler {
         o.put("missing", 0);
         o.put("resume_pos", m.optDouble("resume_pos", 0));
         o.put("added_at", v.dateAdded);
+        o.put("performers", performerNames(m));
         return o;
     }
 
@@ -648,15 +839,26 @@ public class Library implements HttpServer.Handler {
                 if (!covers.containsKey(id) || rating > coverRating.get(id)) { covers.put(id, v); coverRating.put(id, rating); }
             }
         }
+        Map<Long, Integer> photoCounts = new HashMap<>();
+        Map<Long, Video> photoCovers = new HashMap<>();
+        for (Video v : visiblePhotos()) {
+            JSONArray ids = meta(v).optJSONArray(field);
+            if (ids == null) continue;
+            for (int i = 0; i < ids.length(); i++) {
+                photoCounts.merge(ids.optLong(i), 1, Integer::sum);
+                photoCovers.putIfAbsent(ids.optLong(i), v);
+            }
+        }
         List<JSONObject> out = new ArrayList<>();
         Iterator<String> it = names.keys();
         while (it.hasNext()) {
             String k = it.next();
             long id = Long.parseLong(k);
-            Video cv = covers.get(id);
+            Video cv = covers.get(id), pc = photoCovers.get(id);
             JSONObject row = field.equals("performers") ? entityJson(field, id) : new JSONObject().put("id", id).put("name", names.optString(k));
             out.add(row
-                    .put("count", counts.getOrDefault(id, 0)).put("cover", cv == null ? JSONObject.NULL : cv.id));
+                    .put("count", counts.getOrDefault(id, 0)).put("cover", cv == null ? JSONObject.NULL : cv.id)
+                    .put("photo_count", photoCounts.getOrDefault(id, 0)).put("photo_cover", pc == null ? JSONObject.NULL : pc.id));
         }
         out.sort(Comparator.comparing(o -> o.optString("name").toLowerCase(Locale.ROOT)));
         return new JSONArray(out);
@@ -735,7 +937,7 @@ public class Library implements HttpServer.Handler {
                 .put("ffmpeg", false).put("ffprobe", false).put("platform", "android")
                 .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
                 .put("mega_supported", true).put("mega", megaJson())
-                .put("server", serverJson()).put("performer_info", true);
+                .put("server", serverJson()).put("performer_info", true).put("photos", true);
     }
 
     private JSONObject serverJson() throws JSONException {
@@ -802,6 +1004,18 @@ public class Library implements HttpServer.Handler {
             }
             if (n == null || n.folder) { res.error(404, "not found"); return; }
             megaStream(l, n, mimeFor(ext(n.name)), r, res, "1".equals(r.param("dl")));
+            return;
+        }
+        if (path.startsWith("/photo/") || path.startsWith("/photothumb/")) {
+            if (!authed(r)) { res.error(401, "login required"); return; }
+            String[] p = path.split("/");
+            Video v;
+            synchronized (this) {
+                if (lastScan == 0) scan();
+                v = photoById.get(parseLong(p.length > 2 ? p[2].replace(".jpg", "") : "", -1));
+            }
+            if (v == null) { res.error(404, "not found"); return; }
+            if (path.startsWith("/photo/")) photoFull(v, r, res); else photoThumb(v, r, res);
             return;
         }
         if (path.startsWith("/media/") || path.startsWith("/thumbs/") || path.startsWith("/transcode/")) {
@@ -950,6 +1164,26 @@ public class Library implements HttpServer.Handler {
             return;
         }
 
+        if (p0.equals("photos")) {
+            if (parts.length == 1 && m.equals("GET")) { res.json(200, listPhotos(r).toString()); return; }
+            Video v;
+            synchronized (this) {
+                if (lastScan == 0) scan();
+                v = photoById.get(parseLong(parts.length > 1 ? parts[1] : "", -1));
+            }
+            if (v == null) { res.error(404, "not found"); return; }
+            synchronized (this) {
+                if (m.equals("GET")) { res.json(200, photoDetail(v).toString()); return; }
+                if (m.equals("PATCH")) {
+                    JSONObject b = body(r), meta = meta(v);
+                    if (b.has("favorite")) meta.put("favorite", b.optBoolean("favorite"));
+                    if (b.has("performers")) setLinks(meta, "performers", b.optJSONArray("performers"));
+                    save();
+                    res.json(200, photoDetail(v).toString());
+                    return;
+                }
+            }
+        }
         if (p0.equals("performers") && parts.length >= 2) {
             if (parts[1].equals("auto") && m.equals("POST")) {          // MEGA 폴더 이름으로 다시 지정 + 정보 찾기
                 synchronized (this) {

@@ -142,3 +142,40 @@ dl.info dd { margin: 0; word-break: break-all; }
   padding: 10px 16px; border-radius: 10px; z-index: 60; box-shadow: 0 6px 24px rgba(0,0,0,.4); max-width: 90vw; }
 .login { max-width: 340px; margin: 12vh auto; }
 .login .btn { width: 100%; margin-top: 10px; }
+
+/* view mode toggle */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { background: var(--panel); border: 0; padding: 7px 11px; color: var(--muted); font-size: 13px; }
+.seg button.on { background: var(--panel2); color: var(--text); font-weight: 600; }
+
+/* image wall: rows of tiles that keep each picture's aspect ratio */
+.wall { display: flex; flex-wrap: wrap; gap: 6px; }
+.wall::after { content: ""; flex-grow: 100000; }
+.tile { display: block; min-width: 0; max-width: 100%; cursor: pointer; }
+.tile-img { position: relative; width: 100%; max-width: 100%; background: var(--panel2); border-radius: 6px; overflow: hidden; }
+.tile-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tile-cap { font-size: 12px; color: var(--muted); padding: 3px 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile-cap.has { color: var(--text); }
+
+/* photo grid */
+.pgrid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+@media (max-width: 560px) { .pgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; } }
+.pcard { display: block; min-width: 0; cursor: pointer; }
+.pcard .thumb { aspect-ratio: 1; border-radius: 6px; }
+.pcard .title { font-size: 12px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard .sub { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* photo viewer */
+.viewer { position: fixed; inset: 0; z-index: 70; background: #000; color: #fff; display: flex; flex-direction: column; touch-action: pan-y; }
+.viewer .vbar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); background: rgba(0,0,0,.6); }
+.viewer .vbar .vt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.viewer .vbtn { background: rgba(255,255,255,.12); border: 0; color: #fff; border-radius: 8px; padding: 6px 11px; font-size: 15px; }
+.viewer .vbtn.fav { color: var(--fav); }
+.viewer .stage { flex: 1; min-height: 0; display: grid; place-items: center; position: relative; }
+.viewer .stage img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; }
+.viewer .nav { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,.35); border: 0; color: #fff; font-size: 28px; width: 44px; height: 64px; border-radius: 8px; }
+.viewer .nav.prev { left: 8px; } .viewer .nav.next { right: 8px; }
+.viewer .vfoot { padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom)); background: rgba(0,0,0,.6); display: grid; gap: 8px; }
+.viewer .vfoot .chip { background: rgba(255,255,255,.12); border-color: transparent; color: #fff; }
+.viewer .vfoot input { background: rgba(255,255,255,.1); border-color: transparent; color: #fff; }
+.viewer .vmeta { font-size: 12px; color: #bbb; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

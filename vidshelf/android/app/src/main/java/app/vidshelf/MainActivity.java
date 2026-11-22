@@ -72,6 +72,12 @@ public class MainActivity extends Activity {
             return;
         }
         if (!ServerService.running) ServerService.start(this);
+        // 업데이트로 생긴 사진 권한은 한 번만 따로 요청
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED
+                && !getPreferences(MODE_PRIVATE).getBoolean("asked_images", false)) {
+            getPreferences(MODE_PRIVATE).edit().putBoolean("asked_images", true).apply();
+            requestPermissions(new String[]{Manifest.permission.READ_MEDIA_IMAGES}, 2);
+        }
         if (web == null) showLoading("불러오는 중…");
         else web.onResume();
         ui.removeCallbacks(watcher);
@@ -234,6 +240,7 @@ public class MainActivity extends Activity {
         List<String> perms = new ArrayList<>();
         if (Build.VERSION.SDK_INT >= 33) {
             perms.add(Manifest.permission.READ_MEDIA_VIDEO);
+            perms.add(Manifest.permission.READ_MEDIA_IMAGES);
             perms.add(Manifest.permission.POST_NOTIFICATIONS);
         } else {
             perms.add(Manifest.permission.READ_EXTERNAL_STORAGE);
@@ -243,6 +250,7 @@ public class MainActivity extends Activity {
 
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        new Thread(() -> Library.get(this).scan()).start();   // 새 권한으로 목록 다시 만들기
         if (!hasVideoPermission())
             Toast.makeText(this, "영상 접근 권한이 있어야 목록을 만들 수 있습니다", Toast.LENGTH_LONG).show();
         // onResume 이 이어서 호출되며 서버를 시작합니다
@@ -253,7 +261,7 @@ public class MainActivity extends Activity {
         box.addView(text("VidShelf", 26, TEXT, true));
         boolean secure = ServerService.userId() != 0;
         box.addView(text(secure ? "🔒 보안 폴더에서 실행 중 — 보안 폴더의 영상만 보입니다." : "⚠ 일반 공간에서 실행 중 — 일반 공간의 영상이 보입니다.", 15, secure ? ACCENT : 0xFFEF6A62, false));
-        box.addView(text("영상 목록을 만들려면 영상 접근 권한이 필요합니다. 권한 창에서 ‘모두 허용’을 고르세요.", 15, MUTED, false));
+        box.addView(text("영상과 사진 목록을 만들려면 접근 권한이 필요합니다. 권한 창에서 ‘모두 허용’을 고르세요.", 15, MUTED, false));
         box.addView(button("영상 접근 허용", v -> askPermissions()));
         show(box);
     }

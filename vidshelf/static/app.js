@@ -111,6 +111,7 @@ async function route() {
     if (path === "/performer") return await renderPerformer(+params.get("id"));
     if (path === "/settings") return await renderSettings();
     if (path === "/mega") return await renderMega(params);
+    if (path === "/photos") return await renderPhotos(params);
     location.hash = "#/";
   } catch (e) {
     if (e.message !== "login required") $app.replaceChildren(h("div", { class: "empty" }, "오류: " + e.message));
@@ -130,7 +131,7 @@ function libHash(params) {
 }
 
 async function renderLibrary(params) {
-  setTab("library");
+  setTab("videos");
   const sort = params.get("sort") || "added";
   const order = params.get("order") || (sort === "title" ? "asc" : "desc");
   const update = (changes) => {
@@ -169,10 +170,11 @@ async function renderLibrary(params) {
   const reshuffle = sort === "random" ? h("button", { class: "btn", onclick: () => update({ seed: Date.now() % 100000 }) }, "🔀 섞기") : null;
 
   const countEl = h("span", { class: "meta" });
-  const grid = h("div", { class: "grid" });
+  const mode = viewMode("videos");
+  const grid = h("div", { class: mode === "wall" ? "wall" : "grid" });
   const moreWrap = h("div", { class: "more" });
   $app.replaceChildren(
-    h("div", { class: "toolbar" }, search, sortSel, orderBtn, reshuffle),
+    h("div", { class: "toolbar" }, search, sortSel, orderBtn, reshuffle, modeToggle("videos", () => route())),
     h("div", { class: "toolbar" }, h("div", { class: "chips" }, toggles, filterChips), countEl),
     grid, moreWrap);
 
@@ -194,7 +196,7 @@ async function renderLibrary(params) {
               h("a", { class: "btn primary", href: "#/settings" }, "폴더 추가하러 가기"))));
       return;
     }
-    data.items.forEach((v) => grid.append(videoCard(v)));
+    data.items.forEach((v) => grid.append(mode === "wall" ? videoTile(v) : videoCard(v)));
     const shown = (page - 1) * data.per + data.items.length;
     moreWrap.replaceChildren(shown < data.total
       ? h("button", { class: "btn", onclick: () => { page++; load(); } }, `더 보기 (${shown}/${data.total})`)
@@ -202,6 +204,190 @@ async function renderLibrary(params) {
   }
   await load();
   search.focus({ preventScroll: true });
+}
+
+// ---------------------------------------------------------------- 보기 방식 (그리드 / 이미지 벽)
+function viewMode(kind) {
+  try { return localStorage.getItem("vs-mode-" + kind) || "grid"; } catch (e) { return "grid"; }
+}
+function modeToggle(kind, onChange) {
+  const cur = viewMode(kind);
+  const set = (m) => { try { localStorage.setItem("vs-mode-" + kind, m); } catch (e) {} onChange(); };
+  return h("div", { class: "seg", role: "group", "aria-label": "보기 방식" },
+    h("button", { class: cur === "grid" ? "on" : "", onclick: () => set("grid") }, "▦ 그리드"),
+    h("button", { class: cur === "wall" ? "on" : "", onclick: () => set("wall") }, "▤ 이미지 벽"));
+}
+const wallHeight = () => (window.innerWidth < 560 ? 110 : 180);
+
+/** 이미지 벽 한 칸: 원래 비율을 유지하고 아래에 출연자 이름을 표시 */
+function wallTile({ href, onclick, src, ratio, badges, performers }) {
+  let r = ratio > 0 ? Math.min(3, Math.max(0.4, ratio)) : 1;
+  const box = h("div", { class: "tile-img", style: `aspect-ratio:${r}` });
+  const tile = h(href ? "a" : "div", { class: "tile", href, onclick, style: `flex:${r} 1 ${Math.round(r * wallHeight())}px` }, box,
+    h("div", { class: "tile-cap" + (performers && performers.length ? " has" : "") }, performers && performers.length ? performers.join(", ") : "\u00a0"));
+  if (src) {
+    const img = h("img", { src, loading: "lazy", alt: "" });
+    img.onload = () => {
+      if (!(ratio > 0) && img.naturalWidth) {   // 비율을 모르면 이미지를 받아 본 뒤 맞춤
+        r = Math.min(3, Math.max(0.4, img.naturalWidth / img.naturalHeight));
+        box.style.aspectRatio = r; tile.style.flex = `${r} 1 ${Math.round(r * wallHeight())}px`;
+      }
+    };
+    img.onerror = () => (img.hidden = true);
+    box.append(img);
+  }
+  (badges || []).forEach((b) => b && box.append(b));
+  return tile;
+}
+
+function videoTile(v) {
+  return wallTile({
+    href: `#/v/${v.id}`, src: v.thumbs > 0 ? thumbUrl(v.id, 0, v.thumbs) : null,
+    ratio: v.width && v.height ? v.width / v.height : 16 / 9, performers: v.performers,
+    badges: [v.duration ? h("span", { class: "badge dur" }, fmtDur(v.duration)) : null, v.favorite ? h("span", { class: "badge fav" }, "♥") : null],
+  });
+}
+
+// ---------------------------------------------------------------- 사진
+const PHOTO_SORTS = [["taken", "촬영 날짜"], ["added", "추가한 날짜"], ["title", "이름"], ["size", "파일 크기"], ["random", "무작위"]];
+
+async function renderPhotos(params) {
+  setTab("photos");
+  const sort = params.get("sort") || "taken";
+  const order = params.get("order") || (sort === "title" ? "asc" : "desc");
+  const update = (changes) => {
+    const p = new URLSearchParams(params);
+    for (const [k, v] of Object.entries(changes)) (v == null || v === "") ? p.delete(k) : p.set(k, v);
+    location.hash = "#/photos" + (p.toString() ? "?" + p : "");
+  };
+  const chips = [];
+  for (const id of params.getAll("performer")) {
+    const e = await api(`performers/${id}`).catch(() => ({ name: "#" + id }));
+    chips.push(h("span", { class: "chip on" }, e.name, h("button", { title: "필터 해제", onclick: () => update({ performer: null }) }, "×")));
+  }
+  let t;
+  const search = h("input", { type: "search", class: "search", placeholder: "이름, 출연자, 폴더 검색", value: params.get("q") || "",
+    oninput: (e) => { clearTimeout(t); t = setTimeout(() => update({ q: e.target.value }), 400); } });
+  const sortSel = h("select", { "aria-label": "정렬", onchange: (e) => update({ sort: e.target.value, order: null }) },
+    PHOTO_SORTS.map(([v, l]) => h("option", { value: v, selected: v === sort }, l)));
+  const orderBtn = sort === "random" ? h("button", { class: "btn", onclick: () => update({ seed: Date.now() % 100000 }) }, "🔀 섞기")
+    : h("button", { class: "btn", onclick: () => update({ order: order === "asc" ? "desc" : "asc" }) }, order === "asc" ? "↑ 오름차순" : "↓ 내림차순");
+  const fav = h("button", { class: "chip" + (params.get("fav") === "1" ? " on" : ""), onclick: () => update({ fav: params.get("fav") === "1" ? null : "1" }) }, "♥ 즐겨찾기");
+  const mode = viewMode("photos");
+  const count = h("span", { class: "meta" });
+  const grid = h("div", { class: mode === "wall" ? "wall" : "pgrid" });
+  const more = h("div", { class: "more" });
+  $app.replaceChildren(h("div", {},
+    h("div", { class: "toolbar" }, search, sortSel, orderBtn, modeToggle("photos", () => route())),
+    h("div", { class: "toolbar" }, h("div", { class: "chips" }, fav, chips), count),
+    grid, more));
+
+  const items = [];
+  let page = 1;
+  const base = new URLSearchParams(params);
+  base.set("sort", sort); base.set("order", order); base.set("per", "90");
+  async function load() {
+    base.set("page", page);
+    const data = await api("photos?" + base.toString());
+    count.textContent = `${data.total.toLocaleString()}장`;
+    if (page === 1 && !data.total) {
+      grid.replaceWith(h("div", { class: "empty" }, params.toString() ? "조건에 맞는 사진이 없습니다." : "사진이 없습니다. 설정의 영상 폴더(DCIM, Download 등)와 MEGA 폴더의 사진이 여기에 나옵니다."));
+      return;
+    }
+    for (const p of data.items) {
+      const i = items.length;
+      items.push(p);
+      const open = () => openViewer(items, i);
+      if (mode === "wall") {
+        grid.append(wallTile({ onclick: open, src: `/photothumb/${p.id}.jpg`, ratio: p.width && p.height ? p.width / p.height : 0,
+          performers: p.performers, badges: [p.favorite ? h("span", { class: "badge fav" }, "♥") : null] }));
+      } else {
+        const img = h("img", { src: `/photothumb/${p.id}.jpg`, loading: "lazy", alt: "" });
+        img.onerror = () => (img.hidden = true);
+        grid.append(h("div", { class: "pcard", onclick: open },
+          h("div", { class: "thumb" }, img, p.favorite ? h("span", { class: "badge fav" }, "♥") : null),
+          h("div", { class: "title", title: p.title }, p.title),
+          p.performers.length ? h("div", { class: "sub" }, p.performers.join(", ")) : null));
+      }
+    }
+    const shown = (page - 1) * data.per + data.items.length;
+    more.replaceChildren(...(shown < data.total ? [h("button", { class: "btn", onclick: () => { page++; load(); } }, `더 보기 (${shown}/${data.total})`)] : []));
+  }
+  await load();
+}
+
+/** 사진 크게 보기: 좌우 넘기기, 즐겨찾기, 출연자 지정 */
+async function openViewer(items, start) {
+  let i = start, closed = false;
+  const allPerformers = await api("performers").catch(() => []);
+  const img = h("img", { alt: "" });
+  const title = h("div", { class: "vt" });
+  const counter = h("span", { class: "meta", style: "color:#bbb" });
+  const favBtn = h("button", { class: "vbtn" });
+  const chips = h("div", { class: "chips" });
+  const metaLine = h("div", { class: "vmeta" });
+  const input = h("input", { type: "text", list: "dl-viewer-perf", placeholder: "출연자 추가 (Enter)" });
+  let cur = null;
+  const close = () => {
+    if (closed) return;
+    closed = true; el.remove(); document.removeEventListener("keydown", onKey); window.removeEventListener("popstate", onPop);
+  };
+  const onPop = () => close();
+  const onKey = (e) => {
+    if (document.activeElement === input) return;
+    if (e.key === "ArrowLeft") show(i - 1);
+    else if (e.key === "ArrowRight") show(i + 1);
+    else if (e.key === "Escape") history.back();
+  };
+  async function save(patch) {
+    cur = await api(`photos/${cur.id}`, { method: "PATCH", body: patch });
+    items[i].favorite = cur.favorite; items[i].performers = cur.performers;
+    draw();
+  }
+  function draw() {
+    favBtn.textContent = cur.favorite ? "♥" : "♡";
+    favBtn.className = "vbtn" + (cur.favorite ? " fav" : "");
+    chips.replaceChildren(...cur.performer_refs.map((p) => h("span", { class: "chip" }, p.name,
+      h("button", { "aria-label": `${p.name} 제거`, onclick: () => save({ performers: cur.performer_refs.filter((x) => x.id !== p.id).map((x) => x.name) }) }, "×"))));
+    metaLine.textContent = `${cur.folder}${cur.filename} · ${fmtSize(cur.size)}${cur.width ? ` · ${cur.width}×${cur.height}` : ""}`;
+  }
+  async function show(n) {
+    if (n < 0 || n >= items.length) return;
+    i = n;
+    const p = items[i];
+    img.src = `/photo/${p.id}`;
+    title.textContent = p.title;
+    counter.textContent = `${i + 1} / ${items.length}`;
+    if (items[i + 1]) new Image().src = `/photo/${items[i + 1].id}`;   // 다음 사진 미리 받기
+    cur = await api(`photos/${p.id}`);
+    if (i === n) draw();
+  }
+  favBtn.onclick = () => save({ favorite: !cur.favorite });
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !input.value.trim()) return;
+    const names = cur.performer_refs.map((x) => x.name).concat(input.value.split(",").map((x) => x.trim()).filter(Boolean));
+    input.value = ""; save({ performers: names });
+  });
+  const stage = h("div", { class: "stage" }, img,
+    h("button", { class: "nav prev", "aria-label": "이전 사진", onclick: () => show(i - 1) }, "‹"),
+    h("button", { class: "nav next", "aria-label": "다음 사진", onclick: () => show(i + 1) }, "›"));
+  let sx = null;
+  stage.addEventListener("touchstart", (e) => { sx = e.touches[0].clientX; }, { passive: true });
+  stage.addEventListener("touchend", (e) => {
+    if (sx == null) return;
+    const dx = e.changedTouches[0].clientX - sx; sx = null;
+    if (Math.abs(dx) > 50) show(dx < 0 ? i + 1 : i - 1);
+  });
+  const el = h("div", { class: "viewer", role: "dialog", "aria-modal": "true" },
+    h("div", { class: "vbar" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, "✕"), title, counter, favBtn),
+    stage,
+    h("div", { class: "vfoot" }, chips, input, metaLine,
+      h("datalist", { id: "dl-viewer-perf" }, allPerformers.map((p) => h("option", { value: p.name })))));
+  document.body.append(el);
+  history.pushState({ viewer: true }, "");   // 휴대폰 뒤로 가기로 닫히게
+  window.addEventListener("popstate", onPop);
+  document.addEventListener("keydown", onKey);
+  show(i);
 }
 
 function videoCard(v) {
@@ -250,7 +436,7 @@ function stopPlayer() {
 }
 
 async function renderVideo(id, params) {
-  setTab("library");
+  setTab("videos");
   let v = await api(`videos/${id}`);
   const [allTags, allPerformers] = await Promise.all([api("tags"), api("performers")]);
 
@@ -444,10 +630,10 @@ async function renderEntities(ep, label, filterKey) {
     const list = items.filter((e) => e.name.toLowerCase().includes(filter.toLowerCase()));
     grid.replaceChildren(...list.map((e) => h("div", { class: "ecard" },
       h("a", { href: `#/?${filterKey}=${e.id}` },
-        h("div", { class: "thumb" }, e.cover ? h("img", { src: thumbUrl(e.cover, 0, "c"), loading: "lazy", alt: "" }) : h("div", { class: "noimg" }, filterKey === "tag" ? "#" : "👤"))),
+        h("div", { class: "thumb" }, e.cover ? h("img", { src: thumbUrl(e.cover, 0, "c"), loading: "lazy", alt: "" }) : e.photo_cover ? h("img", { src: `/photothumb/${e.photo_cover}.jpg`, loading: "lazy", alt: "" }) : h("div", { class: "noimg" }, filterKey === "tag" ? "#" : "👤"))),
       h("div", { class: "body" },
         h("a", { class: "name", href: `#/?${filterKey}=${e.id}`, title: e.name }, e.name),
-        h("span", { class: "meta" }, `${e.count}`),
+        h("span", { class: "meta" }, e.photo_count ? `${e.count} · 사진 ${e.photo_count}` : `${e.count}`),
       ),
       e.group !== undefined ? h("div", { class: "body meta", style: "padding-top:0;display:block" },
         [e.group, e.birthdate ? `${e.birthdate} (${age(e.birthdate)}세)` : "", e.height ? `${e.height}cm` : ""].filter(Boolean).join(" · ") || "정보 없음") : null,
@@ -564,7 +750,9 @@ async function renderPerformer(id) {
     h("div", { class: "panel" },
       h("div", { class: "row", style: "justify-content:space-between" },
         h("h2", { style: "margin:0;font-size:22px" }, p.name),
-        h("a", { class: "btn sm", href: `#/?performer=${p.id}` }, "영상 보기")),
+        h("div", { class: "row" },
+          h("a", { class: "btn sm", href: `#/?performer=${p.id}` }, "영상 보기"),
+          serverCaps.photos ? h("a", { class: "btn sm", href: `#/photos?performer=${p.id}` }, "사진 보기") : null)),
       p.birthdate ? h("p", { class: "meta" }, `만 ${age(p.birthdate)}세`) : null),
     h("div", { class: "panel" }, h("h3", {}, "프로필"), form,
       h("div", { class: "row", style: "margin-top:12px" },
@@ -725,4 +913,5 @@ pollStatus();
 api("settings").then((st) => {
   serverCaps = st;
   if (st.mega_supported) document.getElementById("tab-mega").hidden = false;
+  if (st.photos) document.getElementById("tab-photos").hidden = false;
 }).catch(() => {});
