@@ -1420,6 +1420,10 @@ public class Library implements HttpServer.Handler {
         Map<Long, Integer> counts = new HashMap<>();
         Map<Long, Video> covers = new HashMap<>();
         Map<Long, Integer> coverRating = new HashMap<>();
+        boolean perf = field.equals("performers");
+        Map<Long, List<Video>> vidsOf = new HashMap<>();          // 출연자 → 영상 (탐색 화면의 장면 3장용)
+        Map<Long, Set<Long>> tagsOf = new HashMap<>();            // 출연자 → 영상·사진에 붙은 태그
+        Map<Long, Long> latest = new HashMap<>();                 // 출연자 → 가장 최근에 추가된 항목
         for (Video v : visible()) {
             JSONObject m = meta(v);
             JSONArray ids = m.optJSONArray(field);
@@ -1427,6 +1431,12 @@ public class Library implements HttpServer.Handler {
             int rating = m.optInt("rating", 0);
             for (int i = 0; i < ids.length(); i++) {
                 long id = ids.optLong(i);
+                if (perf) {
+                    vidsOf.computeIfAbsent(id, k -> new ArrayList<>()).add(v);
+                    JSONArray tg = m.optJSONArray("tags");
+                    for (int t = 0; tg != null && t < tg.length(); t++) tagsOf.computeIfAbsent(id, k -> new java.util.HashSet<>()).add(tg.optLong(t));
+                    latest.merge(id, added(v), Math::max);
+                }
                 counts.merge(id, 1, Integer::sum);
                 if (!covers.containsKey(id) || rating > coverRating.get(id)) { covers.put(id, v); coverRating.put(id, rating); }
             }
@@ -1437,6 +1447,11 @@ public class Library implements HttpServer.Handler {
             JSONArray ids = meta(v).optJSONArray(field);
             if (ids == null) continue;
             for (int i = 0; i < ids.length(); i++) {
+                if (perf) {
+                    JSONArray tg = meta(v).optJSONArray("tags");
+                    for (int t = 0; tg != null && t < tg.length(); t++) tagsOf.computeIfAbsent(ids.optLong(i), k -> new java.util.HashSet<>()).add(tg.optLong(t));
+                    latest.merge(ids.optLong(i), added(v), Math::max);
+                }
                 photoCounts.merge(ids.optLong(i), 1, Integer::sum);
                 photoCovers.putIfAbsent(ids.optLong(i), v);
             }
@@ -1451,6 +1466,16 @@ public class Library implements HttpServer.Handler {
             out.add(row
                     .put("count", counts.getOrDefault(id, 0)).put("cover", cv == null ? JSONObject.NULL : cv.id)
                     .put("photo_count", photoCounts.getOrDefault(id, 0)).put("photo_cover", pc == null ? JSONObject.NULL : pc.id));
+            if (perf) {
+                List<Video> vs = vidsOf.getOrDefault(id, new ArrayList<>());   // 별점 높은 순 → 최근 순으로 3개
+                vs.sort((a, b) -> {
+                    int r = Integer.compare(meta(b).optInt("rating", 0), meta(a).optInt("rating", 0));
+                    return r != 0 ? r : Long.compare(added(b), added(a));
+                });
+                JSONArray frames = new JSONArray();
+                for (int i = 0; i < Math.min(3, vs.size()); i++) frames.put(vs.get(i).id);
+                row.put("frames", frames).put("tags", new JSONArray(tagsOf.getOrDefault(id, new java.util.HashSet<>()))).put("latest", latest.getOrDefault(id, 0L));
+            }
         }
         out.sort(Comparator.comparing(o -> o.optString("name").toLowerCase(Locale.ROOT)));
         return new JSONArray(out);
