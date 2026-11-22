@@ -125,9 +125,9 @@ public class ServerService extends Service {
         nm.createNotificationChannel(new NotificationChannel(CHANNEL, "VidShelf 서버", NotificationManager.IMPORTANCE_LOW));
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stop = PendingIntent.getService(this, 1, new Intent(this, ServerService.class).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE);
-        String text = "이 폰: http://localhost:" + port;
+        String text = "앱을 열어 영상을 보세요";
         List<String> ips = lanAddresses();
-        if (lan && !ips.isEmpty()) text += "  ·  다른 기기: http://" + ips.get(0) + ":" + port;
+        if (lan) text = ips.isEmpty() ? "다른 기기 접속: Wi-Fi 에 연결되어 있지 않습니다" : "다른 기기 접속: http://" + ips.get(0) + ":" + port;
         return new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle("VidShelf 실행 중 · " + spaceName())

@@ -214,6 +214,7 @@ public class Library implements HttpServer.Handler {
             JSONObject st = settings();
             if (!st.has("library_paths")) st.put("library_paths", new JSONArray(DEFAULT_PATHS));
             if (!st.has("secret")) st.put("secret", randomHex(32));
+            if (!st.has("app_token")) st.put("app_token", randomHex(32));
         } catch (JSONException ignored) {
         }
         save();
@@ -265,6 +266,14 @@ public class Library implements HttpServer.Handler {
     public synchronized void setLan(boolean on) {
         try { settings().put("lan", on); } catch (JSONException ignored) {}
         save();
+    }
+
+    /** 앱 화면(WebView)만 가진 쿠키 값. 앱 밖(브라우저·다른 앱)에서는 비밀번호로만 들어올 수 있음. */
+    public synchronized String appToken() { return settings().optString("app_token"); }
+
+    /** 설정이 바뀐 뒤 서버를 새 설정(접속 범위)으로 다시 엽니다. 진행 중인 응답을 마치도록 잠시 뒤에 실행. */
+    private void restartServerSoon() {
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> ServerService.start(ctx), 500);
     }
 
     public synchronized boolean passwordSet() { return settings().has("password_hash"); }
@@ -612,7 +621,16 @@ public class Library implements HttpServer.Handler {
                 .put("password_set", passwordSet()).put("data_dir", "앱 내부 저장소")
                 .put("ffmpeg", false).put("ffprobe", false).put("platform", "android")
                 .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
-                .put("mega_supported", true).put("mega", megaJson());
+                .put("mega_supported", true).put("mega", megaJson())
+                .put("server", serverJson());
+    }
+
+    private JSONObject serverJson() throws JSONException {
+        boolean lan = lanEnabled() && passwordSet();
+        JSONArray addrs = new JSONArray();
+        if (lan) for (String ip : ServerService.lanAddresses()) addrs.put("http://" + ip + ":" + ServerService.port);
+        return new JSONObject().put("secure_folder", ServerService.userId() != 0).put("port", ServerService.port)
+                .put("lan", lan).put("lan_addresses", addrs);
     }
 
     // ------------------------------------------------------------------ auth
@@ -639,13 +657,13 @@ public class Library implements HttpServer.Handler {
     }
 
     private boolean authed(HttpServer.Request r) {
-        String tok = authToken();
-        if (tok == null) return true;
         String cookie = r.header("cookie");
         if (cookie == null) return false;
+        String app = appToken(), tok = authToken();
         for (String part : cookie.split(";")) {
             String p = part.trim();
-            if (p.startsWith("vs_auth=") && MessageDigest.isEqual(p.substring(8).getBytes(), tok.getBytes())) return true;
+            if (p.startsWith("vs_app=") && MessageDigest.isEqual(p.substring(7).getBytes(), app.getBytes())) return true;
+            if (tok != null && p.startsWith("vs_auth=") && MessageDigest.isEqual(p.substring(8).getBytes(), tok.getBytes())) return true;
         }
         return false;
     }
@@ -683,7 +701,7 @@ public class Library implements HttpServer.Handler {
                 v = byId.get(parseLong(p.length > 2 ? p[2] : "", -1));
             }
             if (v == null) { res.error(404, "not found"); return; }
-            if (path.startsWith("/media/") && v.node != null) megaStream(v.link, v.node, v.mime, r, res, false);
+            if (path.startsWith("/media/") && v.node != null) megaStream(v.link, v.node, v.mime, r, res, "1".equals(r.param("dl")));
             else if (path.startsWith("/media/")) media(v, r, res);
             else if (v.node != null) megaThumb(v, parseInt(p.length > 3 ? p[3].replace(".jpg", "") : "0", 0), r, res);
             else thumb(v, parseInt(p.length > 3 ? p[3].replace(".jpg", "") : "0", 0), r, res);
@@ -715,7 +733,7 @@ public class Library implements HttpServer.Handler {
         String p0 = parts.length > 0 ? parts[0] : "";
 
         if (p0.equals("auth")) {
-            res.json(200, new JSONObject().put("required", authToken() != null).put("ok", authed(r)).toString());
+            res.json(200, new JSONObject().put("required", true).put("ok", authed(r)).put("password_set", authToken() != null).toString());
             return;
         }
         if (p0.equals("login") && m.equals("POST")) {
@@ -914,7 +932,16 @@ public class Library implements HttpServer.Handler {
                     }
                     save();
                 }
-                if (b.has("password")) setPassword(b.optString("password"));
+                if (b.has("password")) {
+                    setPassword(b.optString("password"));
+                    if (!passwordSet() && lanEnabled()) { setLan(false); restartServerSoon(); }
+                }
+                if (b.has("lan")) {
+                    boolean on = b.optBoolean("lan");
+                    if (on && !passwordSet()) { res.error(400, "먼저 비밀번호를 정해야 다른 기기 접속을 켤 수 있습니다"); return; }
+                    setLan(on);
+                    restartServerSoon();
+                }
             }
             res.json(200, settingsJson().toString());
             return;

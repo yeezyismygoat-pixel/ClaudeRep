@@ -419,7 +419,8 @@ async function renderVideo(id, params) {
       h("div", { class: "player-note" }, canTranscode ? modeNote : null, canTranscode ? modeBtn : null, resume),
       h("div", { class: "titlebox" }, titleIn),
       h("div", { class: "actions" }, stars, favBtn,
-        h("a", { class: "btn sm", href: `/media/${v.id}`, download: v.filename }, "다운로드")),
+        v.source === "mega" ? h("a", { class: "btn sm", href: `/media/${v.id}?dl=1` }, "휴대폰에 저장")
+          : v.can_delete === false ? null : h("a", { class: "btn sm", href: `/media/${v.id}`, download: v.filename }, "다운로드")),
       frames ? h("div", { class: "panel", style: "margin-top:14px" }, h("h3", {}, "장면"), frames) : null),
     h("div", {},
       tagPanel, perfPanel,
@@ -492,6 +493,7 @@ async function renderSettings() {
         h("div", { class: "stat" }, h("b", {}, fmtSize(c.bytes)), h("span", {}, "전체 크기")),
         h("div", { class: "stat" }, h("b", {}, (c.seconds || 0) >= 3600 ? ((c.seconds / 3600).toFixed(1) + "시간") : fmtDur(c.seconds)), h("span", {}, "전체 길이")),
         h("div", { class: "stat" }, h("b", {}, c.favorites || 0), h("span", {}, "즐겨찾기")))),
+    st.server ? serverPanel(st) : null,
     h("div", { class: "panel" }, h("h3", {}, "영상 폴더"), pathList,
       h("div", { class: "row" },
         h("button", { class: "btn", onclick: () => folderPicker((p) => savePaths(paths.concat([p]))) }, "📁 폴더 찾아보기"),
@@ -511,7 +513,8 @@ async function renderSettings() {
       h("div", { class: "taginput" }, pw, h("button", { class: "btn", onclick: async () => {
         await api("settings", { method: "PUT", body: { password: pw.value } });
         toast(pw.value ? "비밀번호를 설정했습니다" : "비밀번호를 해제했습니다");
-        if (pw.value) renderLogin(); else renderSettings();
+        const a = await api("auth").catch(() => ({ ok: false }));
+        if (a.ok) renderSettings(); else renderLogin();
       } }, "저장")),
       h("p", { class: "meta" }, st.password_set ? "현재 비밀번호가 설정되어 있습니다." : "현재 비밀번호 없이 접속할 수 있습니다.")),
     st.platform === "android" ? null : h("div", { class: "panel" }, h("h3", {}, "시스템"),
@@ -519,6 +522,30 @@ async function renderSettings() {
         h("dt", {}, "데이터 폴더"), h("dd", {}, st.data_dir),
         h("dt", {}, "ffmpeg"), h("dd", {}, st.ffmpeg ? "사용 가능" : "없음 — pkg install ffmpeg"),
         h("dt", {}, "ffprobe"), h("dd", {}, st.ffprobe ? "사용 가능" : "없음 — pkg install ffmpeg")))));
+}
+
+// ---------------------------------------------------------------- 앱 서버 (안드로이드)
+function serverPanel(st) {
+  const sv = st.server;
+  const toggle = h("input", { type: "checkbox", id: "lan-toggle", checked: sv.lan, disabled: !st.password_set && !sv.lan });
+  toggle.addEventListener("change", async () => {
+    toggle.disabled = true;
+    try {
+      await api("settings", { method: "PUT", body: { lan: toggle.checked } });
+      toast(toggle.checked ? "다른 기기 접속을 켰습니다" : "다른 기기 접속을 껐습니다");
+    } catch (e) { toast(e.message); }
+    setTimeout(renderSettings, 1500);   // 서버가 새 설정으로 다시 열릴 때까지 잠시 대기
+  });
+  return h("div", { class: "panel" }, h("h3", {}, "다른 기기에서 보기"),
+    h("p", { class: sv.secure_folder ? "meta" : "warn" }, sv.secure_folder
+      ? "🔒 보안 폴더에서 실행 중입니다. 보안 폴더의 영상만 보입니다."
+      : "⚠ 일반 공간에서 실행 중입니다. 보안 폴더 영상만 보려면 보안 폴더 안의 VidShelf 를 쓰세요."),
+    h("label", { class: "row", for: "lan-toggle", style: "margin:10px 0" }, toggle, h("span", {}, "같은 Wi-Fi 의 다른 기기에서 접속 허용")),
+    !st.password_set ? h("p", { class: "meta" }, "켜려면 먼저 아래 ‘비밀번호’에서 비밀번호를 정하세요. 다른 기기에서는 그 비밀번호로 로그인합니다.") : null,
+    sv.lan ? (sv.lan_addresses.length
+      ? h("div", {}, h("p", { class: "meta" }, "다른 기기의 브라우저에서 이 주소를 여세요:"),
+          ...sv.lan_addresses.map((a) => h("p", { style: "font-size:18px;margin:4px 0;user-select:all" }, a)))
+      : h("p", { class: "warn" }, "Wi-Fi 에 연결되어 있지 않습니다. 이 폰과 다른 기기를 같은 Wi-Fi 에 연결하세요.")) : null);
 }
 
 // ---------------------------------------------------------------- MEGA
