@@ -838,7 +838,7 @@ public class Library implements HttpServer.Handler {
 
     /** 태그·출연자 추가/빼기, 날짜, 즐겨찾기를 한꺼번에 */
     private synchronized int batchApply(List<Video> items, JSONObject b) throws JSONException {
-        List<Uri> favUris = new ArrayList<>();
+        List<Uri> favUris = new ArrayList<>(), delUris = new ArrayList<>();
         boolean fav = b.optBoolean("favorite", false);
         for (Video v : items) {
             JSONObject m = meta(v);
@@ -859,6 +859,10 @@ public class Library implements HttpServer.Handler {
                 long d = b.optLong("date", 0);
                 if (d > 0) m.put("date_override", d); else m.remove("date_override");
             }
+            if (b.has("delete")) {   // 실제 파일 삭제: 기기 파일은 안드로이드에 요청, 클라우드 항목은 목록에서만 숨김
+                if (!v.cloud() && v.uri != null) delUris.add(v.uri); else m.put("hidden", true);
+                continue;
+            }
             if (b.has("favorite")) {
                 m.put("favorite", fav);
                 if (android.os.Build.VERSION.SDK_INT >= 30 && !v.cloud() && v.uri != null) {
@@ -870,6 +874,8 @@ public class Library implements HttpServer.Handler {
         }
         save();
         if (!favUris.isEmpty()) MainActivity.requestFavorite(favUris, fav);   // 갤러리에는 한 번에 요청
+        if (!delUris.isEmpty() && !MainActivity.requestDelete(delUris, "trash".equals(b.optString("delete"))))
+            throw new JSONException("이 기기(안드로이드 10)에서는 앱에서 파일을 지울 수 없습니다. 내 파일 앱에서 지워 주세요.");
         return items.size();
     }
 
@@ -1466,7 +1472,20 @@ public class Library implements HttpServer.Handler {
     private synchronized Set<String> allFolders() {
         if (lastScan == 0) scan();
         Set<String> out = new TreeSet<>();
-        for (Video v : all) out.add(v.relPath);
+        for (Video v : all) if (!v.cloud()) out.add(v.relPath);
+        for (Video v : allPhotos) if (!v.cloud()) out.add(v.relPath);
+        // 영상·사진이 없는 폴더도 보이도록: 기기의 모든 미디어 파일이 있는 폴더 + 기본 폴더
+        try (Cursor c = ctx.getContentResolver().query(MediaStore.Files.getContentUri("external"),
+                new String[]{MediaStore.MediaColumns.RELATIVE_PATH}, null, null, null)) {
+            if (c != null) while (c.moveToNext()) { String rp = c.getString(0); if (rp != null && !rp.isEmpty()) out.add(rp); }
+        } catch (Exception ignored) {}
+        for (String d : new String[]{"DCIM/", "Pictures/", "Movies/", "Download/", "Documents/", "Music/", "Recordings/"}) out.add(d);
+        // 중간 폴더도 모두 포함 (예: DCIM/Camera/ 가 있으면 DCIM/)
+        List<String> withParents = new ArrayList<>(out);
+        for (String f : withParents) {
+            int i = f.indexOf('/');
+            while (i > 0 && i < f.length() - 1) { out.add(f.substring(0, i + 1)); i = f.indexOf('/', i + 1); }
+        }
         return out;
     }
 
@@ -2019,7 +2038,11 @@ public class Library implements HttpServer.Handler {
             List<Video> items = batchItems(b.optJSONArray("items"));
             if (items.isEmpty()) { res.error(400, "선택한 항목을 찾지 못했습니다"); return; }
             if (parts.length == 2 && parts[1].equals("info")) { res.json(200, batchInfo(items).toString()); return; }
-            res.json(200, new JSONObject().put("updated", batchApply(items, b)).toString());
+            try {
+                res.json(200, new JSONObject().put("updated", batchApply(items, b)).toString());
+            } catch (JSONException e) {
+                res.error(400, e.getMessage());
+            }
             return;
         }
         if (p0.equals("hidden") && m.equals("GET")) { res.json(200, hiddenVideos().toString()); return; }

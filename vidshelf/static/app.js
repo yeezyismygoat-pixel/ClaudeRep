@@ -62,6 +62,17 @@ function resLabel(w, hgt) {
   if (m >= 2100) return "4K"; if (m >= 1400) return "1440p"; if (m >= 1000) return "1080p";
   if (m >= 700) return "720p"; if (m >= 460) return "480p"; return `${m}p`;
 }
+/** "3일 전" 처럼 */
+function timeAgo(ts) {
+  if (!ts) return "";
+  const d = Date.now() / 1000 - ts;
+  if (d < 60) return "방금";
+  if (d < 3600) return `${Math.floor(d / 60)}분 전`;
+  if (d < 86400) return `${Math.floor(d / 3600)}시간 전`;
+  if (d < 86400 * 30) return `${Math.floor(d / 86400)}일 전`;
+  if (d < 86400 * 365) return `${Math.floor(d / 86400 / 30)}개월 전`;
+  return `${Math.floor(d / 86400 / 365)}년 전`;
+}
 function fmtDate(ts) { return ts ? new Date(ts * 1000).toLocaleString("ko-KR") : "-"; }
 function toast(msg) {
   const t = document.getElementById("toast");
@@ -511,11 +522,11 @@ async function renderMedia(params0, type0) {
   const selHolder = h("div"), actHolder = h("div");   // 선택 모드 막대 자리
 
   function drawHeader() {
-    const mode = viewMode("media");
-    viewBtn.setAttribute("aria-label", mode === "wall" ? "그리드로 보기" : "이미지 벽으로 보기");
+    const mode = viewMode("media") === "wall" ? "wall" : "feed";
+    viewBtn.setAttribute("aria-label", mode === "wall" ? "목록으로 보기" : "이미지 벽으로 보기");
     viewBtn.title = viewBtn.getAttribute("aria-label");
     viewBtn.innerHTML = mode === "wall"
-      ? '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>'
+      ? '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3.5" width="18" height="10" rx="2"/><path d="M3 17h12M3 20.5h8"/></svg>'
       : '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="10" height="7" rx="1.5"/><rect x="15" y="4" width="6" height="7" rx="1.5"/><rect x="3" y="13" width="6" height="7" rx="1.5"/><rect x="11" y="13" width="10" height="7" rx="1.5"/></svg>';
     filterBtn.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>';
     filterBtn.append("필터", nFilters() ? h("span", { class: "fbadge" }, nFilters()) : "");
@@ -542,7 +553,7 @@ async function renderMedia(params0, type0) {
   }
 
   viewBtn.onclick = () => {
-    try { localStorage.setItem("vs-mode-media", viewMode("media") === "wall" ? "grid" : "wall"); } catch (e) {}
+    try { localStorage.setItem("vs-mode-media", viewMode("media") === "wall" ? "feed" : "wall"); } catch (e) {}
     update({ anim: "fade" });
   };
 
@@ -562,9 +573,9 @@ async function renderMedia(params0, type0) {
   let token = 0;
   async function drawContent(anim) {
     const my = ++token;
-    const mode = viewMode("media"), sort = sortOf(), order = orderOf();
+    const mode = viewMode("media") === "wall" ? "wall" : "feed", sort = sortOf(), order = orderOf();
     const sortLabel = (MEDIA_SORTS.concat(VIDEO_SORTS).find(([v]) => v === sort) || [0, "추가한 날짜"])[1];
-    const grid = h("div", { class: mode === "wall" ? "wall" : "sqgrid" });
+    const grid = h("div", { class: mode === "wall" ? "wall" : "ytfeed" });
     const more = h("div", { class: "more" });
     const box = h("div", { class: "mcontent in-" + anim }, grid, more);
     const photos = [];
@@ -590,9 +601,9 @@ async function renderMedia(params0, type0) {
         if (it.kind === "photo") {
           const i = photos.length;
           photos.push(it);
-          grid.append(selectable(mode === "wall" ? photoCell(it, "wall", () => openViewer(photos, i)) : sqCell(it, () => openViewer(photos, i)), it));
+          grid.append(selectable(mode === "wall" ? photoCell(it, "wall", () => openViewer(photos, i)) : ytCell(it, () => openViewer(photos, i)), it));
         } else {
-          grid.append(selectable(mode === "wall" ? videoTile(it) : sqCell(it, null), it));
+          grid.append(selectable(mode === "wall" ? videoTile(it) : ytCell(it, null), it));
         }
       }
       const shown = (page - 1) * d.per + d.items.length;
@@ -615,13 +626,14 @@ async function renderMedia(params0, type0) {
     act("태그", '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.4"/>', () => editLinks("tags")),
     act("출연자", '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5"/>', () => editLinks("performers")),
     act("날짜", '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>', () => editDate()),
-    act("즐겨찾기", '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>', () => editFav()));
-  selHolder.append(selBar);
-  actHolder.append(actBar);
+    act("즐겨찾기", '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>', () => editFav()),
+    act("삭제", '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>', () => editDelete()));
+  selHolder.append(selBar);   // 아래 버튼 막대는 움직임 효과가 걸린 화면 밖(body)에 붙여야 화면 맨 아래에 고정됨
   let selecting = false;
   function startSelect() {
     selecting = true;
     document.body.classList.add("selecting");
+    if (!actBar.isConnected) document.body.append(actBar);
     selBar.hidden = false; actBar.hidden = false;
     pageCleanup = () => endSelect(true);
   }
@@ -631,6 +643,7 @@ async function renderMedia(params0, type0) {
     cells.forEach((el) => el.classList.remove("sel"));
     document.body.classList.remove("selecting");
     selBar.hidden = true; actBar.hidden = true;
+    actBar.remove();
     if (!silent) pageCleanup = null;
   }
   function toggleSel(it, el) {
@@ -741,6 +754,58 @@ async function renderMedia(params0, type0) {
       h("button", { class: "btn", onclick: () => close(() => applyBatch({ favorite: false }, "{n}개를 즐겨찾기에서 뺐습니다")) }, "즐겨찾기에서 빼기"),
       h("button", { class: "btn primary sheet-go", onclick: () => close(() => applyBatch({ favorite: true }, "♥ {n}개를 즐겨찾기에 넣었습니다")) }, allFav ? "이미 모두 즐겨찾기" : "♥ 즐겨찾기에 넣기"),
     ]);
+  }
+
+  /** 유튜브처럼: 큰 썸네일 + 아래에 출연자 동그라미·제목·한 줄 정보 */
+  function ytCell(it, open) {
+    const isPhoto = it.kind === "photo";
+    const src = hdSrc(isPhoto ? `/photothumb/${it.id}.jpg` : it.thumbs > 0 ? thumbUrl(it.id, 0, it.thumbs) : null);
+    const img = h("img", { loading: "lazy", alt: "", src, hidden: !src });
+    if (!isPhoto && !(it.thumbs > 0)) img.dataset.retry = thumbUrl(it.id, 0, "x") + "&s=1080";
+    img.onload = () => (img.hidden = false);
+    img.onerror = () => (img.hidden = true);
+    const ratio = isPhoto && it.width && it.height ? Math.min(16 / 9, Math.max(4 / 5, it.width / it.height)) : 16 / 9;
+    const pname = (it.performers || [])[0];
+    const pf = pname ? performers.find((x) => x.name === pname) : null;
+    const when = timeAgo(isPhoto ? it.taken || it.added_at : it.added_at);
+    const sub = [(it.performers || []).join(", "), isPhoto ? "사진" : resLabel(it.width, it.height), when].filter(Boolean).join(" · ");
+    const kids = [
+      h("div", { class: "yt-thumb", style: `aspect-ratio:${ratio}` }, img,
+        !isPhoto && it.duration ? h("span", { class: "badge dur" }, fmtDur(it.duration)) : null,
+        it.favorite ? h("span", { class: "sq-fav", "aria-label": "즐겨찾기" }, "♥") : null,
+        !isPhoto && it.resume_pos > 5 && it.duration ? h("div", { class: "progress", style: `width:${Math.min(100, (it.resume_pos / it.duration) * 100)}%` }) : null),
+      h("div", { class: "yt-info" },
+        h("span", { class: "yt-av" }, pf ? entityCover(pf, pname.slice(0, 1)) : h("span", {}, pname ? pname.slice(0, 1) : isPhoto ? "▣" : "▶")),
+        h("div", { class: "yt-text" }, h("div", { class: "yt-title" }, it.title || ""), h("div", { class: "meta" }, sub))),
+    ];
+    return isPhoto ? h("button", { class: "yt", onclick: open, "aria-label": it.title || "사진" }, ...kids)
+      : h("a", { class: "yt", href: `#/v/${it.id}`, "aria-label": it.title || "영상" }, ...kids);
+  }
+
+  /** 삭제: 기기 파일은 휴지통으로 옮기거나 영구 삭제 (안드로이드가 한 번 확인), 클라우드 항목은 목록에서 숨김 */
+  function editDelete() {
+    const list = [...selected.values()];
+    const cloud = list.filter((it) => it.source && it.source !== "local").length;
+    const reloadSoon = () => {   // 확인 창을 닫고 돌아오면 목록을 새로 고침
+      const onVis = () => { if (document.visibilityState === "visible") { document.removeEventListener("visibilitychange", onVis); setTimeout(() => update({ anim: "fade" }), 600); } };
+      document.addEventListener("visibilitychange", onVis);
+      setTimeout(() => update({ anim: "fade" }), 2500);
+    };
+    const run = async (mode) => {
+      try {
+        await api("batch", { method: "POST", body: { items: selItems(), delete: mode } });
+        toast(mode === "trash" ? "휴지통으로 옮깁니다. 확인 창에서 허용하세요." : "영구 삭제합니다. 확인 창에서 허용하세요.");
+        endSelect(); reloadSoon();
+      } catch (e) { toast(e.message); }
+    };
+    const close = openSheet(`삭제 · ${list.length}개`, [
+      h("p", { class: "meta", style: "margin:0" }, "휴대폰의 실제 파일을 지웁니다. 안드로이드가 한 번 더 확인합니다."),
+      h("button", { class: "del-opt", onclick: () => close(() => run("trash")) },
+        h("b", {}, "휴지통으로 옮기기"), h("span", { class: "meta" }, "갤러리 휴지통에서 약 30일 동안 되살릴 수 있습니다.")),
+      h("button", { class: "del-opt danger", onclick: () => { if (confirm(`${list.length}개를 영구 삭제할까요? 되돌릴 수 없습니다.`)) close(() => run("delete")); } },
+        h("b", {}, "영구 삭제"), h("span", { class: "meta" }, "바로 지워지고 되돌릴 수 없습니다.")),
+      cloud ? h("p", { class: "meta", style: "margin:0" }, `MEGA·iCloud 항목 ${cloud}개는 공유 링크라 지울 수 없어서, 이 앱 목록에서만 숨깁니다 (설정 → 정리 → 숨긴 영상에서 되돌릴 수 있음).`) : null,
+    ], [h("button", { class: "btn", style: "grid-column: 1 / -1", onclick: () => close() }, "취소")]);
   }
 
   /** 정사각형 칸: 영상은 ▶ 길이, 즐겨찾기는 ♥ */
@@ -1438,7 +1503,7 @@ async function renderEntities(ep, label, filterKey) {
             h("span", { class: "name", title: e.name }, e.name),
             h("span", { class: "meta" }, e.photo_count ? `${e.count} · 사진 ${e.photo_count}` : `${e.count}`)),
           e.group !== undefined ? h("div", { class: "body meta", style: "padding-top:0;display:block" },
-            [e.group, e.birthdate ? `${age(e.birthdate)}세` : "", e.height ? `${e.height}cm` : ""].filter(Boolean).join(" · ") || "정보 없음") : null);
+            [e.group, e.birthdate ? `${age(e.birthdate)}세` : ""].filter(Boolean).join(" · ") || "정보 없음") : null);
       }
       // 태그: 누르면 그 태그 영상 목록. 이름 변경·삭제는 ‘수정’을 눌렀을 때만
       const href = `#/?${filterKey}=${e.id}`;
@@ -1515,7 +1580,7 @@ async function renderSettings(opts = {}) {
   const SECTIONS = [
     { group: "일반", items: [
       { id: "display", icon: "display", title: "화면", sub: themeName },
-      { id: "library", icon: "folder", title: "라이브러리와 영상 폴더", sub: `영상 ${(c.total || 0).toLocaleString()}개 · 폴더 ${st.library_paths.length}개` },
+      { id: "library", icon: "folder", title: "라이브러리와 미디어 폴더", sub: `영상 ${(c.total || 0).toLocaleString()}개 · 폴더 ${st.library_paths.length}개` },
       st.mega_supported ? { id: "cloud", icon: "cloud", title: "클라우드", sub: nCloud ? `MEGA ${(st.mega || []).length} · iCloud ${(st.icloud || []).length}` : "연결된 곳 없음" } : null,
       st.fav_sync !== undefined ? { id: "favorites", icon: "heart", title: "즐겨찾기 연동", sub: st.fav_sync ? (st.manage_media ? "갤러리와 연동 · 바로 반영" : "갤러리와 연동") : "앱 안에서만" } : null,
     ] },
@@ -1575,8 +1640,8 @@ async function renderSettings(opts = {}) {
           h("div", { class: "stat" }, h("b", {}, fmtSize(c.bytes)), h("span", {}, "전체 크기")),
           h("div", { class: "stat" }, h("b", {}, (c.seconds || 0) >= 3600 ? ((c.seconds / 3600).toFixed(1) + "시간") : fmtDur(c.seconds)), h("span", {}, "전체 길이")),
           h("div", { class: "stat" }, h("b", {}, c.favorites || 0), h("span", {}, "즐겨찾기")))),
-      h("div", { class: "panel" }, h("h3", {}, "영상 폴더"),
-        h("p", { class: "meta", style: "margin-top:0" }, "이 기기에서 영상과 사진을 가져올 폴더입니다."),
+      h("div", { class: "panel" }, h("h3", {}, "미디어 폴더"),
+        h("p", { class: "meta", style: "margin-top:0" }, "이 기기에서 영상과 사진을 가져올 폴더입니다. ‘폴더 찾아보기’에서 휴대폰의 모든 폴더를 고를 수 있습니다."),
         pathList,
         h("div", { class: "row" },
           h("button", { class: "btn", onclick: () => folderPicker((p) => savePaths(paths.concat([p]))) }, "📁 폴더 찾아보기"),

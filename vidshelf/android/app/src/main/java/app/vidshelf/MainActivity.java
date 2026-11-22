@@ -57,6 +57,22 @@ public class MainActivity extends Activity {
     private static volatile MainActivity current;
 
     /** 기기 갤러리 즐겨찾기 바꾸기. ‘미디어 관리’ 권한이 있으면 바로, 없으면 안드로이드가 한 번 묻습니다. */
+    /** 파일 삭제: trash 면 휴지통으로(약 30일 뒤 자동 삭제), 아니면 영구 삭제. 안드로이드가 확인 창을 띄움. */
+    static boolean requestDelete(java.util.List<Uri> uris, boolean trash) {
+        MainActivity a = current;
+        if (a == null || Build.VERSION.SDK_INT < 30 || uris.isEmpty()) return false;
+        a.ui.post(() -> {
+            try {
+                android.app.PendingIntent pi = trash
+                        ? MediaStore.createTrashRequest(a.getContentResolver(), uris, true)
+                        : MediaStore.createDeleteRequest(a.getContentResolver(), uris);
+                a.startIntentSenderForResult(pi.getIntentSender(), REQ_FAV, null, 0, 0, 0);
+            } catch (Exception ignored) {
+            }
+        });
+        return true;
+    }
+
     static void requestFavorite(java.util.List<Uri> uris, boolean fav) {
         MainActivity a = current;
         if (a == null || Build.VERSION.SDK_INT < 30 || uris.isEmpty()) return;

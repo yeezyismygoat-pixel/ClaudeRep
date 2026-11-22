@@ -745,3 +745,40 @@ body.selecting .topbar .tabs { transform: translateY(calc(100% + 30px)); opacity
 /* 사진 보기 안의 버튼은 항상 어두운 바탕에 흰 글씨 */
 .viewer .btn { background: #23262c; color: #fff; border-color: transparent; }
 .viewer .btn.primary { background: var(--accent); color: var(--accent-ink); }
+
+/* 화면 움직임이 끝나면 효과를 남기지 않음 (남아 있으면 안쪽의 고정 막대가 화면 아래에 붙지 못함) */
+#app.page-in > *, #app.slide-l > *, #app.slide-r > *, .mcontent.in-left, .mcontent.in-right, .mcontent.in-fade, .vinfo-box.switch > * { animation-fill-mode: backwards !important; }
+
+/* ---------- 미디어 목록: 유튜브처럼 ---------- */
+.ytfeed { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px 16px; }
+@media (min-width: 700px) { .ytfeed { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1100px) { .ytfeed { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.yt { display: block; text-align: left; border: 0; padding: 0; background: none; color: inherit; width: 100%; font: inherit; }
+.yt-thumb { position: relative; width: 100%; background: var(--panel2); overflow: hidden; border-radius: 14px; }
+.yt-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; animation: fadeIn .4s ease both; }
+.yt-thumb .badge.dur { right: 8px; bottom: 8px; font-size: 12px; padding: 2px 6px; }
+.yt-thumb .sq-fav { left: 10px; top: 8px; font-size: 18px; }
+@media (max-width: 560px) { .ytfeed { margin: 0 -12px; } .yt-thumb { border-radius: 0; } .yt-info { padding-left: 12px !important; padding-right: 12px !important; } }
+.yt-info { display: flex; gap: 12px; padding: 10px 2px 18px; align-items: flex-start; }
+.yt-av { flex: none; width: 36px; height: 36px; border-radius: 18px; overflow: hidden; background: var(--panel2); display: grid; place-items: center; font-size: 14px; font-weight: 700; color: var(--muted); }
+.yt-av img, .yt-av .noimg { width: 100%; height: 100%; object-fit: cover; display: grid; place-items: center; font-size: 14px; }
+.yt-text { min-width: 0; flex: 1; }
+.yt-title { font-size: 15px; font-weight: 600; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
+.yt-text .meta { margin-top: 3px; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.yt.sel .yt-thumb { outline: 3px solid var(--accent); outline-offset: -3px; }
+.yt .yt-thumb::before { content: ""; position: absolute; right: 10px; top: 10px; width: 24px; height: 24px; border-radius: 12px; z-index: 2;
+  border: 2px solid #fff; box-sizing: border-box; background: rgba(0,0,0,.25); opacity: 0; transition: opacity .2s ease; }
+body.selecting .yt .yt-thumb::before { opacity: 1; }
+.yt.sel .yt-thumb::before { background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E") center/14px no-repeat; border-color: var(--accent); }
+.yt, .yt * { -webkit-user-select: none; user-select: none; }
+
+/* 선택 막대에 ‘삭제’ 추가 → 5칸 */
+.sel-actions { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; }
+.del-opt { display: grid; gap: 3px; text-align: left; width: 100%; padding: 14px 16px; border-radius: 16px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+.del-opt b { font-size: 15px; }
+.del-opt.danger b { color: var(--danger); }
+@media (max-width: 560px) {
+  .mcontent-wrap { margin: 0 -12px; }
+  .ytfeed { margin: 0 !important; }
+  .mcontent-wrap .wall, .mcontent-wrap .empty, .mcontent-wrap .more { padding-left: 12px; padding-right: 12px; }
+}
