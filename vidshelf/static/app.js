@@ -2582,7 +2582,6 @@ async function renderLibraryHub() {
   const tile = (href, icon, title, n) => h("a", { class: "lib-tile", href }, libIcon(icon), h("div", {}, h("b", {}, title), h("br"), n));
   const row = (href, icon, title, sub) => h("a", { href }, setIcon(icon), h("div", { class: "set-text" }, h("div", { class: "set-title" }, title), sub ? h("div", { class: "meta" }, sub) : null), h("span", { class: "chev", "aria-hidden": "true" }, "›"));
   $app.replaceChildren(h("div", { class: "libhub" },
-    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "출연자 · 태그 · 즐겨찾기 · 파일"), h("h1", {}, "보관함"))),
     h("h2", { class: "set-group-title" }, "모아 보기"),
     h("div", { class: "lib-grid three" },
       tile("#/performers", "people", "출연자", peopleN),
@@ -2644,7 +2643,7 @@ async function renderHome() {
   const photos = shelf("최근 사진", "#/photos", "photos");
   const people = shelf("출연자", "#/performers", "people");
   $app.replaceChildren(h("div", { class: "home" },
-    h("div", { class: "home-head" }, h("div", {}, stats, h("h1", {}, "내 서재")),
+    h("div", { class: "home-head" }, h("div", {}, stats, h("h1", {}, "내 보관함")),
       h("a", { class: "btn", href: "#/?q=", "aria-label": "검색" }, "검색")),
     resume.sec, recent.sec, favs.sec, photos.sec, people.sec));
 
