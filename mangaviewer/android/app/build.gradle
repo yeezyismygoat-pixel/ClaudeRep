@@ -1,0 +1,48 @@
+plugins {
+    id "com.android.application"
+}
+
+// CI 에서 고정된 서명 키를 쓰면 새 버전을 덮어 설치할 수 있음 (MANGAVIEWER_KEYSTORE 가 없으면 기본 디버그 키)
+def stableKeystore = System.getenv("MANGAVIEWER_KEYSTORE")
+
+android {
+    namespace "app.mangaviewer"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "app.mangaviewer"
+        minSdk 29
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // 웹 화면 (mangaviewer/web)
+    sourceSets {
+        main.assets.srcDirs += ["../../web"]
+    }
+
+    signingConfigs {
+        if (stableKeystore) {
+            stable {
+                storeFile file(stableKeystore)
+                storePassword "mangaviewer"
+                keyAlias "mangaviewer"
+                keyPassword "mangaviewer"
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            if (stableKeystore) signingConfig signingConfigs.stable
+        }
+    }
+    lint { abortOnError false }
+}

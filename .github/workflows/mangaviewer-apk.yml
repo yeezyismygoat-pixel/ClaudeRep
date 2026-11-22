@@ -1,0 +1,77 @@
+name: Manga Viewer APK
+
+on:
+  push:
+    branches: [manga-viewer]
+    paths:
+      - "mangaviewer/**"
+      - ".github/workflows/mangaviewer-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      # 매번 같은 서명 키를 써야 새 버전을 덮어 설치할 수 있음.
+      # 저장소 비밀값(Secret) MANGAVIEWER_KEYSTORE_B64 가 있으면 그 키를 씀 (영구).
+      # 없으면 Actions 캐시의 키를 씀 (7일 넘게 빌드가 없으면 사라질 수 있음).
+      - name: Restore signing key (cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/mangaviewer-signing
+          key: mangaviewer-signing-v1
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.MANGAVIEWER_KEYSTORE_B64 }}
+        run: |
+          mkdir -p ~/mangaviewer-signing
+          if [ -n "$KEYSTORE_B64" ]; then
+            if ! printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n' | base64 -d > ~/mangaviewer-signing/mangaviewer.jks; then
+              echo "::error::MANGAVIEWER_KEYSTORE_B64 비밀값이 올바른 base64 가 아닙니다."
+              exit 1
+            fi
+            echo "서명 키: 저장소 비밀값(MANGAVIEWER_KEYSTORE_B64) 사용"
+          elif [ -f ~/mangaviewer-signing/mangaviewer.jks ]; then
+            echo "서명 키: Actions 캐시의 키 사용"
+          else
+            echo "::warning::서명 키가 없어 새로 만듭니다. 이 버전은 이전 앱을 지우고 설치해야 합니다."
+            keytool -genkeypair -keystore ~/mangaviewer-signing/mangaviewer.jks -storepass mangaviewer -keypass mangaviewer \
+              -alias mangaviewer -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=MangaViewer"
+          fi
+          keytool -list -v -keystore ~/mangaviewer-signing/mangaviewer.jks -storepass mangaviewer | grep -m1 SHA256
+
+      - name: Build APK
+        working-directory: mangaviewer/android
+        run: MANGAVIEWER_KEYSTORE=$HOME/mangaviewer-signing/mangaviewer.jks gradle --no-daemon assembleDebug
+
+      - name: Rename
+        run: cp mangaviewer/android/app/build/outputs/apk/debug/app-debug.apk MangaViewer.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MangaViewer-apk
+          path: MangaViewer.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mangaviewer-apk
+          name: Manga Viewer APK
+          body: "보안 폴더 안의 브라우저로 이 페이지를 열고 MangaViewer.apk 를 받아 설치하세요."
+          files: MangaViewer.apk
+          make_latest: false
