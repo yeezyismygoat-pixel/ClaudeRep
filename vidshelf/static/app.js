@@ -123,6 +123,8 @@ async function route() {
     if (path === "/mega") return await renderMega(params);
     if (path === "/photos") return await renderPhotos(params);
     if (path === "/duplicates") return await renderDuplicates();
+    if (path === "/comics") return await renderComics(params);
+    if (path === "/comic") return await renderComic(+params.get("gid"), params.get("t") || "", params);
     location.hash = "#/";
   } catch (e) {
     if (e.message !== "login required") $app.replaceChildren(h("div", { class: "empty" }, "오류: " + e.message));
@@ -1035,6 +1037,176 @@ async function renderMega(params) {
     !folders.length && !media.length && !others.length ? h("div", { class: "empty" }, "이 폴더는 비어 있습니다.") : null));
 }
 
+// ---------------------------------------------------------------- e-hentai 즐겨찾기 만화
+function ehLoginForm() {
+  const user = h("input", { type: "text", placeholder: "아이디", autocomplete: "username" });
+  const pass = h("input", { type: "password", placeholder: "비밀번호", autocomplete: "current-password" });
+  const msg = h("p", { class: "warn" });
+  const submit = async (body, btn) => {
+    btn.disabled = true; msg.textContent = "";
+    try { await api("eh/login", { method: "POST", body }); toast("로그인했습니다"); route(); }
+    catch (e) { msg.textContent = e.message; btn.disabled = false; }
+  };
+  const loginBtn = h("button", { class: "btn primary", onclick: (e) => submit({ user: user.value, pass: pass.value }, e.currentTarget) }, "로그인");
+  const mid = h("input", { type: "text", inputmode: "numeric", placeholder: "ipb_member_id (숫자)" });
+  const hash = h("input", { type: "text", placeholder: "ipb_pass_hash (32자리)", autocomplete: "off" });
+  const cookieBtn = h("button", { class: "btn", onclick: (e) => submit({ member_id: mid.value, pass_hash: hash.value }, e.currentTarget) }, "쿠키로 로그인");
+  return h("div", { class: "settings" },
+    h("div", { class: "panel" }, h("h3", {}, "e-hentai 로그인"),
+      h("p", { class: "meta" }, "e-hentai(포럼) 계정으로 로그인하면 내 즐겨찾기 만화를 여기서 볼 수 있습니다. 비밀번호는 저장하지 않고 로그인 쿠키만 이 앱 안에 저장합니다."),
+      h("div", { style: "display:grid;gap:8px;margin-top:10px" }, user, pass, loginBtn), msg),
+    h("details", { class: "panel" }, h("summary", {}, "쿠키로 로그인 (로봇 확인 때문에 위 로그인이 안 될 때)"),
+      h("p", { class: "meta" }, "PC 브라우저에서 e-hentai 에 로그인한 뒤, 개발자 도구(F12) → Application(저장소) → Cookies → e-hentai.org 에서 ipb_member_id 와 ipb_pass_hash 값을 복사해 넣으세요."),
+      h("div", { style: "display:grid;gap:8px;margin-top:10px" }, mid, hash, cookieBtn)));
+}
+
+function comicCard(g) {
+  const img = h("img", { src: g.thumb, loading: "lazy", alt: "", referrerpolicy: "no-referrer" });
+  img.onerror = () => (img.hidden = true);
+  const read = g.read_page > 0 ? Math.min(100, (g.read_page / Math.max(1, g.pages)) * 100) : 0;
+  return h("a", { class: "ccard", href: `#/comic?gid=${g.gid}&t=${g.token}` },
+    h("div", { class: "cthumb" }, img, h("span", { class: "badge dur" }, `${g.pages}p`),
+      read ? h("div", { class: "progress", style: `width:${read}%` }) : null),
+    h("div", { class: "title", title: g.title }, g.title_jpn || g.title),
+    h("div", { class: "sub" }, h("span", {}, g.category), g.read_page ? h("span", {}, `${g.read_page}쪽까지 읽음`) : null));
+}
+
+async function renderComics(params) {
+  setTab("comics");
+  const st = await api("eh/status");
+  if (!st.logged_in) { $app.replaceChildren(ehLoginForm()); return; }
+  const favcat = params.get("favcat") || "all", q = params.get("q") || "";
+  const update = (ch) => {
+    const p = new URLSearchParams(params);
+    for (const [k, v] of Object.entries(ch)) (v == null || v === "") ? p.delete(k) : p.set(k, v);
+    location.hash = "#/comics" + (p.toString() ? "?" + p : "");
+  };
+  let t;
+  const search = h("input", { type: "search", class: "search", placeholder: "즐겨찾기에서 검색 (제목, 태그)", value: q,
+    oninput: (e) => { clearTimeout(t); t = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 600); } });
+  const folderChips = h("div", { class: "chips" });
+  const grid = h("div", { class: "cgrid" });
+  const more = h("div", { class: "more" });
+  const logout = h("button", { class: "btn sm", onclick: async () => {
+    if (!confirm("e-hentai 에서 로그아웃할까요? (이 앱에 저장한 로그인 쿠키를 지웁니다)")) return;
+    await api("eh/logout", { method: "POST" }); route();
+  } }, "로그아웃");
+  $app.replaceChildren(h("div", {},
+    h("div", { class: "toolbar" }, search, logout),
+    h("div", { class: "toolbar" }, folderChips),
+    grid, more));
+  keepTypingFocus(search);
+  let next = null, first = true;
+  async function load() {
+    const qs = new URLSearchParams({ favcat });
+    if (q) qs.set("q", q);
+    if (next) qs.set("next", next);
+    more.replaceChildren(h("span", { class: "meta" }, "불러오는 중…"));
+    let d;
+    try { d = await api("eh/favorites?" + qs); }
+    catch (e) { more.replaceChildren(h("span", { class: "warn" }, e.message), h("button", { class: "btn sm", style: "margin-left:8px", onclick: load }, "다시 시도")); return; }
+    if (d.logged_in === false) { $app.replaceChildren(h("p", { class: "warn" }, "로그인이 풀렸습니다. 다시 로그인하세요."), ehLoginForm()); return; }
+    if (first) {
+      first = false;
+      const total = d.folders.reduce((n, f) => n + f.count, 0);
+      folderChips.replaceChildren(
+        h("button", { class: "chip" + (favcat === "all" ? " on" : ""), onclick: () => update({ favcat: null }) }, `전체${total ? " " + total : ""}`),
+        ...d.folders.filter((f) => f.count > 0 || f.cat === favcat).map((f) =>
+          h("button", { class: "chip" + (favcat === f.cat ? " on" : ""), onclick: () => update({ favcat: f.cat }) }, `${f.name} ${f.count}`)));
+      if (!d.items.length) { grid.replaceWith(h("div", { class: "empty" }, q ? "검색 결과가 없습니다." : "즐겨찾기한 만화가 없습니다.")); more.replaceChildren(); return; }
+    }
+    d.items.forEach((g) => grid.append(comicCard(g)));
+    next = d.next;
+    more.replaceChildren(...(next ? [h("button", { class: "btn", onclick: load }, "더 보기")] : []));
+  }
+  await load();
+}
+
+async function renderComic(gid, token, params) {
+  setTab("comics");
+  const g = await api(`eh/gallery?gid=${gid}&t=${token}`);
+  if (g.logged_in === false) { $app.replaceChildren(ehLoginForm()); return; }
+  const cover = h("img", { src: g.thumb, alt: "", referrerpolicy: "no-referrer" });
+  const groups = {};
+  for (const tag of g.tags) {
+    const [ns, name] = tag.includes(":") ? tag.split(/:(.*)/s) : ["misc", tag];
+    (groups[ns] = groups[ns] || []).push(name);
+  }
+  const NS = { language: "언어", parody: "패러디", character: "캐릭터", group: "그룹", artist: "작가", cosplayer: "코스플레이어", male: "남성", female: "여성", mixed: "혼합", other: "기타", misc: "기타", reclass: "분류", location: "장소" };
+  const tagRows = Object.entries(groups).flatMap(([ns, names]) => [h("dt", {}, NS[ns] || ns),
+    h("dd", {}, h("div", { class: "chips" }, names.map((n) => h("a", { class: "chip", href: `#/comics?q=${encodeURIComponent(`${ns}:"${n}$"`)}` }, n))))]);
+  const startAt = Math.min(Math.max(1, g.read_page || 1), g.pages);
+  $app.replaceChildren(h("div", { class: "comic" },
+    h("div", { class: "panel comic-head" },
+      h("div", { class: "comic-cover", onclick: () => openReader(g, 1) }, cover),
+      h("div", { class: "pf-main" },
+        h("h2", { class: "pf-name", style: "font-size:18px" }, g.title_jpn || g.title),
+        g.title_jpn ? h("p", { class: "meta", style: "margin:4px 0 0" }, g.title) : null,
+        h("p", { class: "meta", style: "margin:6px 0 10px" }, [g.category, `${g.pages}쪽`, g.rating ? `★ ${g.rating}` : "", g.posted ? new Date(g.posted * 1000).toLocaleDateString("ko-KR") : ""].filter(Boolean).join(" · ")),
+        h("div", { class: "row" },
+          g.read_page > 1 ? h("button", { class: "btn primary", onclick: () => openReader(g, startAt) }, `이어 읽기 (${startAt}쪽)`) : null,
+          h("button", { class: "btn" + (g.read_page > 1 ? "" : " primary"), onclick: () => openReader(g, 1) }, "처음부터 읽기")))),
+    tagRows.length ? h("div", { class: "panel" }, h("h3", {}, "태그"), h("dl", { class: "info", style: "gap:8px 12px;align-items:start" }, ...tagRows)) : null,
+    h("p", { class: "meta" }, h("a", { href: `https://e-hentai.org/g/${g.gid}/${g.token}/`, target: "_blank", rel: "noopener", style: "text-decoration:underline" }, "e-hentai 에서 열기"))));
+  if (params.get("read")) openReader(g, +params.get("read") || startAt);
+}
+
+/** 만화 보기: 세로로 이어서 스크롤, 화면에 가까운 페이지만 받음. 읽은 위치를 기억. */
+function openReader(g, start) {
+  let closed = false, current = start, saveTimer;
+  const counter = h("span", { class: "count" });
+  const pages = [];
+  const list = h("div", { class: "rpages" });
+  const drawCounter = () => (counter.textContent = `${current} / ${g.pages}`);
+  const saveProgress = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => api("eh/progress", { method: "POST", body: { gid: g.gid, page: current } }).catch(() => {}), 800);
+  };
+  const load = (i) => {
+    const pg = pages[i];
+    if (!pg || pg.dataset.state) return;
+    pg.dataset.state = "loading";
+    const img = h("img", { alt: `${i + 1}쪽`, decoding: "async" });
+    img.onload = () => { pg.dataset.state = "done"; pg.classList.add("loaded"); pg.style.aspectRatio = ""; };
+    img.onerror = () => {
+      pg.dataset.state = "";
+      pg.replaceChildren(h("button", { class: "btn", onclick: () => { pg.replaceChildren(h("span", { class: "meta" }, `${i + 1}`)); load(i); } }, `${i + 1}쪽 불러오기 실패 · 다시 시도`));
+    };
+    img.src = `/eh/page/${g.gid}/${g.token}/${i + 1}`;
+    pg.replaceChildren(img);
+  };
+  for (let i = 0; i < g.pages; i++) {
+    const pg = h("div", { class: "rpage", "data-n": i + 1 }, h("span", { class: "meta" }, `${i + 1}`));
+    pages.push(pg); list.append(pg);
+  }
+  // 화면 근처(앞뒤로 화면 3개 높이) 페이지만 받기
+  const near = new IntersectionObserver((ents) => ents.forEach((e) => e.isIntersecting && load(+e.target.dataset.n - 1)), { root: null, rootMargin: "300% 0px" });
+  // 화면 가운데에 있는 페이지 = 지금 읽는 쪽
+  const mid = new IntersectionObserver((ents) => ents.forEach((e) => {
+    if (!e.isIntersecting) return;
+    current = +e.target.dataset.n; drawCounter(); saveProgress();
+  }), { rootMargin: "-50% 0px -50% 0px" });
+  const close = () => {
+    if (closed) return;
+    closed = true; near.disconnect(); mid.disconnect(); el.remove(); document.body.style.overflow = "";
+    window.removeEventListener("popstate", onPop);
+    api("eh/progress", { method: "POST", body: { gid: g.gid, page: current } }).catch(() => {}).then(() => route());
+  };
+  const onPop = () => close();
+  const bar = h("div", { class: "vtop" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, icon("close")), counter, h("span", { style: "width:40px" }));
+  const el = h("div", { class: "viewer reader", role: "dialog", "aria-modal": "true" }, bar, list,
+    h("div", { class: "rend" }, h("p", {}, "마지막 쪽입니다"), h("button", { class: "btn", onclick: () => history.back() }, "닫기")));
+  // 화면을 누르면 위쪽 막대 숨기기/보이기
+  list.addEventListener("click", (e) => { if (e.target.tagName === "IMG") bar.classList.toggle("hide"); });
+  document.body.append(el);
+  document.body.style.overflow = "hidden";
+  history.pushState({ viewer: true }, "");
+  window.addEventListener("popstate", onPop);
+  pages.forEach((p) => { near.observe(p); mid.observe(p); });
+  drawCounter();
+  requestAnimationFrame(() => { if (start > 1) pages[start - 1].scrollIntoView(); });
+}
+
 // ---------------------------------------------------------------- 중복 영상
 async function renderDuplicates() {
   setTab("settings");
@@ -1114,4 +1286,5 @@ api("settings").then((st) => {
   serverCaps = st;
   if (st.mega_supported) document.getElementById("tab-mega").hidden = false;
   if (st.photos) document.getElementById("tab-photos").hidden = false;
+  if (st.eh) document.getElementById("tab-comics").hidden = false;
 }).catch(() => {});

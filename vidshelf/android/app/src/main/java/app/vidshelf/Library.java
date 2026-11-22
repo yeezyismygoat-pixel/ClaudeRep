@@ -87,6 +87,7 @@ public class Library implements HttpServer.Handler {
 
     private final Context ctx;
     private final File storeFile, thumbDir;
+    private final EHentai eh;
     private JSONObject store;                         // settings, videos(meta), tags, performers, seq
     private List<Video> all = new ArrayList<>();      // MediaStore 의 모든 영상
     private final Map<Long, Video> byId = new HashMap<>();
@@ -100,7 +101,10 @@ public class Library implements HttpServer.Handler {
         this.ctx = ctx;
         storeFile = new File(ctx.getFilesDir(), "library.json");
         thumbDir = new File(ctx.getCacheDir(), "thumbs");
+        eh = new EHentai(new File(ctx.getCacheDir(), "eh"));
         load();
+        eh.memberId = settings().optString("eh_member_id", "");
+        eh.passHash = settings().optString("eh_pass_hash", "");
         JSONArray links = settings().optJSONArray("mega_links");
         for (int i = 0; links != null && i < links.length(); i++) {
             try { megaLinks.add(Mega.parse(links.optString(i))); } catch (Exception ignored) {}
@@ -194,6 +198,107 @@ public class Library implements HttpServer.Handler {
                 genRunning.set(false);
             }
         }, "mega-thumbs").start();
+    }
+
+    // ------------------------------------------------------------------ e-hentai 즐겨찾기 만화
+    private synchronized JSONObject ehProgress() throws JSONException {
+        JSONObject o = store.optJSONObject("eh_progress");
+        if (o == null) { o = new JSONObject(); store.put("eh_progress", o); }
+        return o;
+    }
+
+    private synchronized void ehSaveLogin(String id, String hash) throws JSONException {
+        settings().put("eh_member_id", id);
+        settings().put("eh_pass_hash", hash);
+        eh.memberId = id;
+        eh.passHash = hash;
+        save();
+    }
+
+    private void ehApi(HttpServer.Request r, HttpServer.Response res, String action, String m) throws Exception {
+        if (action.equals("status")) {
+            res.json(200, new JSONObject().put("logged_in", eh.loggedIn()).toString());
+            return;
+        }
+        if (action.equals("login") && m.equals("POST")) {
+            JSONObject b = body(r);
+            String id, hash;
+            try {
+                if (b.has("member_id")) {   // 쿠키로 로그인
+                    id = b.optString("member_id").trim();
+                    hash = b.optString("pass_hash").trim();
+                    if (!id.matches("\\d+") || !hash.matches("[0-9a-fA-F]{32}")) { res.error(400, "ipb_member_id 는 숫자, ipb_pass_hash 는 32자리 영문·숫자입니다"); return; }
+                } else {
+                    String[] c = eh.login(b.optString("user").trim(), b.optString("pass"));
+                    id = c[0];
+                    hash = c[1];
+                }
+            } catch (IOException e) {
+                res.error(400, e.getMessage());
+                return;
+            }
+            String oldId = eh.memberId, oldHash = eh.passHash;
+            ehSaveLogin(id, hash);
+            try {
+                eh.favorites("all", null, null);   // 실제로 즐겨찾기를 볼 수 있는지 확인
+            } catch (EHentai.NotLoggedIn e) {
+                ehSaveLogin(oldId, oldHash);
+                res.error(400, "로그인 정보가 맞지 않습니다. 쿠키 값을 다시 확인하세요.");
+                return;
+            } catch (IOException ignored) {
+                // 네트워크 문제는 로그인 실패로 보지 않음
+            }
+            res.json(200, "{\"ok\":true}");
+            return;
+        }
+        if (action.equals("logout") && m.equals("POST")) {
+            ehSaveLogin("", "");
+            res.json(200, "{\"ok\":true}");
+            return;
+        }
+        if (action.equals("progress") && m.equals("POST")) {
+            JSONObject b = body(r);
+            synchronized (this) {
+                ehProgress().put(String.valueOf(b.optLong("gid")), new JSONObject().put("page", b.optInt("page", 1))
+                        .put("at", System.currentTimeMillis() / 1000));
+                save();
+            }
+            res.json(200, "{\"ok\":true}");
+            return;
+        }
+        if (action.equals("favorites") || action.equals("gallery")) {
+            JSONArray items;
+            JSONObject out = new JSONObject();
+            try {
+                if (action.equals("favorites")) {
+                    out = eh.favorites(r.param("favcat"), r.param("q"), r.param("next"));
+                    items = out.getJSONArray("items");
+                } else {
+                    List<Object[]> one = new ArrayList<>();
+                    String t = nz(r.param("t"));
+                    if (!t.matches("[0-9a-f]{10}")) { res.error(400, "잘못된 갤러리 주소"); return; }
+                    one.add(new Object[]{parseLong(r.param("gid"), -1), t});
+                    items = eh.gdata(one);
+                    if (items.length() == 0) { res.error(404, "갤러리를 찾지 못했습니다 (삭제되었을 수 있습니다)"); return; }
+                }
+            } catch (EHentai.NotLoggedIn e) {
+                res.json(200, new JSONObject().put("logged_in", false).toString());
+                return;
+            } catch (IOException e) {
+                res.error(502, e.getMessage() == null ? "e-hentai 연결 실패" : e.getMessage());
+                return;
+            }
+            synchronized (this) {
+                JSONObject prog = ehProgress();
+                for (int i = 0; i < items.length(); i++) {
+                    JSONObject g = items.getJSONObject(i), pr = prog.optJSONObject(String.valueOf(g.optLong("gid")));
+                    g.put("read_page", pr == null ? 0 : pr.optInt("page", 0));
+                }
+            }
+            res.json(200, (action.equals("favorites") ? out.put("logged_in", true) : items.getJSONObject(0)).toString());
+            return;
+        }
+        res.error(404, "unknown endpoint");
     }
 
     /** 파일 크기가 똑같은 영상 묶음 (기기와 MEGA, 여러 폴더에 같은 영상이 있을 때). */
@@ -1068,7 +1173,7 @@ public class Library implements HttpServer.Handler {
                 .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
                 .put("mega_supported", true).put("mega", megaJson())
                 .put("server", serverJson()).put("performer_info", true).put("photos", true)
-                .put("duplicates", true).put("mega_thumbs", megaThumbsOn())
+                .put("duplicates", true).put("eh", true).put("mega_thumbs", megaThumbsOn())
                 .put("mega_thumb_missing", megaThumbMissing()[0]).put("mega_thumb_failed", megaThumbMissing()[1]);
     }
 
@@ -1147,6 +1252,23 @@ public class Library implements HttpServer.Handler {
             }
             if (n == null || n.folder) { res.error(404, "not found"); return; }
             megaStream(l, n, mimeFor(ext(n.name)), r, res, "1".equals(r.param("dl")));
+            return;
+        }
+        if (path.startsWith("/eh/page/")) {   // /eh/page/{gid}/{token}/{n}
+            if (!authed(r)) { res.error(401, "login required"); return; }
+            String[] p = path.split("/");
+            long gid = p.length > 5 ? parseLong(p[3], -1) : -1;
+            int n = p.length > 5 ? parseInt(p[5], -1) : -1;
+            if (gid < 0 || n < 1 || !p[4].matches("[0-9a-f]{10}")) { res.error(404, "not found"); return; }
+            byte[] img;
+            try {
+                img = eh.page(gid, p[4], n);
+            } catch (IOException e) {
+                res.error(502, e.getMessage() == null ? "e-hentai 연결 실패" : e.getMessage());
+                return;
+            }
+            res.header("Cache-Control", "max-age=604800");
+            res.send(200, EHentai.imageType(img), img);
             return;
         }
         if (path.startsWith("/photo/") || path.startsWith("/photothumb/")) {
@@ -1481,6 +1603,7 @@ public class Library implements HttpServer.Handler {
             res.json(200, settingsJson().toString());
             return;
         }
+        if (p0.equals("eh")) { ehApi(r, res, parts.length > 1 ? parts[1] : "", m); return; }
         if (p0.equals("duplicates") && m.equals("GET")) { res.json(200, duplicates().toString()); return; }
         if (p0.equals("browse")) { res.json(200, browse(r.param("path")).toString()); return; }
         if (p0.equals("scan") && m.equals("POST")) {
