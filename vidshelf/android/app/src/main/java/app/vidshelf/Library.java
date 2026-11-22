@@ -117,6 +117,107 @@ public class Library implements HttpServer.Handler {
         scan();
         autoPerformers();
         lookupMissingSoon();
+        megaThumbsSoon();
+    }
+
+    // ------------------------------------------------------------------ MEGA 썸네일 직접 만들기
+    private final java.util.concurrent.atomic.AtomicBoolean genRunning = new java.util.concurrent.atomic.AtomicBoolean();
+    private volatile int genPending = 0;
+    private volatile String genCurrent = "";
+    private volatile long genPausedUntil = 0;
+    private static final int GEN_MAX_FAILS = 2;
+
+    private File megaGenFile(Mega.Node n) { return new File(new File(thumbDir, "mega"), n.handle + "-g.jpg"); }
+
+    private boolean megaHasThumb(Mega.Node n) {
+        return n.thumbHandle != null || n.previewHandle != null || megaGenFile(n).length() > 0;
+    }
+
+    private synchronized boolean megaThumbsOn() { return settings().optBoolean("mega_thumbs", true); }
+
+    /** 썸네일을 만들어야 할 MEGA 영상 (MEGA 썸네일 없음, 아직 안 만듦, 실패 횟수 미만). */
+    private synchronized List<Video> megaThumbTodo() {
+        List<Video> out = new ArrayList<>();
+        for (Video v : all) {
+            if (v.node == null || megaHasThumb(v.node)) continue;
+            JSONObject m = meta(v);
+            if (m.optBoolean("hidden", false) || m.optInt("gen_fail", 0) >= GEN_MAX_FAILS) continue;
+            out.add(v);
+        }
+        out.sort(Comparator.comparingLong((Video v) -> v.dateAdded).reversed());   // 최근 영상부터
+        return out;
+    }
+
+    /** 썸네일이 없는 MEGA 영상의 장면을 백그라운드에서 하나씩 뽑습니다. */
+    public void megaThumbsSoon() {
+        if (!megaThumbsOn() || System.currentTimeMillis() < genPausedUntil) return;
+        if (!genRunning.compareAndSet(false, true)) return;
+        new Thread(() -> {
+            try {
+                List<Video> todo = megaThumbTodo();
+                for (int i = 0; i < todo.size(); i++) {
+                    if (!megaThumbsOn()) break;
+                    Video v = todo.get(i);
+                    genPending = todo.size() - i;
+                    genCurrent = v.name;
+                    MegaFrame.Result r;
+                    try {
+                        r = MegaFrame.grab(v.link, v.node);
+                    } catch (MegaFrame.QuotaException e) {
+                        genPausedUntil = System.currentTimeMillis() + 60 * 60 * 1000L;   // 한도에 걸리면 한 시간 쉼
+                        break;
+                    }
+                    synchronized (this) {
+                        JSONObject m = meta(v);
+                        try {
+                            if (r.duration > 0 && m.optDouble("duration", 0) <= 0) m.put("duration", r.duration);
+                            if (r.width > 0 && r.height > 0 && m.optInt("width", 0) <= 0) { m.put("width", r.width); m.put("height", r.height); }
+                            if (r.bitmap == null) m.put("gen_fail", m.optInt("gen_fail", 0) + 1);
+                        } catch (JSONException ignored) {}
+                        save();
+                    }
+                    if (r.bitmap != null) {
+                        File f = megaGenFile(v.node);
+                        f.getParentFile().mkdirs();
+                        File tmp = new File(f.getPath() + ".tmp");
+                        try (FileOutputStream o = new FileOutputStream(tmp)) {
+                            r.bitmap.compress(Bitmap.CompressFormat.JPEG, 80, o);
+                        } catch (IOException ignored) {}
+                        r.bitmap.recycle();
+                        tmp.renameTo(f);
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                genPending = 0;
+                genCurrent = "";
+                genRunning.set(false);
+            }
+        }, "mega-thumbs").start();
+    }
+
+    /** 파일 크기가 똑같은 영상 묶음 (기기와 MEGA, 여러 폴더에 같은 영상이 있을 때). */
+    private synchronized JSONObject duplicates() throws JSONException {
+        Map<Long, List<Video>> bySize = new HashMap<>();
+        for (Video v : visible()) if (v.size > 1024 * 1024) bySize.computeIfAbsent(v.size, k -> new ArrayList<>()).add(v);
+        List<List<Video>> groups = new ArrayList<>();
+        for (List<Video> g : bySize.values()) if (g.size() > 1) groups.add(g);
+        groups.sort((a, b) -> Long.compare(b.get(0).size, a.get(0).size));
+        JSONArray out = new JSONArray();
+        for (List<Video> g : groups) {
+            boolean mega = false, local = false;
+            Set<String> folders = new HashSet<>();
+            JSONArray items = new JSONArray();
+            g.sort(Comparator.comparing((Video v) -> v.node != null).thenComparing(v -> v.relPath + v.name));   // 기기 영상 먼저
+            for (Video v : g) {
+                if (v.node != null) mega = true; else local = true;
+                folders.add(v.relPath);
+                items.put(summary(v).put("filename", v.name).put("folder", v.relPath).put("source", v.node != null ? "mega" : "local"));
+            }
+            String reason = mega && local ? "이 기기 + MEGA" : folders.size() > 1 ? "여러 폴더" : "같은 폴더";
+            out.put(new JSONObject().put("size", g.get(0).size).put("reason", reason).put("items", items));
+        }
+        return new JSONObject().put("groups", out);
     }
 
     // ------------------------------------------------------------------ 출연자 자동 지정 · 정보 찾기
@@ -281,7 +382,7 @@ public class Library implements HttpServer.Handler {
             String e = ext(n.name);
             String kind = MEGA_VIDEO_EXTS.contains(e) ? "video" : mimeFor(e).startsWith("image/") ? "image" : mimeFor(e).startsWith("audio/") ? "audio" : "file";
             fi.put(new JSONObject().put("handle", n.handle).put("name", n.name).put("size", n.size).put("kind", kind)
-                    .put("id", kind.equals("video") ? n.id : JSONObject.NULL).put("thumb", n.thumbHandle != null || n.previewHandle != null)
+                    .put("id", kind.equals("video") ? n.id : JSONObject.NULL).put("thumb", kind.equals("video") ? megaHasThumb(n) : n.thumbHandle != null || n.previewHandle != null)
                     .put("url", "/mega-file/" + index + "/" + n.handle));
         }
         return o.put("folder", new JSONObject().put("handle", cur.handle).put("name", cur.name))
@@ -698,7 +799,7 @@ public class Library implements HttpServer.Handler {
         o.put("rating", m.optInt("rating", 0));
         o.put("favorite", m.optBoolean("favorite", false) ? 1 : 0);
         o.put("play_count", m.optInt("play_count", 0));
-        o.put("thumbs", v.node != null ? (v.node.thumbHandle != null || v.node.previewHandle != null ? 1 : 0) : N_FRAMES);
+        o.put("thumbs", v.node != null ? (megaHasThumb(v.node) ? 1 : 0) : N_FRAMES);
         o.put("missing", 0);
         o.put("resume_pos", m.optDouble("resume_pos", 0));
         o.put("added_at", v.dateAdded);
@@ -966,7 +1067,20 @@ public class Library implements HttpServer.Handler {
                 .put("ffmpeg", false).put("ffprobe", false).put("platform", "android")
                 .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
                 .put("mega_supported", true).put("mega", megaJson())
-                .put("server", serverJson()).put("performer_info", true).put("photos", true);
+                .put("server", serverJson()).put("performer_info", true).put("photos", true)
+                .put("duplicates", true).put("mega_thumbs", megaThumbsOn())
+                .put("mega_thumb_missing", megaThumbMissing()[0]).put("mega_thumb_failed", megaThumbMissing()[1]);
+    }
+
+    /** {썸네일 없는 MEGA 영상 수, 그중 만들기에 실패한 수} */
+    private synchronized int[] megaThumbMissing() {
+        int missing = 0, failed = 0;
+        for (Video v : all) {
+            if (v.node == null || megaHasThumb(v.node)) continue;
+            missing++;
+            if (meta(v).optInt("gen_fail", 0) >= GEN_MAX_FAILS) failed++;
+        }
+        return new int[]{missing, failed};
     }
 
     private JSONObject serverJson() throws JSONException {
@@ -1152,6 +1266,12 @@ public class Library implements HttpServer.Handler {
                     return;
                 }
                 if (action.equals("thumbs") && m.equals("POST")) {
+                    if (v.node != null) {
+                        megaGenFile(v.node).delete();
+                        meta.remove("gen_fail");
+                        save();
+                        megaThumbsSoon();
+                    }
                     File d = new File(thumbDir, String.valueOf(v.id));
                     File[] fs = d.listFiles();
                     if (fs != null) for (File f : fs) f.delete();
@@ -1303,6 +1423,7 @@ public class Library implements HttpServer.Handler {
                 synchronized (this) { megaLinks.add(l); }
                 saveMegaLinks();
                 scan();
+                megaThumbsSoon();
                 res.json(200, megaJson().toString());
                 return;
             }
@@ -1342,6 +1463,10 @@ public class Library implements HttpServer.Handler {
                     }
                     save();
                 }
+                if (b.has("mega_thumbs")) {
+                    synchronized (this) { settings().put("mega_thumbs", b.optBoolean("mega_thumbs")); save(); }
+                    if (b.optBoolean("mega_thumbs")) { genPausedUntil = 0; megaThumbsSoon(); }
+                }
                 if (b.has("password")) {
                     setPassword(b.optString("password"));
                     if (!passwordSet() && lanEnabled()) { setLan(false); restartServerSoon(); }
@@ -1356,6 +1481,7 @@ public class Library implements HttpServer.Handler {
             res.json(200, settingsJson().toString());
             return;
         }
+        if (p0.equals("duplicates") && m.equals("GET")) { res.json(200, duplicates().toString()); return; }
         if (p0.equals("browse")) { res.json(200, browse(r.param("path")).toString()); return; }
         if (p0.equals("scan") && m.equals("POST")) {
             scan();
@@ -1377,7 +1503,7 @@ public class Library implements HttpServer.Handler {
             }
             res.json(200, new JSONObject().put("scanning", !lookupStatus.isEmpty()).put("scan_found", 0).put("scan_new", 0)
                     .put("scan_current", lookupStatus)
-                    .put("thumb_pending", 0).put("thumb_current", "").put("last_scan", lastScan / 1000)
+                    .put("thumb_pending", genPending).put("thumb_current", genCurrent).put("last_scan", lastScan / 1000)
                     .put("counts", counts).toString());
             return;
         }
@@ -1503,7 +1629,14 @@ public class Library implements HttpServer.Handler {
     }
 
     private void megaThumb(Video v, int n, HttpServer.Request r, HttpServer.Response res) throws IOException {
-        if (n != 0 || (v.node.thumbHandle == null && v.node.previewHandle == null)) { res.error(404, "no frame"); return; }
+        if (n != 0) { res.error(404, "no frame"); return; }
+        if (v.node.thumbHandle == null && v.node.previewHandle == null) {   // 앱이 직접 만든 썸네일
+            File g = megaGenFile(v.node);
+            if (g.length() == 0) { res.error(404, "no thumbnail"); return; }
+            res.header("Cache-Control", r.param("v") != null && !"x".equals(r.param("v")) ? "max-age=86400" : "no-cache");
+            res.send(200, "image/jpeg", readAll(new FileInputStream(g)));
+            return;
+        }
         File f = new File(new File(thumbDir, "mega"), v.node.handle + "-p.jpg");
         if (!f.exists() || f.length() == 0) {
             byte[] jpg = Mega.preview(v.link, v.node);

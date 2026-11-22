@@ -192,3 +192,29 @@ dl.info dd { margin: 0; word-break: break-all; }
 .viewer .vnav button { background: #23262c; border: 0; color: #fff; border-radius: 10px; padding: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; }
 .viewer .vnav button:disabled { opacity: .35; }
 .viewer .vnav .ico { width: 18px; height: 18px; }
+
+/* 출연자 카드 (전체가 링크) */
+a.ecard { display: block; }
+a.ecard:hover { border-color: #3a4150; }
+a.ecard .body { color: var(--text); }
+
+/* 출연자 프로필 */
+.profile { max-width: 1500px; }
+.pf-head { display: flex; gap: 16px; align-items: flex-start; }
+.pf-avatar { flex: none; width: 112px; height: 112px; border-radius: 50%; overflow: hidden; background: var(--panel2);
+  display: grid; place-items: center; font-size: 42px; color: var(--muted); }
+.pf-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pf-main { flex: 1; min-width: 0; }
+.pf-name { margin: 0; font-size: 24px; line-height: 1.2; word-break: break-all; }
+.pf-facts { margin-top: 10px; font-size: 14px; }
+.pf-sec { margin: 18px 0 10px; font-size: 16px; }
+.pf-danger { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+@media (max-width: 560px) { .pf-avatar { width: 84px; height: 84px; font-size: 32px; } .pf-name { font-size: 20px; } .pf-head { gap: 12px; } }
+
+/* 중복 영상 */
+.dup-items { display: grid; gap: 10px; }
+.dup-item { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; align-items: start; }
+.dup-item.gone { opacity: .4; }
+.dup-item .thumb { display: block; }
+.dup-name { font-weight: 600; word-break: break-all; display: block; }
+@media (max-width: 560px) { .dup-item { grid-template-columns: 120px minmax(0, 1fr); gap: 10px; } }

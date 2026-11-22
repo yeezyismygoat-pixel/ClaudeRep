@@ -2,7 +2,7 @@ name: VidShelf APK
 
 on:
   push:
-    branches: [ccr-51e89e69-zcgdip]
+    branches: [ccr-51e89e69-zcgdip, ccr-a5601b43-te2axq]
     paths:
       - "vidshelf/**"
       - ".github/workflows/vidshelf-apk.yml"
@@ -26,17 +26,30 @@ jobs:
         with:
           gradle-version: "8.7"
 
-      # 매번 같은 서명 키를 써야 새 버전을 덮어 설치할 수 있음
-      - name: Restore signing key
+      # 매번 같은 서명 키를 써야 새 버전을 덮어 설치할 수 있음.
+      # 저장소 비밀값(Secret) VIDSHELF_KEYSTORE_B64 가 있으면 그 키를 씀 (영구).
+      # 없으면 Actions 캐시의 키를 씀 (7일 넘게 빌드가 없으면 사라질 수 있음).
+      - name: Restore signing key (cache)
         uses: actions/cache@v4
         with:
           path: ~/vidshelf-signing
           key: vidshelf-signing-v1
 
-      - name: Create signing key (first run only)
+      - name: Prepare signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.VIDSHELF_KEYSTORE_B64 }}
         run: |
           mkdir -p ~/vidshelf-signing
-          if [ ! -f ~/vidshelf-signing/vidshelf.jks ]; then
+          if [ -n "$KEYSTORE_B64" ]; then
+            if ! printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n' | base64 -d > ~/vidshelf-signing/vidshelf.jks; then
+              echo "::error::VIDSHELF_KEYSTORE_B64 비밀값이 올바른 base64 가 아닙니다."
+              exit 1
+            fi
+            echo "서명 키: 저장소 비밀값(VIDSHELF_KEYSTORE_B64) 사용"
+          elif [ -f ~/vidshelf-signing/vidshelf.jks ]; then
+            echo "서명 키: Actions 캐시의 키 사용"
+          else
+            echo "::warning::서명 키가 없어 새로 만듭니다. 이 버전은 이전 앱을 지우고 설치해야 합니다."
             keytool -genkeypair -keystore ~/vidshelf-signing/vidshelf.jks -storepass vidshelf -keypass vidshelf \
               -alias vidshelf -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=VidShelf"
           fi
