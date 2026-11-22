@@ -521,8 +521,11 @@ async function renderMedia(params0, type0) {
   };
 
   $app.replaceChildren(h("div", { class: "media" },
-    h("div", { class: "home-head" }, h("div", {}, countLine, h("h1", {}, "미디어")), h("div", { class: "row", style: "flex-wrap:nowrap" }, viewBtn, filterBtn)),
-    typeSeg, chipsBox, content));
+    h("div", { class: "home-head media-title" }, h("div", {}, countLine, h("h1", {}, "미디어"))),
+    h("div", { class: "media-bar" },   // 스크롤해도 위에 떠 있는 반투명 막대
+      h("div", { class: "media-bar-row" }, typeSeg, viewBtn, filterBtn),
+      chipsBox),
+    content));
 
 
   api("media?type=video&per=1").then((d) => (typeCounts.video.textContent = d.total.toLocaleString())).catch(() => {});
@@ -718,7 +721,11 @@ function modeToggle(kind, onChange) {
 const wallHeight = () => (window.innerWidth < 560 ? 110 : 180);
 
 /** 이미지 벽 한 칸: 원래 비율을 유지하고 아래에 출연자 이름을 표시 */
+/** 크게 보이는 칸용 큰 미리보기 주소 (화질 깨짐 방지) */
+const hdSrc = (src, size = 1080) => !src ? src : src + (src.includes("?") ? "&" : "?") + "s=" + size;
+
 function wallTile({ href, onclick, src, ratio, badges, performers }) {
+  src = hdSrc(src);
   let r = ratio > 0 ? Math.min(3, Math.max(0.4, ratio)) : 1;
   const box = h("div", { class: "tile-img", style: `aspect-ratio:${r}` });
   const tile = h(href ? "a" : "div", { class: "tile", href, onclick, style: `flex:${r} 1 ${Math.round(r * wallHeight())}px` }, box,
@@ -939,7 +946,7 @@ async function openViewer(items, start) {
 function videoCard(v) {
   const img = h("img", { loading: "lazy", alt: "" });
   const noimg = h("div", { class: "noimg" }, "미리보기 준비 중");
-  if (v.thumbs > 0) { img.src = thumbUrl(v.id, 0, v.thumbs); noimg.hidden = true; }
+  if (v.thumbs > 0) { img.src = hdSrc(thumbUrl(v.id, 0, v.thumbs)); noimg.hidden = true; }
   else { img.hidden = true; img.dataset.retry = thumbUrl(v.id, 0, "x"); }
   img.onload = () => { img.hidden = false; noimg.hidden = true; delete img.dataset.retry; };
   img.onerror = () => { img.hidden = true; noimg.hidden = false; };

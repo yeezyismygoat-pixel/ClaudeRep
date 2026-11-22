@@ -669,3 +669,20 @@ body.shorts-mode #app { position: fixed; inset: 0; z-index: 1; }
 .lib-grid.three .lib-tile { min-height: 100px; padding: 14px 12px; }
 .libhub .home-head { align-items: center; }
 .libhub .lib-list, .settings .lib-list { max-width: 760px; margin-top: 0; }
+
+/* ---------- 미디어 탭: 위에 떠 있는 반투명 막대 ---------- */
+.media .media-title { margin-bottom: 6px; }
+.media-bar { position: sticky; top: 0; z-index: 35; margin: 0 -16px 10px; padding: 8px 16px 8px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(16px) saturate(1.4); -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+@media (max-width: 560px) { .media-bar { margin-left: -12px; margin-right: -12px; padding-left: 12px; padding-right: 12px; } }
+.media-bar-row { display: flex; align-items: center; gap: 8px; }
+.media-bar .type-seg { flex: 1; min-width: 0; margin: 0; background: color-mix(in srgb, var(--panel) 80%, transparent); }
+.media-bar .type-seg button { height: 36px; font-size: 13.5px; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.media-bar .type-ind { border-radius: 18px; }
+.media-bar .round-btn { width: 42px; height: 42px; background: color-mix(in srgb, var(--panel) 80%, transparent); }
+.media-bar .filter-btn { height: 42px; padding: 0 12px 0 10px; gap: 5px; }
+.media-bar .fchips { margin: 8px 0 0; }
+@media (max-width: 380px) { .media-bar .filter-btn { font-size: 0; gap: 0; padding: 0 11px; } .media-bar .filter-btn .fbadge { font-size: 12px; margin-left: 4px; } }
+@media (max-width: 480px) { .media-bar .type-seg button span { display: none; } }

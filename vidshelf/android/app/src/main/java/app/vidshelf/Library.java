@@ -873,18 +873,20 @@ public class Library implements HttpServer.Handler {
     }
 
     /** iCloud 미리보기 이미지 (작은 사진 / 영상 포스터), 기기에 보관 */
-    private void icloudThumb(Video v, HttpServer.Response res) throws IOException {
-        File f = new File(new File(thumbDir, "icloud"), v.item.guid + ".jpg");
+    private void icloudThumb(Video v, HttpServer.Request r, HttpServer.Response res) throws IOException {
+        int size = v.item.video ? 512 : thumbBucket(r);
+        File f = new File(new File(thumbDir, "icloud"), v.item.guid + (size > 512 ? "-" + size : "") + ".jpg");
         if (f.length() == 0) {
             java.net.HttpURLConnection c;
             try {
-                c = ICloud.open(v.album, v.item, v.item.thumbChecksum, null);
+                c = ICloud.open(v.album, v.item, size > 512 ? v.item.mediaChecksum : v.item.thumbChecksum, null);
             } catch (IOException e) {
                 res.error(502, e.getMessage() == null ? "iCloud 연결 실패" : e.getMessage());
                 return;
             }
             byte[] data;
             try (InputStream in = c.getInputStream()) { data = readAll(in); }
+            if (size > 512) { byte[] d2 = downscale(data, size); if (d2 != null) data = d2; }
             f.getParentFile().mkdirs();
             try (FileOutputStream o = new FileOutputStream(f)) { o.write(data); }
         }
@@ -1023,26 +1025,64 @@ public class Library implements HttpServer.Handler {
         return new JSONObject().put("total", list.size()).put("page", page).put("per", per).put("items", items);
     }
 
+    /** 미리보기 크기: 화면에 크게 보이는 칸(이미지 벽 등)은 ?s=1080 처럼 더 큰 이미지를 요청 */
+    static int thumbBucket(HttpServer.Request r) {
+        int s = parseInt(r.param("s"), 512);
+        return s <= 512 ? 512 : s <= 1080 ? 1080 : 1600;
+    }
+
+    /** 큰 이미지를 긴 변 max 픽셀로 줄여 JPEG 로 (화질을 지키면서 용량은 적당히) */
+    static byte[] downscale(byte[] data, int max) {
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length, o);
+        if (o.outWidth <= 0) return null;
+        int sample = 1;
+        while (Math.max(o.outWidth, o.outHeight) / (sample * 2) >= max) sample *= 2;
+        o.inJustDecodeBounds = false;
+        o.inSampleSize = sample;
+        Bitmap b = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length, o);
+        if (b == null) return null;
+        int w = b.getWidth(), h = b.getHeight(), big = Math.max(w, h);
+        if (big > max) {
+            Bitmap sc = Bitmap.createScaledBitmap(b, w * max / big, h * max / big, true);
+            if (sc != b) { b.recycle(); b = sc; }
+        }
+        ByteArrayOutputStream bo = new ByteArrayOutputStream();
+        b.compress(Bitmap.CompressFormat.JPEG, 86, bo);
+        b.recycle();
+        return bo.toByteArray();
+    }
+
     private void photoThumb(Video v, HttpServer.Request r, HttpServer.Response res) throws Exception {
-        File f = new File(new File(thumbDir, "photos"), Long.toHexString(v.id) + ".jpg");
+        int size = thumbBucket(r);
+        File f = new File(new File(thumbDir, "photos"), Long.toHexString(v.id) + (size > 512 ? "-" + size : "") + ".jpg");
         if (!f.exists() || f.length() == 0) {
             byte[] jpg = null;
             if (v.node != null) {
                 jpg = Mega.preview(v.link, v.node);
+                if (jpg != null) rememberPreviewSize(v, jpg);
+                // 크게 보여 줄 때 MEGA 미리보기가 작으면 원본을 받아 줄임 (30MB 이하 사진만)
+                boolean small = jpg == null || previewWidth(jpg) < size * 0.7;
+                if (size > 512 && small && v.node.size > 0 && v.node.size < 30L * 1024 * 1024) {
+                    try (InputStream in = Mega.open(v.link, v.node, 0, v.node.size - 1)) {
+                        byte[] big = downscale(readAll(in), size);
+                        if (big != null) jpg = big;
+                    } catch (IOException ignored) {}
+                }
                 if (jpg == null) { megaStream(v.link, v.node, v.mime, r, res, false); return; }   // 썸네일이 없으면 원본
-                rememberPreviewSize(v, jpg);
             } else {
                 Bitmap bmp = null;
                 frameLock.acquire();
                 try {
-                    bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(512, 512), null);
+                    bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(size, size), null);
                 } catch (Exception ignored) {
                 } finally {
                     frameLock.release();
                 }
                 if (bmp == null) { res.error(404, "no thumbnail"); return; }
                 ByteArrayOutputStream bo = new ByteArrayOutputStream();
-                bmp.compress(Bitmap.CompressFormat.JPEG, 80, bo);
+                bmp.compress(Bitmap.CompressFormat.JPEG, size > 512 ? 86 : 80, bo);
                 bmp.recycle();
                 jpg = bo.toByteArray();
             }
@@ -1051,6 +1091,13 @@ public class Library implements HttpServer.Handler {
         }
         res.header("Cache-Control", "max-age=86400");
         res.send(200, "image/jpeg", readAll(new FileInputStream(f)));
+    }
+
+    private static int previewWidth(byte[] jpg) {
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        android.graphics.BitmapFactory.decodeByteArray(jpg, 0, jpg.length, o);
+        return Math.max(o.outWidth, o.outHeight);
     }
 
     private void photoFull(Video v, HttpServer.Request r, HttpServer.Response res) throws Exception {
@@ -1488,7 +1535,7 @@ public class Library implements HttpServer.Handler {
                 v = photoById.get(parseLong(p.length > 2 ? p[2].replace(".jpg", "") : "", -1));
             }
             if (v == null) { res.error(404, "not found"); return; }
-            if (v.item != null) { if (path.startsWith("/photo/")) icloudStream(v, r, res, "1".equals(r.param("dl"))); else icloudThumb(v, res); }
+            if (v.item != null) { if (path.startsWith("/photo/")) icloudStream(v, r, res, "1".equals(r.param("dl"))); else icloudThumb(v, r, res); }
             else if (path.startsWith("/photo/")) photoFull(v, r, res); else photoThumb(v, r, res);
             return;
         }
@@ -1503,7 +1550,7 @@ public class Library implements HttpServer.Handler {
             }
             if (v == null) { res.error(404, "not found"); return; }
             if (path.startsWith("/media/") && v.item != null) icloudStream(v, r, res, "1".equals(r.param("dl")));
-            else if (v.item != null) icloudThumb(v, res);
+            else if (v.item != null) icloudThumb(v, r, res);
             else if (path.startsWith("/media/") && v.node != null) megaStream(v.link, v.node, v.mime, r, res, "1".equals(r.param("dl")));
             else if (path.startsWith("/media/")) media(v, r, res);
             else if (v.node != null) megaThumb(v, parseInt(p.length > 3 ? p[3].replace(".jpg", "") : "0", 0), r, res);
@@ -2078,15 +2125,16 @@ public class Library implements HttpServer.Handler {
     // ------------------------------------------------------------------ thumbnails
     private void thumb(Video v, int n, HttpServer.Request r, HttpServer.Response res) throws Exception {
         n = Math.max(0, Math.min(N_FRAMES - 1, n));
+        int size = n == 0 ? Math.max(640, thumbBucket(r)) : 640;
         File dir = new File(thumbDir, String.valueOf(v.id));
-        File f = new File(dir, n + ".jpg");
+        File f = new File(dir, n + (size > 640 ? "-" + size : "") + ".jpg");
         if (!f.exists() || f.length() == 0) {
             Bitmap bmp = null;
             frameLock.acquire();
             try {
                 if (n == 0) {
                     try {
-                        bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(640, 640), null);   // 비율 유지 (세로 영상도)
+                        bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(size, size), null);   // 비율 유지 (세로 영상도)
                     } catch (Exception ignored) {
                     }
                 }
@@ -2097,7 +2145,7 @@ public class Library implements HttpServer.Handler {
             if (bmp == null) { res.error(404, "no frame"); return; }
             dir.mkdirs();
             try (FileOutputStream o = new FileOutputStream(f)) {
-                bmp.compress(Bitmap.CompressFormat.JPEG, 75, o);
+                bmp.compress(Bitmap.CompressFormat.JPEG, size > 640 ? 85 : 75, o);
             }
             bmp.recycle();
         }
