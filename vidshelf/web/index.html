@@ -504,37 +504,45 @@ function videoCard(v) {
 }
 
 function pickButtons(big) {
-  const onFiles = async (e, label) => {
-    const list = [...e.target.files]; e.target.value = "";
+  const onFiles = async (e) => {
+    const input = e.target, list = [...input.files]; input.value = "";
     if (!list.length) return;
     const r = await addFiles(list);
-    toast(`새 영상 ${r.added}개 추가, ${r.linked}개 다시 연결` + (list.length - r.added - r.linked ? ` · 영상이 아닌 파일 ${list.length - r.added - r.linked}개 제외` : ""));
+    const skipped = list.length - r.added - r.linked;
+    let msg = `새 영상 ${r.added}개 추가, ${r.linked}개 다시 연결` + (skipped ? ` · 영상이 아닌 파일 ${skipped}개 제외` : "");
+    if (input === dirInput && !list.some((f) => (f.webkitRelativePath || "").includes("/")))
+      msg = "이 브라우저는 폴더째 선택을 지원하지 않아 고른 파일만 추가했습니다. " + msg;
+    toast(msg);
     route();
   };
   const fileBtn = h("label", { class: "btn filebtn" + (big ? " primary" : "") }, "🎞 영상 고르기",
     h("input", { type: "file", accept: "video/*", multiple: true, id: big ? "pick-files-main" : "pick-files", onchange: onFiles }));
-  const dirInput = h("input", { type: "file", multiple: true, id: big ? "pick-dir-main" : "pick-dir", onchange: onFiles });
+  // accept 를 비워 두면 갤러리 대신 폴더를 탐색하는 파일 선택 창이 열림 (영상이 아닌 파일은 자동 제외)
+  const anyBtn = h("label", { class: "btn filebtn" }, "📂 내 파일에서 고르기",
+    h("input", { type: "file", multiple: true, id: big ? "pick-any-main" : "pick-any", onchange: onFiles }));
+  const dirInput = h("input", { type: "file", multiple: true, id: big ? "pick-dir-main" : "pick-dir", hidden: true, onchange: onFiles });
   dirInput.webkitdirectory = true;
-  // 안드로이드 브라우저는 폴더째 선택을 지원하지 않으므로 숨김
-  const android = /Android/i.test(navigator.userAgent);
-  // accept 를 비워 두면 갤러리 대신 폴더를 탐색할 수 있는 파일 선택 창이 열림 (영상이 아닌 파일은 자동 제외)
-  const anyBtn = android ? h("label", { class: "btn filebtn" }, "📂 내 파일에서 고르기",
-    h("input", { type: "file", multiple: true, id: big ? "pick-any-main" : "pick-any", onchange: onFiles })) : null;
-  const dirBtn = android ? anyBtn : h("label", { class: "btn filebtn" }, "📁 폴더째 고르기", dirInput);
-  const fsBtn = !android && canPickDir() ? h("button", { class: "btn", onclick: pickDirectory }, "📂 폴더 연결 (기억됨)") : null;
-  return h("div", { class: "row" }, fileBtn, dirBtn, fsBtn);
+  const scanBtn = h("button", { class: "btn", onclick: () => scanFolder(dirInput) }, "📁 폴더째 스캔");
+  return h("div", { class: "row" }, fileBtn, anyBtn, scanBtn, dirInput);
 }
 
-async function pickDirectory() {
-  try {
-    const handle = await window.showDirectoryPicker({ mode: "read" });
-    if (DB.db) await DB.put("dirs", { handle, name: handle.name }).catch(() => {});
-    const r = await addFromDirHandle(handle);
-    toast(`새 영상 ${r.added}개 추가, ${r.linked}개 다시 연결`);
-    route();
-  } catch (e) {
-    if (e.name !== "AbortError") toast("이 브라우저에서는 폴더 연결을 쓸 수 없습니다. ‘영상 고르기’를 사용하세요.");
+// 1) 폴더 연결 API(하위 폴더까지, 다음에 다시 연결 가능) → 2) 폴더 선택 입력 → 둘 다 안 되면 안내
+async function scanFolder(dirInput) {
+  if (canPickDir()) {
+    try {
+      const handle = await window.showDirectoryPicker({ mode: "read" });
+      toast("폴더를 스캔하는 중…");
+      if (DB.db) await DB.put("dirs", { handle, name: handle.name }).catch(() => {});
+      const r = await addFromDirHandle(handle);
+      toast(`‘${handle.name}’ 폴더: 새 영상 ${r.added}개 추가, ${r.linked}개 다시 연결`);
+      route();
+      return;
+    } catch (e) {
+      if (e.name === "AbortError") return;   // 사용자가 취소
+    }
   }
+  if ("webkitdirectory" in dirInput) { dirInput.click(); return; }
+  toast("이 브라우저는 폴더째 스캔을 지원하지 않습니다. ‘내 파일에서 고르기’로 폴더 안 영상을 모두 선택해 주세요.");
 }
 
 // ------------------------------------------------------------ video view
@@ -731,7 +739,8 @@ async function renderManage() {
     h("div", { class: "panel" }, h("h3", {}, "영상 추가 · 다시 연결"),
       h("ol", { class: "steps meta" },
         h("li", {}, "보안 폴더의 영상을 보려면 이 페이지를 보안 폴더 안의 브라우저로 열어야 합니다."),
-        h("li", {}, "‘내 파일에서 고르기’를 누르고 DCIM이나 Download 폴더로 들어가세요."),
+        h("li", {}, "‘폴더째 스캔’을 누르고 DCIM이나 Download 폴더를 고르면 하위 폴더까지 한 번에 추가됩니다. 브라우저가 지원하지 않으면 그렇다고 알려 줍니다."),
+        h("li", {}, "폴더째 스캔이 안 되면 ‘내 파일에서 고르기’를 누르고 DCIM이나 Download 폴더로 들어가세요."),
         h("li", {}, "첫 영상을 길게 누른 뒤 나머지를 차례로 누르거나, 메뉴의 ‘모두 선택’으로 한꺼번에 고르세요."),
         h("li", {}, "이미 등록된 영상을 다시 고르면 새로 추가되지 않고 기존 정보에 연결됩니다."),
         h("li", {}, "브라우저는 파일 접근을 기억하지 못하므로, 앱을 다시 열면 같은 영상을 한 번 더 골라야 재생할 수 있습니다.")),
