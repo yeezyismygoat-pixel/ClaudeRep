@@ -317,8 +317,9 @@ function openSheet(title, body, foot) {
     foot ? h("div", { class: "sheet-foot" }, ...foot) : null);
   const shade = h("div", { class: "sheet-shade", onclick: () => close() });
   let closed = false, after = null;
+  const sheetId = Math.random();
   const onPop = () => {
-    if (closed) return;
+    if (closed || (history.state && history.state.sheet === sheetId)) return;   // 위에 겹친 다른 창이 닫힌 것
     closed = true;
     window.removeEventListener("popstate", onPop);
     sheet.classList.add("out"); shade.classList.add("out");
@@ -329,7 +330,7 @@ function openSheet(title, body, foot) {
   dragToClose(sheet, shade, () => close());
   document.body.append(shade, sheet);
   document.body.style.overflow = "hidden";
-  history.pushState({ sheet: true }, "");
+  history.pushState({ sheet: sheetId }, "");
   window.addEventListener("popstate", onPop);
   return close;
 }
@@ -913,6 +914,16 @@ async function renderMedia(params0, type0) {
   let params = new URLSearchParams(params0);
   params.delete("type");
   let type = TYPES.includes(type0) ? type0 : "all";
+  if (parseHash().path === "/media" && location.hash.replace(/\/$/, "") === "#/media" && !scrollMemory[location.hash]) {   // 아무 조건 없이 열면 기본 필터
+    const def = (await api("saved_filters").catch(() => [])).find((f) => f.default);
+    if (def) {
+      params = new URLSearchParams(def.params || ""); params.delete("type");
+      type = TYPES.includes(def.type) ? def.type : "all";
+      const p = new URLSearchParams(params); if (type !== "all") p.set("type", type);
+      history.replaceState(history.state, "", "#/media" + (p.toString() ? "?" + p : ""));
+      lastHash = location.hash;
+    }
+  }
 
   const [performers, tags] = await Promise.all([api("performers").catch(() => []), api("tags").catch(() => [])]);
   const perfName = (id) => (performers.find((x) => String(x.id) === String(id)) || { name: "#" + id }).name;
@@ -1192,7 +1203,7 @@ async function renderMedia(params0, type0) {
 
     // 저장된 필터: 지금 고른 조건에 이름을 붙여 두고, 누르면 바로 적용 (길게 누르면 삭제)
     const savedBox = h("div", { class: "chips saved-filters" });
-    const nameIn = h("input", { type: "text", placeholder: "필터 이름 (예: 민지 즐겨찾기)", maxlength: "40", "aria-label": "필터 이름" });
+    const nameIn = h("input", { type: "text", placeholder: "필터 이름 (예: 공연 즐겨찾기)", maxlength: "40", "aria-label": "필터 이름" });
     const saveRow = h("div", { class: "taginput", hidden: true }, nameIn,
       h("button", { class: "btn primary", onclick: async () => {
         const name = nameIn.value.trim();
@@ -1208,15 +1219,25 @@ async function renderMedia(params0, type0) {
     const TYPE_LABEL = { all: "전체", video: "동영상", photo: "사진" };
     function drawSaved() {
       const chips = savedFilters.map((f) => {
-        const chip = h("button", { class: "chip saved", title: "누르면 적용 · 길게 누르면 삭제" },
+        const chip = h("button", { class: "chip saved" + (f.default ? " is-default" : ""), title: "누르면 적용 · 길게 누르면 기본 필터 지정·삭제" },
+          f.default ? h("span", { class: "sf-star", "aria-label": "기본 필터" }, "★") : null,
           h("span", {}, f.name), f.type && f.type !== "all" ? h("small", {}, TYPE_LABEL[f.type] || "") : null);
         let timer = null, long = false;
-        chip.addEventListener("touchstart", () => { long = false; timer = setTimeout(async () => {
+        chip.addEventListener("touchstart", () => { long = false; timer = setTimeout(() => {
           long = true;
           try { navigator.vibrate && navigator.vibrate(18); } catch (e) {}
-          if (!confirm(`‘${f.name}’ 필터를 삭제할까요?`)) return;
-          savedFilters = await api(`saved_filters/${f.id}`, { method: "DELETE" }).catch(() => savedFilters);
-          drawSaved();
+          const closeOpts = openSheet(`‘${f.name}’ 필터`, [
+            h("button", { class: "del-opt", onclick: () => closeOpts(async () => {
+              savedFilters = await api(`saved_filters/${f.id}/default`, { method: "POST", body: { on: !f.default } }).catch(() => savedFilters);
+              toast(f.default ? "기본 필터를 해제했습니다" : `‘${f.name}’을(를) 기본 필터로 정했습니다. 미디어 탭을 열면 이 조건으로 보입니다.`);
+              drawSaved();
+            }) }, h("b", {}, f.default ? "기본 필터 해제" : "★ 기본 필터로 지정"),
+              h("span", { class: "meta" }, f.default ? "미디어 탭을 열면 조건 없이 전체가 보입니다." : "미디어 탭을 열 때마다 이 조건이 자동으로 걸립니다.")),
+            h("button", { class: "del-opt danger", onclick: () => closeOpts(async () => {
+              savedFilters = await api(`saved_filters/${f.id}`, { method: "DELETE" }).catch(() => savedFilters);
+              drawSaved();
+            }) }, h("b", {}, "삭제"), h("span", { class: "meta" }, "저장한 필터만 지워지고 영상·사진은 그대로입니다.")),
+          ], [h("button", { class: "btn", style: "grid-column: 1 / -1", onclick: () => closeOpts() }, "취소")]);
         }, 550); }, { passive: true });
         const stop = () => clearTimeout(timer);
         chip.addEventListener("touchend", stop); chip.addEventListener("touchmove", stop);
@@ -1229,7 +1250,8 @@ async function renderMedia(params0, type0) {
         return chip;
       });
       savedBox.replaceChildren(...chips,
-        h("button", { class: "chip add", onclick: () => { saveRow.hidden = !saveRow.hidden; if (!saveRow.hidden) nameIn.focus(); } }, "＋ 지금 조건 저장"));
+        h("button", { class: "chip add", onclick: () => { saveRow.hidden = !saveRow.hidden; if (!saveRow.hidden) nameIn.focus(); } }, "＋ 지금 조건 저장"),
+        savedFilters.length ? h("p", { class: "meta sf-hint" }, "길게 누르면 ★ 기본 필터로 정하거나 지울 수 있습니다. 기본 필터는 미디어 탭을 열 때 자동으로 걸립니다.") : null);
     }
     api("saved_filters").then((l) => { savedFilters = l; drawSaved(); }).catch(() => {});
     drawSaved();
@@ -1260,8 +1282,9 @@ async function renderMedia(params0, type0) {
       pending = apply instanceof URLSearchParams ? apply : apply ? toParams() : null;
       history.back();
     }
+    const sheetId = Math.random();
     const onPop = () => {
-      if (closed) return;
+      if (closed || (history.state && history.state.sheet === sheetId)) return;   // 위에 겹친 다른 창이 닫힌 것
       closed = true;
       window.removeEventListener("popstate", onPop);
       sheet.classList.add("out"); shade.classList.add("out");
@@ -1272,7 +1295,7 @@ async function renderMedia(params0, type0) {
     dragToClose(sheet, shade, () => close(false));
     document.body.append(shade, sheet);
     document.body.style.overflow = "hidden";
-    history.pushState({ sheet: true }, "");   // 휴대폰 뒤로 가기로 닫힘
+    history.pushState({ sheet: sheetId }, "");   // 휴대폰 뒤로 가기로 닫힘
     window.addEventListener("popstate", onPop);
   }
 
@@ -2091,7 +2114,7 @@ async function renderSettings(opts = {}) {
     { group: "관리", items: [
       { id: "cleanup", icon: "broom", title: "정리", sub: [c.missing ? `찾을 수 없는 파일 ${c.missing}` : "", st.hidden_count ? `숨긴 영상 ${st.hidden_count}` : ""].filter(Boolean).join(" · ") || "중복 영상 · 숨긴 영상" },
       st.backup ? { id: "backup", icon: "backup", title: "백업 / 복원", sub: "정보를 파일로 저장하고 되살리기" } : null,
-      { id: "security", icon: "lock", title: "비밀번호와 다른 기기 접속", sub: (st.password_set ? "비밀번호 있음" : "비밀번호 없음") + (st.server && st.server.lan ? " · 다른 기기 접속 켜짐" : "") },
+      st.platform === "android" ? null : { id: "security", icon: "lock", title: "비밀번호", sub: st.password_set ? "비밀번호 있음" : "비밀번호 없음" },   // 안드로이드 앱은 이 폰 안에서만 열려서 필요 없음
       st.platform === "android" ? null : { id: "system", icon: "info", title: "시스템", sub: "데이터 폴더 · ffmpeg" },
     ] },
   ];
@@ -2179,7 +2202,7 @@ async function renderSettings(opts = {}) {
           const au = await api("auth").catch(() => ({ ok: false }));
           if (au.ok) reload(); else renderLogin();
         } }, "저장"))),
-      st.server ? serverPanel(st) : null);
+      null);
   }
 
   if (section === "system") {
@@ -2340,30 +2363,6 @@ async function renderPerformer(id) {
 }
 
 // ---------------------------------------------------------------- 앱 서버 (안드로이드)
-function serverPanel(st) {
-  const sv = st.server;
-  const toggle = h("input", { type: "checkbox", id: "lan-toggle", checked: sv.lan, disabled: !st.password_set && !sv.lan });
-  toggle.addEventListener("change", async () => {
-    toggle.disabled = true;
-    try {
-      await api("settings", { method: "PUT", body: { lan: toggle.checked } });
-      toast(toggle.checked ? "다른 기기 접속을 켰습니다" : "다른 기기 접속을 껐습니다");
-    } catch (e) { toast(e.message); }
-    setTimeout(renderSettings, 1500);   // 서버가 새 설정으로 다시 열릴 때까지 잠시 대기
-  });
-  return h("div", { class: "panel" }, h("h3", {}, "다른 기기에서 보기"),
-    h("p", { class: sv.secure_folder ? "meta" : "warn" }, sv.secure_folder
-      ? "🔒 보안 폴더에서 실행 중입니다. 보안 폴더의 영상만 보입니다."
-      : "⚠ 일반 공간에서 실행 중입니다. 보안 폴더 영상만 보려면 보안 폴더 안의 VidShelf 를 쓰세요."),
-    h("label", { class: "row", for: "lan-toggle", style: "margin:10px 0" }, toggle, h("span", {}, "같은 Wi-Fi 의 다른 기기에서 접속 허용")),
-    !st.password_set ? h("p", { class: "meta" }, "켜려면 먼저 아래 ‘비밀번호’에서 비밀번호를 정하세요. 다른 기기에서는 그 비밀번호로 로그인합니다.") : null,
-    h("p", { class: "meta" }, "켜 두면 앱을 닫아도 계속 접속할 수 있도록 ‘VidShelf 실행 중’ 알림이 표시됩니다 (안드로이드 규칙). 끄면 알림 없이 앱을 쓰는 동안만 동작합니다."),
-    sv.lan ? (sv.lan_addresses.length
-      ? h("div", {}, h("p", { class: "meta" }, "다른 기기의 브라우저에서 이 주소를 여세요:"),
-          ...sv.lan_addresses.map((a) => h("p", { style: "font-size:18px;margin:4px 0;user-select:all" }, a)))
-      : h("p", { class: "warn" }, "Wi-Fi 에 연결되어 있지 않습니다. 이 폰과 다른 기기를 같은 Wi-Fi 에 연결하세요.")) : null);
-}
-
 // ---------------------------------------------------------------- MEGA
 /** 클라우드 링크 (MEGA 폴더 · iCloud 공유 앨범) — 입력칸 하나, 링크를 보고 알아서 구분 */
 function cloudPanel(st) {
@@ -2754,7 +2753,7 @@ async function renderLibraryHub() {
       serverCaps.duplicates ? row("#/duplicates", "broom", "중복 영상", "같은 영상이 여러 곳에 있는지 찾기") : null,
       serverCaps.hidden_count !== undefined ? row("#/hidden", "info", "숨긴 영상", `${serverCaps.hidden_count}개`) : null),
     h("h2", { class: "set-group-title" }, "앱"),
-    h("div", { class: "lib-list set-list" }, row("#/settings", "gear", "설정", "화면 · 폴더 · 클라우드 · 백업 · 비밀번호"))));
+    h("div", { class: "lib-list set-list" }, row("#/settings", "gear", "설정", "화면 · 폴더 · 클라우드 · 백업"))));
 }
 
 /** 탐색: 출연자를 큰 카드로 쭉 (장면 3장), 위쪽 검색·필터는 미디어 탭처럼 떠 있음. 태그·나이로 거르기 */
@@ -3003,7 +3002,7 @@ async function renderStats() {
         h("div", { class: "st-bar-box" }, h("div", { class: "st-bar", style: `height:${Math.max(d.secs ? 4 : 0, (d.secs / max) * 100)}%` })),
         h("span", {}, isToday ? "오늘" : WD[dt.getDay()]));
     }));
-  const watched = (recent.items || []).filter((v) => v.last_played);
+  const watched = (recent.items || []).filter((v) => v.last_played).slice(0, 3);   // 나머지는 ‘모두 보기’에서
   const mostPlayed = (most.items || []).filter((v) => v.play_count > 0);
   const top = st.top_performers || [];
   const topMax = Math.max(1, ...top.map((p) => p.secs || p.plays));

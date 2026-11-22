@@ -1040,3 +1040,13 @@ body.selecting .card .thumb::before, body.selecting .pcard .thumb::before { opac
 .ex-tag.editing .btn { flex: none; }
 .ex-content.in-left { animation: inLeft .3s var(--ease) backwards; }
 .ex-content.in-right { animation: inRight .3s var(--ease) backwards; }
+/* 사진 줄: 출연자 이름은 사진 아래쪽 위에 겹쳐서 (잘리지 않게) */
+.photo-strip .tile { position: relative; }
+.photo-strip .tile-cap { display: none; }
+.photo-strip .tile-cap.has { display: block; position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 8px 6px; color: #fff; font-size: 11.5px;
+  background: linear-gradient(transparent, rgba(0,0,0,.55)); border-radius: 0 0 10px 10px; pointer-events: none; }
+.photo-strip .tile-img { border-radius: 10px; }
+.wall .tile-cap.has, .photo-strip .tile-cap.has { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3; word-break: keep-all; overflow-wrap: anywhere; }
+.saved-filters .chip.saved.is-default { border-color: var(--accent); color: var(--accent); }
+.saved-filters .sf-star { margin-right: 4px; }
+.saved-filters .sf-hint { flex-basis: 100%; margin: 2px 0 0; font-size: 12px; }

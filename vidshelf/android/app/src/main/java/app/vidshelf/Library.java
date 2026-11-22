@@ -565,7 +565,8 @@ public class Library implements HttpServer.Handler {
         return out;
     }
 
-    public synchronized boolean lanEnabled() { return settings().optBoolean("lan", false); }
+    /** 다른 기기 접속 기능은 없앰 (이 폰 안에서만 열림) */
+    public synchronized boolean lanEnabled() { return false; }
 
     public synchronized void setLan(boolean on) {
         try { settings().put("lan", on); } catch (JSONException ignored) {}
@@ -1595,7 +1596,6 @@ public class Library implements HttpServer.Handler {
     private JSONObject serverJson() throws JSONException {
         boolean lan = lanEnabled() && passwordSet();
         JSONArray addrs = new JSONArray();
-        if (lan) for (String ip : ServerService.lanAddresses()) addrs.put("http://" + ip + ":" + ServerService.port);
         return new JSONObject().put("secure_folder", ServerService.userId() != 0).put("port", ServerService.port)
                 .put("lan", lan).put("lan_addresses", addrs);
     }
@@ -2075,13 +2075,6 @@ public class Library implements HttpServer.Handler {
                 }
                 if (b.has("password")) {
                     setPassword(b.optString("password"));
-                    if (!passwordSet() && lanEnabled()) { setLan(false); restartServerSoon(); }
-                }
-                if (b.has("lan")) {
-                    boolean on = b.optBoolean("lan");
-                    if (on && !passwordSet()) { res.error(400, "먼저 비밀번호를 정해야 다른 기기 접속을 켤 수 있습니다"); return; }
-                    setLan(on);
-                    restartServerSoon();
                 }
             }
             res.json(200, settingsJson().toString());
@@ -2121,17 +2114,30 @@ public class Library implements HttpServer.Handler {
             synchronized (this) {
                 list = store.optJSONArray("saved_filters");
                 if (list == null) { list = new JSONArray(); store.put("saved_filters", list); }
-                if (m.equals("POST")) {
+                if (m.equals("POST") && parts.length == 3 && parts[2].equals("default")) {   // 기본 필터 지정/해제 (하나만)
+                    long id = parseLong(parts[1], -1);
+                    boolean on = body(r).optBoolean("on", true);
+                    for (int i = 0; i < list.length(); i++) {
+                        JSONObject o = list.optJSONObject(i);
+                        if (o == null) continue;
+                        if (on && o.optLong("id") == id) o.put("default", true); else o.remove("default");
+                    }
+                    save();
+                } else if (m.equals("POST")) {
                     JSONObject b = body(r);
                     String name = b.optString("name", "").trim();
                     if (name.isEmpty()) { res.error(400, "이름을 입력하세요"); return; }
                     if (name.length() > 40) name = name.substring(0, 40);
                     JSONArray out = new JSONArray();
-                    for (int i = 0; i < list.length(); i++) {   // 같은 이름은 덮어씀
+                    boolean wasDefault = false;
+                    for (int i = 0; i < list.length(); i++) {   // 같은 이름은 덮어씀 (기본 필터 표시는 유지)
                         JSONObject o = list.optJSONObject(i);
-                        if (o != null && !o.optString("name").equals(name)) out.put(o);
+                        if (o == null) continue;
+                        if (!o.optString("name").equals(name)) out.put(o); else wasDefault = o.optBoolean("default", false);
                     }
-                    out.put(new JSONObject().put("id", System.currentTimeMillis()).put("name", name)
+                    JSONObject nf = new JSONObject();
+                    if (wasDefault) nf.put("default", true);
+                    out.put(nf.put("id", System.currentTimeMillis()).put("name", name)
                             .put("type", b.optString("type", "all")).put("params", b.optString("params", "")));
                     store.put("saved_filters", out);
                     list = out;
