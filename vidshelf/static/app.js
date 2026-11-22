@@ -109,6 +109,15 @@ function applyTheme() {
 function setThemePref(p) { try { localStorage.setItem("vs-theme", p); } catch (e) {} applyTheme(); }
 window.onSystemTheme = () => applyTheme();
 
+// 영상을 열 때 그 화면의 영상 순서를 기억 (영상 화면의 이전·다음 버튼용)
+document.addEventListener("click", (e) => {
+  const a = e.target.closest && e.target.closest('a[href^="#/v/"]');
+  if (!a || !$app.contains(a)) return;
+  const ids = [];
+  $app.querySelectorAll('a[href^="#/v/"]').forEach((x) => { const id = (x.getAttribute("href").match(/^#\/v\/(\d+)/) || [])[1]; if (id && !ids.includes(id)) ids.push(id); });
+  try { sessionStorage.setItem("vs_queue", JSON.stringify(ids)); } catch (er) {}
+}, true);
+
 // 하단 ‘미디어’ 버튼을 직접 누르면 맨 위부터
 document.addEventListener("click", (e) => {
   const a = e.target.closest && e.target.closest('.tabs a[data-tab="media"]');
@@ -350,18 +359,35 @@ function pageIn() {
 }
 window.addEventListener("hashchange", () => requestAnimationFrame(pageIn));
 
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+function endRestore() {
+  clearTimeout(window.__restoreGuard);
+  if (!$app.classList.contains("restoring")) return;
+  $app.style.minHeight = "";
+  $app.classList.remove("restoring");
+}
 /** 화면별 스크롤 위치 기억 (영상을 보고 뒤로 오면 보던 곳에서 이어서) */
 const scrollMemory = {};
 let lastHash = location.hash;
 async function route() {
   if (lastHash && /^#\/(media|photos)?(\?|$)/.test(lastHash)) scrollMemory[lastHash] = { y: window.scrollY, pages: window.__mediaPages || 1, at: Date.now() };
   lastHash = location.hash;
-  window.__mediaSwipe = null;
+  window.__mediaSwipe = null; window.__mediaSwipeTarget = null;
   const { path, params } = parseHash();
   stopPlayer();
   if (pageCleanup) { try { pageCleanup(); } catch (e) {} pageCleanup = null; }
   document.body.classList.remove("shorts-mode", "nav-hidden");
-  window.scrollTo(0, 0);
+  const mem = scrollMemory[location.hash];
+  if (mem && mem.y > 0) {   // 돌아온 화면: 맨 위로 갔다가 내려오지 않도록, 가린 채로 그 위치에 먼저 가 있음
+    $app.classList.add("restoring");
+    $app.style.minHeight = `${mem.y + window.innerHeight}px`;
+    window.scrollTo({ top: mem.y, behavior: "instant" });
+    clearTimeout(window.__restoreGuard);
+    window.__restoreGuard = setTimeout(endRestore, 4000);   // 혹시 못 불러와도 화면이 계속 가려지지 않게
+  } else {
+    endRestore();
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
   try {
     let m;
     if (path === "/home" || (path === "/" && !location.hash)) return await renderHome();
@@ -535,7 +561,7 @@ function finishTabSwipe() {
   setTimeout(() => { $app.style.transition = ""; }, 380);
 }
 (function tabSwipe() {
-  let sx = 0, sy = 0, t0 = 0, mode = null, from = null, dx = 0;
+  let sx = 0, sy = 0, t0 = 0, mode = null, from = null, dx = 0, moving = null;
   const W = () => window.innerWidth;
   const blocked = (tgt) => {
     if (tgt.closest("input, textarea, select, .sheet, .viewer, .modal, .seekbar")) return true;
@@ -562,15 +588,24 @@ function finishTabSwipe() {
     }
     e.preventDefault();
     const i = TAB_ORDER.indexOf(from);
-    const edge = (x > 0 && i === 0) || (x < 0 && i === TAB_ORDER.length - 1);
+    const inner = window.__mediaSwipeTarget ? window.__mediaSwipeTarget(x < 0 ? 1 : -1) : null;   // 미디어 탭: 전체·동영상·사진 사이면 목록만 움직임
+    if ((inner || $app) !== moving) {
+      if (moving) { moving.style.transform = ""; moving.style.opacity = ""; }
+      $app.style.transform = ""; $app.style.opacity = "";
+      moving = inner || $app;
+      moving.style.transition = "none";
+    }
+    const edge = !inner && ((x > 0 && i === 0) || (x < 0 && i === TAB_ORDER.length - 1));
     dx = edge ? x * 0.25 : x;   // 처음·마지막 탭에서는 살짝만 끌림
-    $app.style.transform = `translateX(${dx}px)`;
-    $app.style.opacity = String(1 - Math.min(0.35, Math.abs(dx) / W() * 0.5));
+    moving.style.transform = `translateX(${dx}px)`;
+    moving.style.opacity = String(1 - Math.min(0.35, Math.abs(dx) / W() * 0.5));
   }, { passive: false });
   // 화면이 손가락 동작을 중간에 가져가면(세로 스크롤 등) 제자리로 돌려놓음
   document.addEventListener("touchcancel", () => {
     if (!from || mode !== "h") { from = null; return; }
     from = null;
+    if (moving && moving !== $app) { moving.style.transform = ""; moving.style.opacity = ""; }
+    moving = null;
     $app.style.transition = "transform .22s cubic-bezier(.3,.7,.3,1), opacity .22s ease";
     $app.style.transform = "";
     $app.style.opacity = "";
@@ -585,9 +620,16 @@ function finishTabSwipe() {
     const far = Math.abs(dx) > W() * 0.28 || (v > 0.5 && Math.abs(dx) > 40);
     from = null;
     $app.style.transition = "transform .22s cubic-bezier(.3,.7,.3,1), opacity .22s ease";
-    if (far && window.__mediaSwipe && window.__mediaSwipe(dir)) {   // 미디어 탭 안에서 전체 ↔ 동영상 ↔ 사진
-      $app.style.transform = ""; $app.style.opacity = "";
-      setTimeout(() => { $app.style.transition = ""; }, 240);
+    const mv = moving; moving = null;
+    if (mv && mv !== $app) {   // 미디어 탭 안에서 전체 ↔ 동영상 ↔ 사진: 목록만 밀려 나가고 새 목록이 들어옴
+      mv.style.transition = "transform .2s cubic-bezier(.3,.7,.3,1), opacity .2s ease";
+      if (far && window.__mediaSwipe) {
+        mv.style.transform = `translateX(${-dir * W() * 0.5}px)`; mv.style.opacity = "0";
+        setTimeout(() => window.__mediaSwipe(dir), 120);
+      } else {
+        mv.style.transform = ""; mv.style.opacity = "";
+        setTimeout(() => { mv.style.transition = ""; }, 220);
+      }
       return;
     }
     if (target && (Math.abs(dx) > W() * 0.28 || (v > 0.5 && Math.abs(dx) > 40))) {
@@ -631,11 +673,16 @@ async function renderMedia(params0, type0) {
   const nFilters = () => params.getAll("performer").length + params.getAll("tag").length + (params.get("q") ? 1 : 0) + (params.get("fav") === "1" ? 1 : 0) + (params.get("unwatched") === "1" ? 1 : 0);
   const urlFor = () => { const p = new URLSearchParams(params); if (type !== "all") p.set("type", type); return "#/media" + (p.toString() ? "?" + p : ""); };
 
+  window.__mediaSwipeTarget = (dir) => {   // 옆 종류가 있으면 지금 목록(움직일 부분)을 돌려줌
+    if (document.body.classList.contains("selecting")) return null;
+    const i = TYPES.indexOf(type) + dir;
+    try { return i >= 0 && i < TYPES.length ? content.firstElementChild : null; } catch (e) { return null; }
+  };
   window.__mediaSwipe = (dir) => {   // 좌우로 밀기: 전체 ↔ 동영상 ↔ 사진 (끝에서는 옆 탭으로)
     if (document.body.classList.contains("selecting")) return true;
     const i = TYPES.indexOf(type) + dir;
     if (i < 0 || i >= TYPES.length) return false;
-    window.scrollTo({ top: 0 });
+    window.scrollTo({ top: 0, behavior: "instant" });
     update({ t: TYPES[i], anim: dir > 0 ? "left" : "right" });
     return true;
   };
@@ -755,7 +802,7 @@ async function renderMedia(params0, type0) {
       const shown = (page - 1) * d.per + d.items.length;
       window.__mediaPages = page;
       if (restoring && page < restoring.pages && shown < d.total) { page++; return load(); }   // 기억한 만큼 미리 불러옴
-      if (restoring) { const y = restoring.y; restoring = null; requestAnimationFrame(() => window.scrollTo({ top: y, behavior: "instant" })); }
+      if (restoring) { const y = restoring.y; restoring = null; window.scrollTo({ top: y, behavior: "instant" }); requestAnimationFrame(() => { window.scrollTo({ top: y, behavior: "instant" }); endRestore(); }); }
       if (shown < d.total) autoMore(more, () => { page++; load(); }); else more.replaceChildren();
     }
     await load();
@@ -1570,11 +1617,21 @@ async function renderVideo(id, params) {
   const track = h("div", { class: "vp-track" }, h("div", { class: "vp-rail" }, fill));
   const fsBtn = h("button", { class: "vp-btn", "aria-label": "전체 화면" }, svgIco('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'));
   const remainEl = h("span", { class: "vp-time" }, "");
-  const thinFill = h("div", { class: "vp-thin-fill" });
-  const ui = h("div", { class: "vp-ui" }, fsBtn, centerBtn,
-    h("div", { class: "vp-bottom" }, track, h("div", { class: "vp-times" }, timeEl, remainEl)));
-  const thin = h("div", { class: "vp-thin", "aria-hidden": "true" }, thinFill);   // 조작부가 숨어 있을 때 보이는 얇은 진행 막대
-  const playerBox = h("div", { class: "player vp" }, video, thin, ui);
+  // 이전·다음 영상: 영상을 연 목록의 순서대로
+  let queue = [];
+  try { queue = JSON.parse(sessionStorage.getItem("vs_queue") || "[]"); } catch (e) {}
+  const qi = queue.indexOf(String(v.id));
+  const prevId = qi > 0 ? queue[qi - 1] : null, nextId = qi >= 0 && qi < queue.length - 1 ? queue[qi + 1] : null;
+  const goVideo = (id) => { if (id) location.replace(`#/v/${id}`); };   // 뒤로 가기는 목록으로 바로 돌아가도록 기록을 바꿈
+  const prevBtn = h("button", { class: "vp-skip", "aria-label": "이전 영상", disabled: !prevId, onclick: (e) => { e.stopPropagation(); goVideo(prevId); } },
+    svgIco('<path d="M6 5v14" stroke-width="2.4"/><path d="M19 5.5L8.5 12 19 18.5z" fill="currentColor" stroke="none"/>'));
+  const nextBtn = h("button", { class: "vp-skip", "aria-label": "다음 영상", disabled: !nextId, onclick: (e) => { e.stopPropagation(); goVideo(nextId); } },
+    svgIco('<path d="M18 5v14" stroke-width="2.4"/><path d="M5 5.5L15.5 12 5 18.5z" fill="currentColor" stroke="none"/>'));
+  const ui = h("div", { class: "vp-ui" }, fsBtn,
+    h("div", { class: "vp-mid" }, prevBtn, centerBtn, nextBtn),
+    h("div", { class: "vp-times" }, timeEl, remainEl));
+  // 재생 막대는 항상 영상 바닥에 있고 바로 끌어서 옮길 수 있음
+  const playerBox = h("div", { class: "player vp" }, video, ui, track);
   const dur = () => v.duration || (isFinite(video.duration) ? video.duration : 0);
   const drawPlay = () => {
     const d = video.paused ? PLAY : PAUSE;
@@ -1603,7 +1660,7 @@ async function renderVideo(id, params) {
     if (scrub.isDragging()) return;
     const d = dur(), t = currentTime();
     const pct = d ? `${Math.min(100, (t / d) * 100)}%` : "0";
-    fill.style.width = pct; thinFill.style.width = pct;
+    fill.style.width = pct;
     timeEl.textContent = fmtDur(t);
     remainEl.textContent = d ? "-" + fmtDur(Math.max(0, d - t)) : "";
   });
