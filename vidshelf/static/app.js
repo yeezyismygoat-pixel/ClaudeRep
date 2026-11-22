@@ -136,18 +136,26 @@ applyTheme();
 
 /** 막대를 끌어서 재생 위치를 옮기고, 끄는 동안 그 위치의 장면을 미리 보여 줌.
  *  미리보기는 같은 영상을 보이지 않게 하나 더 열어 그 위치로 옮긴 뒤 그림으로 그림 (기기·MEGA·iCloud 모두). */
-function attachScrub(track, fill, { duration, onSeek, previewSrc, onDrag }) {
+function attachScrub(track, fill, { duration, onSeek, previewSrc, onDrag, maxBox }) {
   track.classList.add("seekbar");
   const canvas = h("canvas", { width: 176, height: 99 });
+  let bubbleW = 176;
   const label = h("span", { class: "scrub-time" });
   const bubble = h("div", { class: "scrub-bubble", "aria-hidden": "true" }, canvas, label);
   track.append(bubble);
   let pv = null, want = null, busy = false, dragging = false, lastT = 0;
   const draw = () => {
     if (!pv || !pv.videoWidth) return;
-    const w = 176, hgt = Math.round(Math.min(220, (w * pv.videoHeight) / pv.videoWidth));
-    if (canvas.height !== hgt) canvas.height = hgt;
-    try { canvas.getContext("2d").drawImage(pv, 0, 0, w, hgt); bubble.classList.add("has-img"); } catch (e) {}
+    // 영상과 같은 화면비로, 정해진 상자 안에 들어가는 크기
+    const box = (maxBox && maxBox()) || { w: 176, h: 220 };
+    const ratio = pv.videoWidth / pv.videoHeight;
+    let w = Math.min(box.w, box.h * ratio), hgt = w / ratio;
+    w = Math.round(w); hgt = Math.round(hgt);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(hgt * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(hgt * dpr); }
+    canvas.style.width = w + "px"; canvas.style.height = hgt + "px";
+    bubbleW = w;
+    try { canvas.getContext("2d").drawImage(pv, 0, 0, canvas.width, canvas.height); bubble.classList.add("has-img"); } catch (e) {}
   };
   const seekPreview = (t) => {
     const src = previewSrc && previewSrc();
@@ -174,7 +182,8 @@ function attachScrub(track, fill, { duration, onSeek, previewSrc, onDrag }) {
     lastT = t;
     fill.style.width = `${f * 100}%`;
     label.textContent = fmtDur(t);
-    bubble.style.left = `${Math.min(w - 92, Math.max(92, x))}px`;
+    const half = bubbleW / 2 + 4;
+    bubble.style.left = `${Math.min(w - half, Math.max(half, x))}px`;
     seekPreview(t);
     if (onDrag) onDrag(t);
   };
@@ -1696,7 +1705,6 @@ async function renderVideo(id, params) {
   } });
   const drawAutoNext = () => { autoNextBtn.textContent = autoNextOn() ? "↻ 연속 재생 켬" : "연속 재생 끔"; autoNextBtn.classList.toggle("on", autoNextOn()); };
   drawAutoNext();
-  const nativeBtn = h("button", { class: "btn sm", hidden: !hasNativePlayer(), onclick: () => { video.pause(); playNative(v, currentTime()); } }, "▶ 앱 플레이어로 재생");
   window.__nativeClosed = (id, pos) => { if (String(id) === String(v.id) && pos > 0) { try { video.currentTime = pos; } catch (e) {} } };
   const goNative = (why) => {
     if (!hasNativePlayer()) { toast(why); return; }
@@ -1842,6 +1850,11 @@ async function renderVideo(id, params) {
     duration: dur,
     onSeek: (t) => { seekTo(t, !video.paused); showUi(); },
     previewSrc: () => (mode === "direct" ? `/media/${v.id}` : null),
+    maxBox: () => {   // 가운데 재생/일시정지 버튼을 가리지 않는 높이까지만
+      const H = playerBox.clientHeight, mid = playerBox.querySelector(".vp-mid");
+      const midBottom = mid ? mid.getBoundingClientRect().bottom - playerBox.getBoundingClientRect().top : H / 2 + 27;
+      return { w: 176, h: Math.max(34, H - 26 - 10 - midBottom - 6) };
+    },
     onDrag: (t) => { showUi(true); timeEl.textContent = fmtDur(t); remainEl.textContent = "-" + fmtDur(Math.max(0, dur() - t)); },
   });
   drawPlay();
@@ -1897,7 +1910,7 @@ async function renderVideo(id, params) {
         h("div", { class: "chips" }, ...tags,
           h("button", { class: "chip dashed", onclick: () => setEditing(true) }, "✎ 수정"))),
       h("div", { class: "actions", style: "margin-top:12px" }, dlBtn(),
-        h("button", { class: "btn sm", onclick: () => addMarker(null) }, "🔖 지금 위치 북마크"),
+        hasNativePlayer() ? h("button", { class: "btn sm", onclick: () => { video.pause(); playNative(v, currentTime()); } }, "▶ 앱 플레이어로 재생") : null,
         h("span", { class: "meta" }, (v.source !== "local" ? SOURCE_LABEL[v.source] + " · " : "") + fmtSize(v.size))),
       v.details ? h("p", { class: "vmemo" }, v.details) : null,
       v.markers.length ? h("div", { class: "vmarks" }, v.markers.map((m) =>
@@ -2007,7 +2020,8 @@ async function renderVideo(id, params) {
   $app.replaceChildren(h("div", { class: "watch1" },
     playerBox,
     seekRow,
-    h("div", { class: "player-note" }, canTranscode ? modeNote : null, canTranscode ? modeBtn : null, resume, nativeBtn, autoNextBtn),
+    h("div", { class: "player-note" }, canTranscode ? modeNote : null, canTranscode ? modeBtn : null, resume,
+      h("button", { class: "btn sm", onclick: () => addMarker(null) }, "🔖 지금 위치 북마크"), autoNextBtn),
     infoBox));
   drawInfo();
 }
