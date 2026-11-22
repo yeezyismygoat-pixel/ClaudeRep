@@ -1050,3 +1050,10 @@ body.selecting .card .thumb::before, body.selecting .pcard .thumb::before { opac
 .saved-filters .chip.saved.is-default { border-color: var(--accent); color: var(--accent); }
 .saved-filters .sf-star { margin-right: 4px; }
 .saved-filters .sf-hint { flex-basis: 100%; margin: 2px 0 0; font-size: 12px; }
+
+/* 알림 팝업: 화면 폭을 다 쓸 수 있게(필요할 때만 줄바꿈), 여러 줄이어도 글자가 상자 밖으로 안 나가게 */
+.toast { left: 0 !important; right: 0 !important; margin: 0 auto; width: max-content; max-width: calc(100vw - 32px); box-sizing: border-box;
+  transform: none !important; border-radius: 22px !important; padding: 11px 18px; text-align: center; line-height: 1.45;
+  word-break: keep-all; overflow-wrap: anywhere; }
+.toast:not([hidden]) { animation: toastUp .3s var(--ease) both; }
+@keyframes toastUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
