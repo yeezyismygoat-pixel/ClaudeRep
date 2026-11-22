@@ -25,8 +25,13 @@ esac
 echo "==> 패키지 설치 (ffmpeg, proot, ca-certificates, curl)"
 # 오래된 패키지가 남아 있으면 ffmpeg가 "CANNOT LINK EXECUTABLE" 오류로 실패하므로 전체 업그레이드
 export DEBIAN_FRONTEND=noninteractive
-yes | pkg upgrade -y -o Dpkg::Options::=--force-confold
-pkg install -y ffmpeg proot ca-certificates curl
+# (pkg 명령은 curl을 쓰므로 일부만 업그레이드된 상태에서 깨질 수 있어 apt를 직접 사용)
+DPKG_OPTS=(-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef)
+apt update
+dpkg --configure -a || true
+apt --fix-broken install -y "${DPKG_OPTS[@]}"
+apt full-upgrade -y "${DPKG_OPTS[@]}"
+apt install -y "${DPKG_OPTS[@]}" ffmpeg proot ca-certificates curl
 
 # 3) 휴대폰 저장소(/sdcard) 접근 권한 요청 — 팝업이 뜨면 '허용'
 if [ ! -d "$HOME/storage/shared" ]; then
