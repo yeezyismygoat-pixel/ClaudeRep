@@ -10,10 +10,11 @@
 </head>
 <body>
 <header class="topbar">
-  <a href="#/home" class="brand" aria-label="VidShelf"><span class="logo">▶</span><span class="bname">VidShelf</span></a>
+  <div id="jobbar" class="jobbar" hidden></div>
   <nav class="tabs" aria-label="메뉴">
     <a href="#/home" data-tab="home" aria-label="홈" title="홈"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 10.5L12 3.5l8.5 7"/><path d="M5.5 9v11h5v-6h3v6h5V9"/></svg></a>
     <a href="#/" data-tab="videos" aria-label="동영상" title="동영상"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5.5" width="14" height="13" rx="2"/><path d="M16.5 10.5l5-3v9l-5-3z"/></svg></a>
+    <a href="#/shorts" data-tab="shorts" aria-label="숏폼" title="숏폼 (2분 이하)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10.5 9.5l4 2.5-4 2.5z"/></svg></a>
     <a href="#/photos" data-tab="photos" id="tab-photos" aria-label="사진" title="사진" hidden><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="9" cy="9" r="1.8"/><path d="M21 15.5l-5-5L4.5 21"/></svg></a>
     <a href="#/comics" data-tab="comics" id="tab-comics" aria-label="만화" title="만화" hidden><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.5C10 5 7 4.5 3.5 5v13.5C7 18 10 18.5 12 20c2-1.5 5-2 8.5-1.5V5C17 4.5 14 5 12 6.5z"/><path d="M12 6.5V20"/></svg></a>
     <a href="#/tags" data-tab="tags" aria-label="태그" title="태그"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.4"/></svg></a>
@@ -21,7 +22,6 @@
     <a href="#/mega" data-tab="mega" id="tab-mega" aria-label="MEGA" title="MEGA" hidden><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.5 19H7.2a4.7 4.7 0 0 1-.8-9.3A6 6 0 0 1 18 9.6a4.7 4.7 0 0 1-.5 9.4z"/></svg></a>
     <a href="#/settings" data-tab="settings" aria-label="설정" title="설정"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></a>
   </nav>
-  <div id="jobbar" class="jobbar" hidden></div>
 </header>
 <main id="app"></main>
 <div id="toast" class="toast" hidden></div>

@@ -110,9 +110,12 @@ function refreshMissingThumbs() {
 
 // ---------------------------------------------------------------- router
 window.addEventListener("hashchange", route);
+let pageCleanup = null;   // 화면을 떠날 때 정리할 일 (숏폼 영상 멈추기 등)
 async function route() {
   const { path, params } = parseHash();
   stopPlayer();
+  if (pageCleanup) { try { pageCleanup(); } catch (e) {} pageCleanup = null; }
+  document.body.classList.remove("shorts-mode");
   window.scrollTo(0, 0);
   try {
     let m;
@@ -125,6 +128,7 @@ async function route() {
     if (path === "/settings") return await renderSettings();
     if (path === "/mega") return await renderMega(params);
     if (path === "/photos") return await renderPhotos(params);
+    if (path === "/shorts") return await renderShorts(params);
     if (path === "/duplicates") return await renderDuplicates();
     if (path === "/hidden") return await renderHidden();
     if (path === "/comics") return await renderComics(params);
@@ -579,7 +583,7 @@ async function renderVideo(id, params) {
   progressTimer = setInterval(() => { if (!video.paused) saveProgress(); }, 10000);
 
   const startAt = params.get("t") != null ? +params.get("t") : 0;
-  setMode(mode, startAt, params.get("t") != null);
+  setMode(mode, startAt, true);   // 영상을 누르고 들어오면 바로 재생
   const resume = v.resume_pos > 5 && !params.get("t")
     ? h("button", { class: "btn sm", onclick: (e) => { e.target.remove(); seekTo(v.resume_pos); } }, `▶ ${fmtDur(v.resume_pos)}부터 이어보기`)
     : null;
@@ -1112,6 +1116,93 @@ async function renderMega(params) {
     media.length ? h("div", { class: "grid" }, media) : null,
     others.length ? h("div", { class: "panel", style: "margin-top:14px" }, h("h3", {}, "기타 파일"), h("ul", { class: "pathlist" }, others)) : null,
     !folders.length && !media.length && !others.length ? h("div", { class: "empty" }, "이 폴더는 비어 있습니다.") : null));
+}
+
+// ---------------------------------------------------------------- 숏폼 (2분 이하 영상을 위아래로 넘겨 보기)
+const SHORT_MAX = 120;
+let shortsMuted = false;
+
+async function renderShorts(params) {
+  setTab("shorts");
+  document.body.classList.add("shorts-mode");
+  const seed = params.get("seed") || String(Date.now() % 100000);
+  const feed = h("div", { class: "shorts" });
+  $app.replaceChildren(feed);
+  const items = [];   // { v, el, video, bar }
+  let page = 1, total = Infinity, loading = false, active = -1;
+
+  function makeItem(v) {
+    const video = h("video", { playsinline: true, loop: true, preload: "none", poster: v.thumbs ? thumbUrl(v.id, 0, v.thumbs) : null });
+    video.muted = shortsMuted;
+    if (v.width && v.height && v.width > v.height) video.classList.add("wide");   // 가로 영상은 잘리지 않게
+    const bar = h("div", { class: "sbar" });
+    const icon = h("div", { class: "splay" }, "▶");
+    const muteBtn = h("button", { class: "sbtn", "aria-label": "소리" }, shortsMuted ? "🔇" : "🔊");
+    muteBtn.onclick = (e) => {
+      e.stopPropagation();
+      shortsMuted = !shortsMuted;
+      items.forEach((it) => { it.video.muted = shortsMuted; it.mute.textContent = shortsMuted ? "🔇" : "🔊"; });
+    };
+    let counted = false;
+    video.addEventListener("play", () => {
+      icon.classList.remove("show");
+      if (!counted) { counted = true; api(`videos/${v.id}/play`, { method: "POST" }).catch(() => {}); }
+    });
+    video.addEventListener("timeupdate", () => { if (video.duration) bar.style.width = `${(video.currentTime / video.duration) * 100}%`; });
+    const el = h("section", { class: "short" }, video, icon,
+      h("div", { class: "sinfo" },
+        h("a", { class: "stitle", href: `#/v/${v.id}` }, v.title),
+        v.performers && v.performers.length ? h("div", { class: "sperf" }, v.performers.join(", ")) : null),
+      h("div", { class: "sside" }, muteBtn,
+        h("a", { class: "sbtn", href: `#/v/${v.id}`, "aria-label": "자세히" }, "ⓘ")),
+      h("div", { class: "sbar-wrap" }, bar));
+    // 누르면 재생/일시정지
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("a, button")) return;
+      if (video.paused) video.play().catch(() => {}); else { video.pause(); icon.classList.add("show"); }
+    });
+    return { v, el, video, bar, mute: muteBtn };
+  }
+
+  const setSrc = (it, on) => {
+    if (on && !it.video.getAttribute("src")) { it.video.src = `/media/${it.v.id}`; it.video.preload = "auto"; }
+    if (!on && it.video.getAttribute("src")) { it.video.pause(); it.video.removeAttribute("src"); it.video.load(); }
+  };
+  function activate(i) {
+    if (i === active) return;
+    active = i;
+    items.forEach((it, k) => {
+      setSrc(it, Math.abs(k - i) <= 1);   // 지금 영상과 앞뒤 하나만 받아 둠
+      if (k !== i) it.video.pause();
+    });
+    const it = items[i];
+    it.video.play().catch(() => {   // 소리가 있는 자동 재생이 막히면 소리 없이
+      shortsMuted = true; items.forEach((x) => { x.video.muted = true; x.mute.textContent = "🔇"; });
+      it.video.play().catch(() => {});
+    });
+    if (i >= items.length - 4) load();
+  }
+  const watch = new IntersectionObserver((ents) => ents.forEach((e) => {
+    if (e.isIntersecting && e.intersectionRatio > 0.6) activate(items.findIndex((x) => x.el === e.target));
+  }), { root: feed, threshold: [0.6] });
+
+  async function load() {
+    if (loading || items.length >= total) return;
+    loading = true;
+    try {
+      const d = await api(`videos?max_dur=${SHORT_MAX}&sort=random&seed=${seed}&per=20&page=${page}`);
+      total = d.total; page++;
+      for (const v of d.items) {
+        const it = makeItem(v);
+        items.push(it); feed.append(it.el); watch.observe(it.el);
+      }
+      if (!items.length) feed.replaceWith(h("div", { class: "empty" },
+        h("p", {}, "2분 이하 영상이 없습니다."),
+        h("p", { class: "meta" }, "MEGA 영상은 한 번 재생하거나 미리보기를 만든 뒤에 길이를 알 수 있어서, 그 전에는 여기에 나오지 않습니다.")));
+    } finally { loading = false; }
+  }
+  pageCleanup = () => { watch.disconnect(); items.forEach((it) => setSrc(it, false)); };
+  await load();
 }
 
 // ---------------------------------------------------------------- 홈

@@ -1276,12 +1276,17 @@ public class Library implements HttpServer.Handler {
         Set<Long> tagFilter = longs(r.params("tag")), perfFilter = longs(r.params("performer"));
         boolean fav = "1".equals(r.param("fav")), unwatched = "1".equals(r.param("unwatched"));
         int minRating = parseInt(r.param("min_rating"), 0);
+        double maxDur = parseInt(r.param("max_dur"), 0);   // 숏폼: 이 길이(초) 이하만
         if ("1".equals(r.param("missing"))) return new JSONObject().put("total", 0).put("page", 1).put("per", 40).put("items", new JSONArray());
         for (Video v : visible()) {
             JSONObject m = meta(v);
             if (fav && !m.optBoolean("favorite", false)) continue;
             if (unwatched && m.optInt("play_count", 0) > 0) continue;
             if (m.optInt("rating", 0) < minRating) continue;
+            if (maxDur > 0) {
+                double d = v.node != null ? m.optDouble("duration", 0) : v.duration;
+                if (d <= 0 || d > maxDur) continue;
+            }
             if (!containsAll(m.optJSONArray("tags"), tagFilter) || !containsAll(m.optJSONArray("performers"), perfFilter)) continue;
             if (words.length > 0) {
                 StringBuilder hay = new StringBuilder(title(v)).append(' ').append(v.relPath).append(v.name).append(' ').append(m.optString("details"));
