@@ -922,3 +922,12 @@ body:not(.selecting) .media-bar-row { animation: fadeIn .25s ease; }
 /* 돌아온 화면: 위치를 맞추는 동안만 가렸다가 부드럽게 보임 */
 #app { transition: opacity .18s ease; }
 #app.restoring { opacity: 0; transition: none; }
+
+/* 목록 보기: 이어지는 사진은 이미지 벽 한 덩어리로 */
+.ytfeed .photo-run { grid-column: 1 / -1; margin: 2px 0 6px; }
+/* 꾹 눌러 미리보기 */
+.hold-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .25s ease; pointer-events: none; z-index: 1; }
+.previewing .hold-preview { opacity: 1; }
+.yt-thumb { position: relative; }
+.yt, .yt * { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+@media (max-width: 560px) { .ytfeed .photo-run { padding: 0 4px; } }

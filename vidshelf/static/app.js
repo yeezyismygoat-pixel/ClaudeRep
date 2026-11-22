@@ -200,6 +200,51 @@ function attachScrub(track, fill, { duration, onSeek, previewSrc, onDrag }) {
   return { isDragging: () => dragging };
 }
 
+/** 영상 칸을 꾹 누르면 그 자리에서 소리 없이 미리보기 재생 (손을 떼도 계속, 화면에서 벗어나면 멈춤) */
+let holdPreviewCur = null;
+const holdPreviewWatch = "IntersectionObserver" in window ? new IntersectionObserver((ents) => ents.forEach((e) => {
+  if (!e.isIntersecting && holdPreviewCur && holdPreviewCur.cell === e.target) stopHoldPreview();
+}), { threshold: 0 }) : null;
+function stopHoldPreview() {
+  const c = holdPreviewCur;
+  if (!c) return;
+  holdPreviewCur = null;
+  if (holdPreviewWatch) holdPreviewWatch.unobserve(c.cell);
+  c.cell.classList.remove("previewing");
+  c.video.pause(); c.video.removeAttribute("src"); c.video.load(); c.video.remove();
+}
+function holdPreview(cell, it) {
+  let timer = null, sx = 0, sy = 0, fired = false;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  const start = () => {
+    stopHoldPreview();
+    const thumb = cell.querySelector(".yt-thumb, .thumb, .tile-img") || cell;
+    const video = h("video", { class: "hold-preview", muted: true, playsinline: true, loop: true, preload: "auto" });
+    video.muted = true;
+    video.addEventListener("loadedmetadata", () => {   // 처음은 보통 밋밋해서 조금 들어간 곳부터
+      const d = video.duration;
+      if (isFinite(d) && d > 20) { try { video.currentTime = d * 0.15; } catch (e) {} }
+    }, { once: true });
+    video.addEventListener("playing", () => cell.classList.add("previewing"), { once: true });
+    video.src = `/media/${it.id}`;
+    thumb.append(video);
+    video.play().catch(() => {});
+    holdPreviewCur = { cell, video };
+    if (holdPreviewWatch) holdPreviewWatch.observe(cell);
+    try { if (window.VidShelfApp && VidShelfApp.haptic) VidShelfApp.haptic(); else if (navigator.vibrate) navigator.vibrate(18); } catch (e) {}
+  };
+  cell.addEventListener("touchstart", (e) => {
+    fired = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    timer = setTimeout(() => { timer = null; fired = true; start(); }, 420);
+  }, { passive: true });
+  cell.addEventListener("touchmove", (e) => { if (timer && Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 10) cancel(); }, { passive: true });
+  cell.addEventListener("touchend", (e) => { cancel(); if (fired) e.preventDefault(); });   // 꾹 누른 뒤 손을 떼도 영상이 열리지 않게
+  cell.addEventListener("touchcancel", cancel);
+  cell.addEventListener("contextmenu", (e) => e.preventDefault());
+  cell.addEventListener("click", (e) => { if (fired) { e.preventDefault(); e.stopImmediatePropagation(); fired = false; } }, true);
+  return cell;
+}
+
 /** 웹 화면이 재생하지 못하는 형식(MKV·HEVC 등)을 앱 내장 플레이어로. 앱이 아니면 false */
 const hasNativePlayer = () => !!(window.VidShelfApp && VidShelfApp.playNative);
 function playNative(v, pos) {
@@ -373,6 +418,7 @@ async function route() {
   if (lastHash && /^#\/(media|photos)?(\?|$)/.test(lastHash)) scrollMemory[lastHash] = { y: window.scrollY, pages: window.__mediaPages || 1, at: Date.now() };
   lastHash = location.hash;
   window.__mediaSwipe = null; window.__mediaSwipeTarget = null;
+  stopHoldPreview();
   const { path, params } = parseHash();
   stopPlayer();
   if (pageCleanup) { try { pageCleanup(); } catch (e) {} pageCleanup = null; }
@@ -715,6 +761,7 @@ async function renderMedia(params0, type0) {
 
   function drawHeader() {
     const mode = viewMode("media") === "wall" ? "wall" : "feed";
+    viewBtn.hidden = type === "photo";   // 사진은 항상 이미지 벽
     viewBtn.setAttribute("aria-label", mode === "wall" ? "목록으로 보기" : "이미지 벽으로 보기");
     viewBtn.title = viewBtn.getAttribute("aria-label");
     viewBtn.innerHTML = mode === "wall"
@@ -765,7 +812,7 @@ async function renderMedia(params0, type0) {
   let token = 0;
   async function drawContent(anim) {
     const my = ++token;
-    const mode = viewMode("media") === "wall" ? "wall" : "feed", sort = sortOf(), order = orderOf();
+    const mode = type === "photo" || viewMode("media") === "wall" ? "wall" : "feed", sort = sortOf(), order = orderOf();
     const sortLabel = (MEDIA_SORTS.concat(VIDEO_SORTS).find(([v]) => v === sort) || [0, "추가한 날짜"])[1];
     const grid = h("div", { class: mode === "wall" ? "wall" : "ytfeed" });
     const more = h("div", { class: "more" });
@@ -794,9 +841,19 @@ async function renderMedia(params0, type0) {
         if (it.kind === "photo") {
           const i = photos.length;
           photos.push(it);
-          grid.append(selectable(mode === "wall" ? photoCell(it, "wall", () => openViewer(photos, i)) : ytCell(it, () => openViewer(photos, i)), it));
+          const cell = photoCell(it, "wall", () => openViewer(photos, i));
+          if (mode === "wall") grid.append(selectable(cell, it));
+          else {   // 목록 보기: 이어지는 사진들은 이미지 벽처럼 줄지어 보여 줌
+            let run = grid.lastElementChild;
+            if (!run || !run.classList.contains("photo-run")) { run = h("div", { class: "wall photo-run" }); grid.append(run); }
+            const fb = parseFloat(cell.style.flexBasis);   // 목록 사이에서는 줄 높이를 낮춰 한 줄에 여러 장
+            if (fb) cell.style.flexBasis = `${Math.round(fb * 0.5)}px`;
+            run.append(cell);
+          }
+        } else if (mode === "wall") {
+          grid.append(selectable(videoTile(it), it));
         } else {
-          grid.append(selectable(mode === "wall" ? videoTile(it) : ytCell(it, null), it));
+          grid.append(holdPreview(ytCell(it, null), it));   // 목록 보기: 꾹 누르면 미리보기 재생 (선택 기능 없음)
         }
       }
       const shown = (page - 1) * d.per + d.items.length;
@@ -2582,7 +2639,7 @@ async function renderLibraryHub() {
   const tile = (href, icon, title, n) => h("a", { class: "lib-tile", href }, libIcon(icon), h("div", {}, h("b", {}, title), h("br"), n));
   const row = (href, icon, title, sub) => h("a", { href }, setIcon(icon), h("div", { class: "set-text" }, h("div", { class: "set-title" }, title), sub ? h("div", { class: "meta" }, sub) : null), h("span", { class: "chev", "aria-hidden": "true" }, "›"));
   $app.replaceChildren(h("div", { class: "libhub" },
-    h("h2", { class: "set-group-title" }, "모아 보기"),
+    h("h2", { class: "set-group-title" }, "분류"),
     h("div", { class: "lib-grid three" },
       tile("#/performers", "people", "출연자", peopleN),
       tile("#/tags", "tags", "태그", tagN),
