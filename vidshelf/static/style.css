@@ -1187,3 +1187,6 @@ body.shorts-mode .topbar .tabs a.on { color: #fff !important; }
 body.tinted #tintbg { opacity: 1; }
 body.tinted { background: transparent !important; }   /* 바탕색은 html 이 칠하고, 그 위에 물든 빛이 깔림 */
 body.tinted .panel, body.tinted .vcard { background: color-mix(in srgb, var(--panel) 94%, rgb(var(--tint))) ; }
+.err-view { display: grid; gap: 6px; justify-items: center; padding-top: 18vh; }
+.err-view .err-title { margin: 0; font-size: 18px; font-weight: 700; color: var(--text); }
+.err-view .meta { margin: 0 0 10px; }

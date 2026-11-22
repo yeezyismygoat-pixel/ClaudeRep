@@ -209,6 +209,18 @@ function attachScrub(track, fill, { duration, onSeek, previewSrc, onDrag, maxBox
   return { isDragging: () => dragging };
 }
 
+/** 화면을 못 불러왔을 때: 무슨 일인지 + 다시 시도 / 뒤로 */
+function errorView(e, retry) {
+  const msg = String((e && e.message) || e || "");
+  const nf = /not found|404|찾을 수 없/.test(msg);
+  return h("div", { class: "empty err-view" },
+    h("p", { class: "err-title" }, nf ? "찾을 수 없습니다" : "불러오지 못했습니다"),
+    h("p", { class: "meta" }, nf ? "지워졌거나 다른 곳으로 옮겨졌을 수 있습니다." : msg || "잠시 후 다시 시도해 주세요."),
+    h("div", { class: "row", style: "justify-content:center" },
+      h("button", { class: "btn primary", onclick: () => (retry ? retry() : route()) }, "다시 시도"),
+      history.length > 1 ? h("button", { class: "btn", onclick: () => history.back() }, "뒤로") : null));
+}
+
 /** 그림 색 따라가기: 썸네일의 대표 색을 뽑아 그 화면의 바탕 빛·강조색으로 */
 async function tintFromImage(src) {
   try {
@@ -624,7 +636,7 @@ async function route() {
     if (path === "/hidden") return await renderHidden();
     location.hash = "#/";
   } catch (e) {
-    if (e.message !== "login required") $app.replaceChildren(h("div", { class: "empty" }, "오류: " + e.message));
+    if (e.message !== "login required") $app.replaceChildren(errorView(e));
   } finally {
     finishTabSwipe();   // 밀어서 넘어온 경우 새 화면이 옆에서 들어옴
   }
@@ -1200,7 +1212,12 @@ async function renderMedia(params0, type0) {
     async function load() {
       base.set("page", page);
       let d;
-      try { d = await api("media?" + base.toString()); } catch (e) { if (my === token) more.replaceChildren(h("span", { class: "warn" }, e.message)); return; }
+      try { d = await api("media?" + base.toString()); } catch (e) {
+        if (my !== token) return;
+        if (page === 1) content.replaceChildren(errorView(e, () => drawContent("fade")));   // 회색 틀만 남지 않게
+        else more.replaceChildren(h("button", { class: "btn", onclick: () => load() }, "다시 불러오기"));
+        return;
+      }
       if (my !== token) return;   // 그 사이 다른 전환이 시작됨
       if (page === 1) content.replaceChildren(box);
       countLine.textContent = `${d.total.toLocaleString()}개 · ${sortLabel}${sort === "random" ? "" : order === "asc" ? " ↑" : ""}`;
@@ -3423,7 +3440,8 @@ async function renderHome() {
     photos.fill(d.items.map((p, i) => photoCell(p, "grid", () => openViewer(d.items, i))));
   }));
   else photos.fill([]);
-  await Promise.all(jobs.map((j) => j.catch(() => {})));
+  const fills = [resume, recent, favs, people, photos];   // jobs 와 같은 순서
+  await Promise.all(jobs.map((j, k) => j.catch(() => { if (fills[k]) fills[k].fill([]); })));
   // 모두 비어 있으면 안내
   if (!$app.querySelector(".shelf")) $app.querySelector(".home").append(h("div", { class: "empty" },
     h("p", {}, "아직 보여 줄 것이 없습니다."), h("a", { class: "btn primary", href: "#/settings" }, "설정에서 폴더나 MEGA 링크 추가")));
@@ -3449,7 +3467,7 @@ function backupPanel() {
     file.value = "";
   });
   return h("div", { class: "panel" }, h("h3", {}, "백업 / 복원"),
-    h("p", { class: "meta" }, "태그·별점·즐겨찾기·사람 정보·북마크·메모·클라우드 링크를 파일 하나로 저장합니다. 앱을 지웠다 다시 설치할 때 이 파일로 되살릴 수 있습니다. (비밀번호와 e-hentai 로그인은 넣지 않습니다)"),
+    h("p", { class: "meta" }, "태그·별점·즐겨찾기·사람 정보·북마크·메모·클라우드 링크를 파일 하나로 저장합니다. 앱을 지웠다 다시 설치할 때 이 파일로 되살릴 수 있습니다. (비밀번호는 넣지 않습니다)"),
     h("p", { class: "warn" }, "백업 파일에는 MEGA 링크(열쇠 포함)가 들어 있으니 다른 사람에게 보내지 마세요."),
     h("div", { class: "row" },
       h("a", { class: "btn primary", href: "/api/backup", download: "vidshelf-backup.json" }, "백업 파일 저장 (Download 폴더)"),

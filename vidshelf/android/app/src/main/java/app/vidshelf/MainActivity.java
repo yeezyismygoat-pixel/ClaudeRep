@@ -280,7 +280,7 @@ public class MainActivity extends Activity {
     public void onBackPressed() {
         if (customView != null) { exitFullscreen(); return; }
         if (web != null && web.canGoBack()) { web.goBack(); return; }
-        moveTaskToBack(true);   // 앱만 내리고 서버는 계속 (다른 기기 접속용)
+        moveTaskToBack(true);   // 첫 화면에서 뒤로 가기: 앱을 닫지 않고 내려 두기 (다시 열 때 빠르게)
     }
 
     /** 파일 받기: 앱 서버에서 받아 휴대폰의 Download 폴더에 저장합니다. */
