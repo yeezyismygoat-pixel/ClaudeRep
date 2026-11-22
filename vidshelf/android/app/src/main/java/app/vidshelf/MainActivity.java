@@ -53,7 +53,7 @@ public class MainActivity extends Activity {
     private int loadedPort = -1;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable watcher = this::watchServer;
-    private static final int REQ_FILE = 7, REQ_FAV = 8;
+    private static final int REQ_FILE = 7, REQ_FAV = 8, REQ_PLAYER = 9;
     private static volatile MainActivity current;
 
     /** 기기 갤러리 즐겨찾기 바꾸기. ‘미디어 관리’ 권한이 있으면 바로, 없으면 안드로이드가 한 번 묻습니다. */
@@ -91,6 +91,14 @@ public class MainActivity extends Activity {
         super.onActivityResult(req, result, data);
         if (req == REQ_FAV) {   // 갤러리 쪽 결과를 다시 읽어 앱과 맞춤 (취소했으면 원래대로)
             new Thread(() -> Library.get(this).scan()).start();
+            return;
+        }
+        if (req == REQ_PLAYER) {   // 내장 플레이어를 닫으면 본 위치를 웹 화면에 알려 줌
+            if (data != null && web != null) {
+                long id = data.getLongExtra("id", 0);
+                double pos = data.getLongExtra("pos", 0) / 1000.0;
+                web.evaluateJavascript("window.onNativePlayerClosed && window.onNativePlayerClosed('" + id + "'," + pos + ")", null);
+            }
             return;
         }
         if (req != REQ_FILE || fileCallback == null) return;
@@ -318,6 +326,19 @@ public class MainActivity extends Activity {
 
         @android.webkit.JavascriptInterface
         public void setDark(boolean dark) { ui.post(() -> applyBars(dark)); }
+
+        /** 웹 화면에서 재생할 수 없는 영상을 앱 내장 플레이어(ExoPlayer)로 재생 */
+        @android.webkit.JavascriptInterface
+        public void playNative(String id, String title, double pos) {
+            ui.post(() -> {
+                String url = "http://127.0.0.1:" + ServerService.port + "/media/" + id;
+                android.content.Intent it = new android.content.Intent(MainActivity.this, PlayerActivity.class)
+                        .putExtra("url", url).putExtra("title", title)
+                        .putExtra("id", Long.parseLong(id)).putExtra("pos", (long) (pos * 1000))
+                        .putExtra("cookie", CookieManager.getInstance().getCookie(url));
+                startActivityForResult(it, REQ_PLAYER);
+            });
+        }
     }
 
     /** 상태 표시줄·내비게이션 막대 색과 아이콘 밝기를 테마에 맞춤. */

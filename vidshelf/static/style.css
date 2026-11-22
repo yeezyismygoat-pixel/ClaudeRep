@@ -869,3 +869,8 @@ body.selecting .yt .yt-thumb::before { opacity: 1; }
 .sel-bar.leaving { animation: fadeOut .2s ease both; }
 @keyframes popDown { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(16px) scale(.98); } }
 body:not(.selecting) .media-bar-row { animation: fadeIn .25s ease; }
+
+/* 숏폼: 재생할 수 없는 영상 안내 */
+.serr { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; color: #fff; background: rgba(0,0,0,.55); z-index: 3; }
+.serr[hidden] { display: none; }
+.serr p { margin: 0; font-size: 15px; line-height: 1.5; }

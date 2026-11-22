@@ -191,6 +191,18 @@ function attachScrub(track, fill, { duration, onSeek, previewSrc, onDrag }) {
   return { isDragging: () => dragging };
 }
 
+/** 웹 화면이 재생하지 못하는 형식(MKV·HEVC 등)을 앱 내장 플레이어로. 앱이 아니면 false */
+const hasNativePlayer = () => !!(window.VidShelfApp && VidShelfApp.playNative);
+function playNative(v, pos) {
+  if (!hasNativePlayer()) return false;
+  try { VidShelfApp.playNative(String(v.id), v.title || "", pos || 0); return true; } catch (e) { return false; }
+}
+/** 내장 플레이어를 닫으면 본 위치를 저장 */
+window.onNativePlayerClosed = (id, pos) => {
+  if (pos > 0) api(`videos/${id}/progress`, { method: "POST", body: { pos } }).catch(() => {});
+  if (window.__nativeClosed) window.__nativeClosed(id, pos);
+};
+
 /** 아래에서 올라오는 창 (뒤로 가기로 닫힘). 돌려주는 close() 로 닫음 */
 function openSheet(title, body, foot) {
   const sheet = h("section", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title },
@@ -1434,11 +1446,19 @@ async function renderVideo(id, params) {
   video.addEventListener("play", () => {
     if (!counted) { counted = true; api(`videos/${v.id}/play`, { method: "POST" }).catch(() => {}); }
   });
+  const nativeBtn = h("button", { class: "btn sm", hidden: !hasNativePlayer(), onclick: () => { video.pause(); playNative(v, currentTime()); } }, "▶ 앱 플레이어로 재생");
+  window.__nativeClosed = (id, pos) => { if (String(id) === String(v.id) && pos > 0) { try { video.currentTime = pos; } catch (e) {} } };
+  const goNative = (why) => {
+    if (!hasNativePlayer()) { toast(why); return; }
+    toast("이 형식은 앱 플레이어로 재생합니다");
+    playNative(v, currentTime());
+  };
   video.addEventListener("error", () => {
     if (mode === "direct" && video.error && (v.source === "mega" || v.source === "icloud")) {
-      api("status").then((st) => toast(megaQuotaText(st) || "재생하지 못했습니다. 지원하지 않는 형식이거나 MEGA 연결 문제입니다.")).catch(() => {});
+      api("status").then((st) => { const q = megaQuotaText(st); if (q) toast(q); else goNative("재생하지 못했습니다. 지원하지 않는 형식이거나 연결 문제입니다."); })
+        .catch(() => goNative("재생하지 못했습니다."));
     } else if (mode === "direct" && video.error && !canTranscode) {
-      toast("이 영상 형식은 브라우저에서 재생할 수 없습니다");
+      goNative("이 영상 형식은 브라우저에서 재생할 수 없습니다");
     } else if (mode === "direct" && video.error) {
       toast("이 형식은 바로 재생할 수 없어 호환 모드로 전환합니다");
       setMode("transcode", 0, true);
@@ -1673,7 +1693,7 @@ async function renderVideo(id, params) {
   $app.replaceChildren(h("div", { class: "watch1" },
     playerBox,
     seekRow,
-    h("div", { class: "player-note" }, canTranscode ? modeNote : null, canTranscode ? modeBtn : null, resume),
+    h("div", { class: "player-note" }, canTranscode ? modeNote : null, canTranscode ? modeBtn : null, resume, nativeBtn),
     infoBox));
   drawInfo();
 }
@@ -2259,7 +2279,18 @@ async function renderShorts(params) {
       onSeek: (t) => { video.currentTime = t; },
       previewSrc: () => `/media/${v.id}`,
     });
-    const el = h("section", { class: "short" }, video, h("div", { class: "sshade", "aria-hidden": "true" }), icon,
+    const errBox = h("div", { class: "serr", hidden: true });
+    video.addEventListener("error", () => {
+      if (!video.getAttribute("src") || !video.error) return;
+      const show = (msg) => {
+        errBox.replaceChildren(h("p", {}, msg),
+          hasNativePlayer() ? h("button", { class: "btn primary", onclick: (e) => { e.stopPropagation(); playNative(v, 0); } }, "▶ 앱 플레이어로 재생") : null);
+        errBox.hidden = false;
+      };
+      if (v.source === "mega" || v.source === "icloud") api("status").then((st) => show(megaQuotaText(st) || "이 영상은 여기서 바로 재생할 수 없는 형식입니다.")).catch(() => show("재생하지 못했습니다."));
+      else show("이 영상은 여기서 바로 재생할 수 없는 형식입니다.");
+    });
+    const el = h("section", { class: "short" }, video, h("div", { class: "sshade", "aria-hidden": "true" }), icon, errBox,
       h("div", { class: "sinfo" },
         h("a", { class: "stitle", href: `#/v/${v.id}` }, v.title),
         v.performers && v.performers.length ? h("div", { class: "sperf" }, v.performers.join(", ")) : null),

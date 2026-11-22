@@ -13,8 +13,8 @@ android {
         applicationId "app.vidshelf"
         minSdk 29
         targetSdk 34
-        versionCode 43
-        versionName "6.3"
+        versionCode 44
+        versionName "6.4"
     }
 
     compileOptions {
@@ -45,4 +45,10 @@ android {
         }
     }
     lint { abortOnError false }
+}
+
+dependencies {
+    // 웹 화면에서 재생할 수 없는 형식(MKV, HEVC 등)을 위한 앱 내장 플레이어
+    implementation "androidx.media3:media3-exoplayer:1.4.1"
+    implementation "androidx.media3:media3-ui:1.4.1"
 }
