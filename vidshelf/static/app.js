@@ -1627,6 +1627,24 @@ async function renderVideo(id, params) {
         toast(`${fmtDur(currentTime())} 장면을 썸네일로 정했습니다`);
       } catch (e) { toast("썸네일을 만들지 못했습니다: " + e.message); }
     } }, "🖼 지금 장면을 썸네일로");
+    const coverFile = h("input", { type: "file", accept: "image/*", hidden: true });
+    coverFile.onchange = async () => {   // 기기의 사진으로 썸네일 정하기
+      const f = coverFile.files && coverFile.files[0];
+      coverFile.value = "";
+      if (!f) return;
+      try {
+        const url = URL.createObjectURL(f);
+        const img = await new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = () => no(new Error("사진을 열 수 없습니다")); im.src = url; });
+        const w = Math.min(1280, img.naturalWidth), hh = Math.round((w * img.naturalHeight) / img.naturalWidth);
+        const cv = h("canvas", { width: w, height: hh });
+        cv.getContext("2d").drawImage(img, 0, 0, w, hh);
+        URL.revokeObjectURL(url);
+        await api(`videos/${v.id}/cover`, { method: "POST", body: { image: cv.toDataURL("image/jpeg", 0.88) } });
+        video.poster = cv.toDataURL("image/jpeg", 0.6);
+        toast("고른 사진을 썸네일로 정했습니다");
+      } catch (e) { toast("썸네일을 바꾸지 못했습니다: " + e.message); }
+    };
+    const coverPickBtn = h("button", { class: "btn sm", onclick: () => coverFile.click() }, "📷 기기 사진으로");
     const coverResetBtn = h("button", { class: "btn sm", onclick: async () => {
       await api(`videos/${v.id}/cover`, { method: "DELETE" }); toast("기본 썸네일로 되돌렸습니다");
     } }, "기본 썸네일로");
@@ -1637,8 +1655,8 @@ async function renderVideo(id, params) {
       h("div", { class: "vhead" }, h("h2", { style: "margin:0;font-size:17px" }, "영상 정보 수정"),
         h("button", { class: "btn sm primary", onclick: () => setEditing(false) }, "완료")),
       h("div", { class: "panel" }, h("h3", {}, "썸네일"),
-        h("p", { class: "meta", style: "margin-top:0" }, "영상을 원하는 장면에서 멈춘 뒤 누르세요. 목록과 홈에 그 장면이 썸네일로 나옵니다."),
-        h("div", { class: "row" }, coverBtn, coverResetBtn)),
+        h("p", { class: "meta", style: "margin-top:0" }, "영상을 원하는 장면에서 멈춘 뒤 누르거나, 기기에 있는 사진을 고르세요. 목록과 홈에 썸네일로 나옵니다."),
+        h("div", { class: "row" }, coverBtn, coverPickBtn, coverResetBtn, coverFile)),
       h("div", { class: "panel" }, h("h3", {}, "제목"), titleIn,
         h("div", { class: "actions", style: "margin-top:10px" }, stars, favBtn())),
       editor("performers", allPerformers, "출연자", ""),
