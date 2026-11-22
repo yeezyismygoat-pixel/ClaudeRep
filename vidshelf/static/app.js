@@ -1519,7 +1519,13 @@ async function openViewer(items, start) {
     const im = slot.firstChild, p = items[k];
     slot.style.visibility = p ? "visible" : "hidden";
     const src = p ? `/photo/${p.id}` : "";
-    if (im.getAttribute("src") !== src) { if (src) im.src = src; else im.removeAttribute("src"); }
+    if (im.dataset.for !== src) {
+      im.dataset.for = src;
+      // 원본을 못 보여 주면(드문 형식 등) 큰 미리보기로 대신
+      im.onerror = () => { if (p && im.dataset.for === src && !im.dataset.fb) { im.dataset.fb = "1"; im.src = `/photothumb/${p.id}.jpg?s=1600`; } };
+      delete im.dataset.fb;
+      if (src) im.src = src; else im.removeAttribute("src");
+    }
   };
   const fillSlots = () => [i - 1, i, i + 1].forEach((k, j) => fillSlot(slots[j], k));
   // 확대·축소 (두 손가락 벌리기, 두 번 탭) — 지금 사진에만

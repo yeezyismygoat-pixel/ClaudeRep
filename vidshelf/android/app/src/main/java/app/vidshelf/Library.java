@@ -1151,22 +1151,43 @@ public class Library implements HttpServer.Handler {
         return Math.max(o.outWidth, o.outHeight);
     }
 
+    private static final Set<String> WEB_IMAGE = new HashSet<>(java.util.Arrays.asList("jpg", "jpeg", "png", "gif", "webp", "bmp"));
+
     private void photoFull(Video v, HttpServer.Request r, HttpServer.Response res) throws Exception {
         String mime = v.mime == null ? "image/jpeg" : v.mime;
-        boolean heic = mime.contains("heic") || mime.contains("heif");
         if (v.node != null) { megaStream(v.link, v.node, mime, r, res, "1".equals(r.param("dl"))); return; }
-        if (!heic) { media(v, r, res); return; }
-        // 웹 화면은 HEIC 를 못 보여 주므로 JPEG 로 바꿔서 보냄
+        String ext = ext(v.name);
+        boolean webOk = WEB_IMAGE.contains(ext) && !mime.contains("heic") && !mime.contains("heif");
+        if (webOk || "1".equals(r.param("dl"))) { media(v, r, res); return; }
+        // 웹 화면이 못 보여 주는 형식(HEIC·HEIF·DNG 등)은 JPEG 로 바꿔서 보냄 (한 번 만들면 보관)
         File f = new File(new File(thumbDir, "photos"), Long.toHexString(v.id) + "-full.jpg");
         if (!f.exists() || f.length() == 0) {
-            Bitmap bmp = android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(ctx.getContentResolver(), v.uri),
-                    (decoder, info, src) -> {
-                        int w = info.getSize().getWidth(), h = info.getSize().getHeight(), max = Math.max(w, h);
-                        if (max > 2560) decoder.setTargetSize(w * 2560 / max, h * 2560 / max);
-                    });
-            f.getParentFile().mkdirs();
-            try (FileOutputStream o = new FileOutputStream(f)) { bmp.compress(Bitmap.CompressFormat.JPEG, 88, o); }
-            bmp.recycle();
+            Bitmap bmp = null;
+            frameLock.acquire();   // 큰 사진을 여러 장 동시에 풀면 메모리가 모자라서 한 장씩
+            try {
+                if (f.exists() && f.length() > 0) bmp = null;
+                else {
+                    try {   // 1) 안드로이드 사진 해독기 (HEIC 포함)
+                        bmp = android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(ctx.getContentResolver(), v.uri),
+                                (decoder, info, src) -> {
+                                    decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE);
+                                    int w = info.getSize().getWidth(), h = info.getSize().getHeight(), max = Math.max(w, h);
+                                    if (max > 2560) decoder.setTargetSize(w * 2560 / max, h * 2560 / max);
+                                });
+                    } catch (Throwable e1) {
+                        bmp = null;
+                    }
+                    if (bmp == null) {   // 2) 갤러리가 쓰는 큰 미리보기 (거의 모든 형식)
+                        try { bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(2048, 2048), null); } catch (Throwable e2) { bmp = null; }
+                    }
+                    if (bmp == null) { res.error(415, "이 사진 형식을 열 수 없습니다"); return; }
+                    f.getParentFile().mkdirs();
+                    try (FileOutputStream o = new FileOutputStream(f)) { bmp.compress(Bitmap.CompressFormat.JPEG, 88, o); }
+                    bmp.recycle();
+                }
+            } finally {
+                frameLock.release();
+            }
         }
         res.header("Cache-Control", "max-age=86400");
         res.send(200, "image/jpeg", readAll(new FileInputStream(f)));
