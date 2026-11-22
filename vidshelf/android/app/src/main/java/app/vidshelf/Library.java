@@ -215,9 +215,25 @@ public class Library implements HttpServer.Handler {
         save();
     }
 
+    /** 앱 안 로그인 화면에서 읽은 쿠키를 저장합니다. */
+    public void ehSetLogin(String id, String hash) {
+        try { ehSaveLogin(id, hash); } catch (JSONException ignored) {}
+    }
+
+    /** 앱 화면(WebView)에서 온 요청인지 */
+    private boolean fromApp(HttpServer.Request r) {
+        String cookie = r.header("cookie");
+        if (cookie == null) return false;
+        for (String part : cookie.split(";")) {
+            String p = part.trim();
+            if (p.startsWith("vs_app=") && MessageDigest.isEqual(p.substring(7).getBytes(), appToken().getBytes())) return true;
+        }
+        return false;
+    }
+
     private void ehApi(HttpServer.Request r, HttpServer.Response res, String action, String m) throws Exception {
         if (action.equals("status")) {
-            res.json(200, new JSONObject().put("logged_in", eh.loggedIn()).toString());
+            res.json(200, new JSONObject().put("logged_in", eh.loggedIn()).put("in_app", fromApp(r)).toString());
             return;
         }
         if (action.equals("login") && m.equals("POST")) {

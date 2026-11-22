@@ -1038,7 +1038,7 @@ async function renderMega(params) {
 }
 
 // ---------------------------------------------------------------- e-hentai 즐겨찾기 만화
-function ehLoginForm() {
+function ehLoginForm(inApp) {
   const user = h("input", { type: "text", placeholder: "아이디", autocomplete: "username" });
   const pass = h("input", { type: "password", placeholder: "비밀번호", autocomplete: "current-password" });
   const msg = h("p", { class: "warn" });
@@ -1051,13 +1051,18 @@ function ehLoginForm() {
   const mid = h("input", { type: "text", inputmode: "numeric", placeholder: "ipb_member_id (숫자)" });
   const hash = h("input", { type: "text", placeholder: "ipb_pass_hash (32자리)", autocomplete: "off" });
   const cookieBtn = h("button", { class: "btn", onclick: (e) => submit({ member_id: mid.value, pass_hash: hash.value }, e.currentTarget) }, "쿠키로 로그인");
+  const pwForm = h("div", { style: "display:grid;gap:8px;margin-top:10px" }, user, pass, loginBtn, msg);
+  const cookieForm = [
+    h("p", { class: "meta" }, "PC 브라우저에서 e-hentai 에 로그인한 뒤, 개발자 도구(F12) → Application(저장소) → Cookies → e-hentai.org 에서 ipb_member_id 와 ipb_pass_hash 값을 복사해 넣으세요."),
+    h("div", { style: "display:grid;gap:8px;margin-top:10px" }, mid, hash, cookieBtn)];
   return h("div", { class: "settings" },
     h("div", { class: "panel" }, h("h3", {}, "e-hentai 로그인"),
       h("p", { class: "meta" }, "e-hentai(포럼) 계정으로 로그인하면 내 즐겨찾기 만화를 여기서 볼 수 있습니다. 비밀번호는 저장하지 않고 로그인 쿠키만 이 앱 안에 저장합니다."),
-      h("div", { style: "display:grid;gap:8px;margin-top:10px" }, user, pass, loginBtn), msg),
-    h("details", { class: "panel" }, h("summary", {}, "쿠키로 로그인 (로봇 확인 때문에 위 로그인이 안 될 때)"),
-      h("p", { class: "meta" }, "PC 브라우저에서 e-hentai 에 로그인한 뒤, 개발자 도구(F12) → Application(저장소) → Cookies → e-hentai.org 에서 ipb_member_id 와 ipb_pass_hash 값을 복사해 넣으세요."),
-      h("div", { style: "display:grid;gap:8px;margin-top:10px" }, mid, hash, cookieBtn)));
+      inApp ? h("div", { style: "margin-top:12px" },
+        h("a", { class: "btn primary", href: "vidshelf://eh-login", style: "display:block;text-align:center;padding:12px" }, "e-hentai 로그인 화면 열기"),
+        h("p", { class: "meta" }, "앱 안에 e-hentai 로그인 페이지가 열립니다. 아이디·비밀번호를 넣고 로봇 확인이 나오면 풀어 주세요. 로그인되면 자동으로 이 화면으로 돌아옵니다.")) : pwForm),
+    inApp ? h("details", { class: "panel" }, h("summary", {}, "다른 방법: 아이디·비밀번호를 여기에 입력"), pwForm) : null,
+    h("details", { class: "panel" }, h("summary", {}, inApp ? "다른 방법: 쿠키 값 직접 입력 (PC 필요)" : "쿠키로 로그인 (로봇 확인 때문에 위 로그인이 안 될 때)"), ...cookieForm));
 }
 
 function comicCard(g) {
@@ -1074,7 +1079,7 @@ function comicCard(g) {
 async function renderComics(params) {
   setTab("comics");
   const st = await api("eh/status");
-  if (!st.logged_in) { $app.replaceChildren(ehLoginForm()); return; }
+  if (!st.logged_in) { $app.replaceChildren(ehLoginForm(st.in_app)); return; }
   const favcat = params.get("favcat") || "all", q = params.get("q") || "";
   const update = (ch) => {
     const p = new URLSearchParams(params);
@@ -1105,7 +1110,7 @@ async function renderComics(params) {
     let d;
     try { d = await api("eh/favorites?" + qs); }
     catch (e) { more.replaceChildren(h("span", { class: "warn" }, e.message), h("button", { class: "btn sm", style: "margin-left:8px", onclick: load }, "다시 시도")); return; }
-    if (d.logged_in === false) { $app.replaceChildren(h("p", { class: "warn" }, "로그인이 풀렸습니다. 다시 로그인하세요."), ehLoginForm()); return; }
+    if (d.logged_in === false) { $app.replaceChildren(h("p", { class: "warn" }, "로그인이 풀렸습니다. 다시 로그인하세요."), ehLoginForm(st.in_app)); return; }
     if (first) {
       first = false;
       const total = d.folders.reduce((n, f) => n + f.count, 0);
@@ -1125,7 +1130,7 @@ async function renderComics(params) {
 async function renderComic(gid, token, params) {
   setTab("comics");
   const g = await api(`eh/gallery?gid=${gid}&t=${token}`);
-  if (g.logged_in === false) { $app.replaceChildren(ehLoginForm()); return; }
+  if (g.logged_in === false) { location.hash = "#/comics"; return; }
   const cover = h("img", { src: g.thumb, alt: "", referrerpolicy: "no-referrer" });
   const groups = {};
   for (const tag of g.tags) {
