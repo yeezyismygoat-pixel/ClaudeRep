@@ -107,6 +107,18 @@ document.addEventListener("click", (e) => {
 try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme); } catch (e) {}
 applyTheme();
 
+/** 목록 끝이 화면에 가까워지면 다음 목록을 자동으로 불러옴 (‘더 보기’ 버튼 대신) */
+function autoMore(moreEl, loadNext) {
+  const mark = h("div", { class: "auto-more", "aria-hidden": "true" }, h("i", { class: "spin" }));
+  moreEl.replaceChildren(mark);
+  const io = new IntersectionObserver((ents) => {
+    if (!ents.some((e) => e.isIntersecting)) return;
+    io.disconnect();
+    loadNext();
+  }, { rootMargin: "900px 0px" });
+  io.observe(mark);
+}
+
 // ---------------------------------------------------------------- job status bar
 let lastPending = -1;
 async function pollStatus() {
@@ -265,7 +277,7 @@ async function renderLibrary(params) {
     data.items.forEach((v) => grid.append(mode === "wall" ? videoTile(v) : videoCard(v)));
     const shown = (page - 1) * data.per + data.items.length;
     moreWrap.replaceChildren(shown < data.total
-      ? h("button", { class: "btn", onclick: () => { page++; load(); } }, `더 보기 (${shown}/${data.total})`)
+      ? (autoMore(moreWrap, () => { page++; load(); }), moreWrap.firstChild)
       : "");
   }
   await load();
@@ -515,7 +527,7 @@ async function renderMedia(params0, type0) {
         }
       }
       const shown = (page - 1) * d.per + d.items.length;
-      more.replaceChildren(...(shown < d.total ? [h("button", { class: "btn", onclick: () => { page++; load(); } }, `더 보기 (${shown}/${d.total})`)] : []));
+      if (shown < d.total) autoMore(more, () => { page++; load(); }); else more.replaceChildren();
     }
     await load();
   }
@@ -753,7 +765,7 @@ async function renderPhotos(params) {
       grid.append(photoCell(p, mode, () => openViewer(items, i)));
     }
     const shown = (page - 1) * data.per + data.items.length;
-    more.replaceChildren(...(shown < data.total ? [h("button", { class: "btn", onclick: () => { page++; load(); } }, `더 보기 (${shown}/${data.total})`)] : []));
+    if (shown < data.total) autoMore(more, () => { page++; load(); }); else more.replaceChildren();
   }
   keepTypingFocus(search);
   await load();
@@ -1861,7 +1873,7 @@ async function renderComics(params) {
     }
     d.items.forEach((g) => grid.append(comicCard(g)));
     next = d.next;
-    more.replaceChildren(...(next ? [h("button", { class: "btn", onclick: load }, "더 보기")] : []));
+    if (next) autoMore(more, load); else more.replaceChildren();
   }
   await load();
 }

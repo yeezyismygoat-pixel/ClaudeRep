@@ -616,3 +616,12 @@ body.nav-hidden .topbar .tabs { transform: translateY(calc(100% + 30px)); opacit
 body.nav-hidden .sinfo { padding-bottom: calc(26px + env(safe-area-inset-bottom)) !important; }
 body.nav-hidden .sside { bottom: calc(34px + env(safe-area-inset-bottom)) !important; }
 body.nav-hidden .sbar-wrap { bottom: calc(12px + env(safe-area-inset-bottom)) !important; }
+
+/* 누를 때 파란 사각형 표시 없애기 (안드로이드 기본 눌림 표시) */
+* { -webkit-tap-highlight-color: transparent; }
+:focus:not(:focus-visible) { outline: none; }
+button, a { -webkit-touch-callout: none; }
+
+/* 자동으로 더 불러올 때 작은 표시 */
+.auto-more { display: flex; justify-content: center; padding: 18px 0 8px; min-height: 24px; }
+.auto-more .spin { width: 18px; height: 18px; border: 2px solid var(--line2); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; display: block; }
