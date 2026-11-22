@@ -108,6 +108,118 @@ public class Library implements HttpServer.Handler {
         synchronized (this) { links = new ArrayList<>(megaLinks); }
         for (Mega.Link l : links) Mega.load(l);
         scan();
+        autoPerformers();
+        lookupMissingSoon();
+    }
+
+    // ------------------------------------------------------------------ 출연자 자동 지정 · 정보 찾기
+    private static final Pattern FOLDER_PERSON = Pattern.compile("^\\s*[\\[［【]([^\\]］】]+)[\\]］】]\\s*(.+?)\\s*$");
+    private final java.util.concurrent.atomic.AtomicBoolean lookupRunning = new java.util.concurrent.atomic.AtomicBoolean();
+    private volatile String lookupStatus = "";
+
+    /** ‘[그룹] 이름’ 형식의 MEGA 폴더 안 영상에 출연자를 지정합니다. 이미 처리한 영상은 건너뜀 (사용자가 지운 출연자를 되살리지 않도록). */
+    public synchronized JSONObject autoPerformers() {
+        int assigned = 0;
+        Set<String> people = new TreeSet<>();
+        try {
+            for (Video v : all) {
+                if (v.node == null) continue;
+                JSONObject m = meta(v);
+                if (m.optBoolean("auto_perf", false)) continue;
+                String[] parts = v.node.path.split("/");
+                for (int i = parts.length - 1; i >= 0; i--) {
+                    Matcher fm = FOLDER_PERSON.matcher(parts[i]);
+                    if (!fm.find()) continue;
+                    String group = fm.group(1).trim(), name = fm.group(2).trim();
+                    if (name.isEmpty()) break;
+                    JSONArray cur = entityRefs(m, "performers");
+                    JSONArray names = new JSONArray();
+                    boolean has = false;
+                    for (int k = 0; k < cur.length(); k++) {
+                        String n = cur.getJSONObject(k).optString("name");
+                        names.put(n);
+                        if (n.equalsIgnoreCase(name)) has = true;
+                    }
+                    if (!has) { names.put(name); setLinks(m, "performers", names); assigned++; }
+                    JSONObject info = performerInfo(entityId("performers", name));
+                    if (info.optString("group").isEmpty()) info.put("group", group);
+                    people.add(name);
+                    break;
+                }
+                m.put("auto_perf", true);
+            }
+            save();
+            return new JSONObject().put("assigned", assigned).put("performers", new JSONArray(people));
+        } catch (JSONException e) {
+            return new JSONObject();
+        }
+    }
+
+    private synchronized JSONObject performerInfo(long id) throws JSONException {
+        JSONObject all = store.optJSONObject("performer_info");
+        if (all == null) { all = new JSONObject(); store.put("performer_info", all); }
+        JSONObject o = all.optJSONObject(String.valueOf(id));
+        if (o == null) { o = new JSONObject(); all.put(String.valueOf(id), o); }
+        return o;
+    }
+
+    /** 정보를 아직 찾아보지 않은 출연자를 백그라운드에서 인터넷으로 찾습니다. */
+    public void lookupMissingSoon() {
+        if (!lookupRunning.compareAndSet(false, true)) return;
+        new Thread(() -> {
+            try {
+                List<long[]> todo = new ArrayList<>();
+                synchronized (this) {
+                    Iterator<String> it = store.optJSONObject("performers").keys();
+                    while (it.hasNext()) {
+                        long id = Long.parseLong(it.next());
+                        if (!performerInfo(id).has("lookup_at")) todo.add(new long[]{id});
+                    }
+                }
+                int i = 0;
+                for (long[] t : todo) {
+                    lookupStatus = "출연자 정보 찾는 중… " + (++i) + "/" + todo.size();
+                    lookupPerformer(t[0], false);
+                }
+            } catch (Exception ignored) {
+            } finally {
+                lookupStatus = "";
+                lookupRunning.set(false);
+            }
+        }).start();
+    }
+
+    /** 한 출연자의 정보를 찾아 저장합니다. overwrite 가 false 면 비어 있는 항목만 채움. */
+    public JSONObject lookupPerformer(long id, boolean overwrite) throws JSONException {
+        String name, group;
+        synchronized (this) {
+            name = store.optJSONObject("performers").optString(String.valueOf(id), "");
+            group = performerInfo(id).optString("group", "");
+        }
+        if (name.isEmpty()) return null;
+        PersonLookup.Result r = PersonLookup.find(name, group);
+        synchronized (this) {
+            JSONObject info = performerInfo(id);
+            String[][] f = {{"real_name", r.realName}, {"birthdate", r.birthdate}, {"height", r.height}};
+            for (String[] kv : f) if (kv[1] != null && (overwrite || info.optString(kv[0]).isEmpty())) info.put(kv[0], kv[1]);
+            if (r.source != null) { info.put("source", r.source); info.put("source_url", r.sourceUrl); }
+            info.put("lookup_at", System.currentTimeMillis() / 1000);
+            info.put("lookup_found", !r.empty());
+            save();
+            return entityJson("performers", id);
+        }
+    }
+
+    private synchronized JSONObject entityJson(String field, long id) throws JSONException {
+        JSONObject o = new JSONObject().put("id", id).put("name", store.optJSONObject(field).optString(String.valueOf(id)));
+        if (field.equals("performers")) {
+            JSONObject info = performerInfo(id);
+            for (String k : new String[]{"group", "real_name", "birthdate", "height", "source", "source_url"})
+                o.put(k, info.optString(k, ""));
+            o.put("looked_up", info.has("lookup_at"));
+            o.put("lookup_found", info.optBoolean("lookup_found", false));
+        }
+        return o;
     }
 
     private synchronized void saveMegaLinks() {
@@ -542,7 +654,8 @@ public class Library implements HttpServer.Handler {
             String k = it.next();
             long id = Long.parseLong(k);
             Video cv = covers.get(id);
-            out.add(new JSONObject().put("id", id).put("name", names.optString(k))
+            JSONObject row = field.equals("performers") ? entityJson(field, id) : new JSONObject().put("id", id).put("name", names.optString(k));
+            out.add(row
                     .put("count", counts.getOrDefault(id, 0)).put("cover", cv == null ? JSONObject.NULL : cv.id));
         }
         out.sort(Comparator.comparing(o -> o.optString("name").toLowerCase(Locale.ROOT)));
@@ -622,7 +735,7 @@ public class Library implements HttpServer.Handler {
                 .put("ffmpeg", false).put("ffprobe", false).put("platform", "android")
                 .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
                 .put("mega_supported", true).put("mega", megaJson())
-                .put("server", serverJson());
+                .put("server", serverJson()).put("performer_info", true);
     }
 
     private JSONObject serverJson() throws JSONException {
@@ -837,6 +950,39 @@ public class Library implements HttpServer.Handler {
             return;
         }
 
+        if (p0.equals("performers") && parts.length >= 2) {
+            if (parts[1].equals("auto") && m.equals("POST")) {          // MEGA 폴더 이름으로 다시 지정 + 정보 찾기
+                synchronized (this) {
+                    JSONObject vids = store.optJSONObject("videos");
+                    Iterator<String> it = vids.keys();
+                    while (it.hasNext()) { JSONObject mm = vids.optJSONObject(it.next()); if (mm != null) mm.remove("auto_perf"); }
+                }
+                JSONObject r0 = autoPerformers();
+                lookupMissingSoon();
+                res.json(200, r0.toString());
+                return;
+            }
+            if (parts.length == 3 && parts[2].equals("lookup") && m.equals("POST")) {   // 인터넷에서 다시 찾기 (네트워크, 잠금 밖)
+                JSONObject e = lookupPerformer(parseLong(parts[1], -1), true);
+                if (e == null) res.error(404, "not found"); else res.json(200, e.toString());
+                return;
+            }
+            if (parts.length == 2 && m.equals("PATCH")) {
+                JSONObject b = body(r);
+                JSONObject info = b.optJSONObject("info");
+                if (info != null) {
+                    long id = parseLong(parts[1], -1);
+                    synchronized (this) {
+                        if (!store.optJSONObject("performers").has(String.valueOf(id))) { res.error(404, "not found"); return; }
+                        JSONObject cur = performerInfo(id);
+                        for (String k : new String[]{"group", "real_name", "birthdate", "height"})
+                            if (info.has(k)) cur.put(k, info.optString(k, "").trim());
+                        save();
+                    }
+                    if (!b.has("name")) { res.json(200, entityJson("performers", id).toString()); return; }
+                }
+            }
+        }
         if (p0.equals("tags") || p0.equals("performers")) {
             String field = p0;
             synchronized (this) {
@@ -845,7 +991,7 @@ public class Library implements HttpServer.Handler {
                 JSONObject names = store.optJSONObject(field);
                 String key = String.valueOf(id);
                 if (!names.has(key)) { res.error(404, "not found"); return; }
-                if (m.equals("GET")) { res.json(200, new JSONObject().put("id", id).put("name", names.optString(key)).toString()); return; }
+                if (m.equals("GET")) { res.json(200, entityJson(field, id).toString()); return; }
                 if (m.equals("PATCH")) {
                     String nn = body(r).optString("name", "").trim().replaceAll("\\s+", " ");
                     if (nn.isEmpty()) { res.error(400, "이름이 비어 있습니다"); return; }
@@ -965,7 +1111,8 @@ public class Library implements HttpServer.Handler {
                 }
                 counts = new JSONObject().put("total", vis.size()).put("bytes", bytes).put("seconds", secs).put("missing", 0).put("favorites", favs);
             }
-            res.json(200, new JSONObject().put("scanning", false).put("scan_found", 0).put("scan_new", 0)
+            res.json(200, new JSONObject().put("scanning", !lookupStatus.isEmpty()).put("scan_found", 0).put("scan_new", 0)
+                    .put("scan_current", lookupStatus)
                     .put("thumb_pending", 0).put("thumb_current", "").put("last_scan", lastScan / 1000)
                     .put("counts", counts).toString());
             return;

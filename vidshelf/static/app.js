@@ -2,6 +2,7 @@
 "use strict";
 
 const $app = document.getElementById("app");
+let serverCaps = {};   // 서버가 지원하는 기능 (안드로이드 앱: MEGA, 출연자 프로필 등)
 
 // ---------------------------------------------------------------- helpers
 function h(tag, attrs, ...kids) {
@@ -77,7 +78,7 @@ async function pollStatus() {
     bar.hidden = !busy;
     if (busy) {
       const txt = s.scanning
-        ? `스캔 중… ${s.scan_found}개 발견, 새 영상 ${s.scan_new}개 · ${s.scan_current || ""}`
+        ? (s.scan_found || s.scan_new ? `스캔 중… ${s.scan_found}개 발견, 새 영상 ${s.scan_new}개 · ${s.scan_current || ""}` : (s.scan_current || "작업 중…"))
         : `미리보기 생성 중… 남은 영상 ${s.thumb_pending}개 · ${s.thumb_current || ""}`;
       bar.replaceChildren(h("i", { class: "spin" }), h("span", {}, txt));
     }
@@ -107,6 +108,7 @@ async function route() {
     if ((m = path.match(/^\/v\/(\d+)$/))) return await renderVideo(+m[1], params);
     if (path === "/tags") return await renderEntities("tags", "태그", "tag");
     if (path === "/performers") return await renderEntities("performers", "출연자", "performer");
+    if (path === "/performer") return await renderPerformer(+params.get("id"));
     if (path === "/settings") return await renderSettings();
     if (path === "/mega") return await renderMega(params);
     location.hash = "#/";
@@ -447,6 +449,10 @@ async function renderEntities(ep, label, filterKey) {
         h("a", { class: "name", href: `#/?${filterKey}=${e.id}`, title: e.name }, e.name),
         h("span", { class: "meta" }, `${e.count}`),
       ),
+      e.group !== undefined ? h("div", { class: "body meta", style: "padding-top:0;display:block" },
+        [e.group, e.birthdate ? `${e.birthdate} (${age(e.birthdate)}세)` : "", e.height ? `${e.height}cm` : ""].filter(Boolean).join(" · ") || "정보 없음") : null,
+      e.group !== undefined ? h("div", { class: "body", style: "padding-top:0" },
+        h("a", { class: "btn sm", href: `#/performer?id=${e.id}` }, "프로필")) : null,
       h("div", { class: "body", style: "padding-top:0" },
         h("button", { class: "btn sm", onclick: async () => {
           const n = prompt(`${label} 이름 변경 (기존 이름과 같게 하면 합쳐집니다)`, e.name);
@@ -458,9 +464,17 @@ async function renderEntities(ep, label, filterKey) {
           await api(`${ep}/${e.id}`, { method: "DELETE" }); route();
         } }, "삭제")))));
   };
+  const autoBtn = ep === "performers" && items.some((e) => e.group !== undefined) || ep === "performers" && serverCaps.performer_info
+    ? h("button", { class: "btn", onclick: async (ev) => {
+        ev.currentTarget.disabled = true;
+        const r = await api("performers/auto", { method: "POST" });
+        toast(`영상 ${r.assigned || 0}개에 출연자를 지정했습니다. 출연자 정보는 백그라운드에서 찾습니다.`);
+        route();
+      } }, "MEGA 폴더 이름으로 출연자 지정") : null;
   $app.replaceChildren(
     h("div", { class: "toolbar" },
       h("input", { type: "search", class: "search", placeholder: `${label} 검색`, oninput: (e) => { filter = e.target.value; draw(); } }),
+      autoBtn,
       h("span", { class: "meta" }, `${items.length}개`)),
     items.length ? grid : h("div", { class: "empty" }, `${label}이(가) 없습니다. 영상 화면에서 ${label}을(를) 추가해 보세요.`));
   draw();
@@ -522,6 +536,52 @@ async function renderSettings() {
         h("dt", {}, "데이터 폴더"), h("dd", {}, st.data_dir),
         h("dt", {}, "ffmpeg"), h("dd", {}, st.ffmpeg ? "사용 가능" : "없음 — pkg install ffmpeg"),
         h("dt", {}, "ffprobe"), h("dd", {}, st.ffprobe ? "사용 가능" : "없음 — pkg install ffmpeg")))));
+}
+
+// ---------------------------------------------------------------- 출연자 프로필
+function age(birth) {
+  const b = new Date(birth + "T00:00:00"), n = new Date();
+  if (isNaN(b)) return "?";
+  let a = n.getFullYear() - b.getFullYear();
+  if (n.getMonth() < b.getMonth() || (n.getMonth() === b.getMonth() && n.getDate() < b.getDate())) a--;
+  return a;
+}
+
+async function renderPerformer(id) {
+  setTab("performers");
+  const p = await api(`performers/${id}`);
+  const field = (key, label, placeholder, type = "text") => {
+    const inp = h("input", { type, id: `pf-${key}`, value: p[key] || "", placeholder });
+    return [h("dt", {}, h("label", { for: `pf-${key}` }, label)), h("dd", {}, inp)];
+  };
+  const form = h("dl", { class: "info", style: "align-items:center;font-size:15px" },
+    ...field("group", "그룹", "예: 하츠투하츠"), ...field("real_name", "본명", "예: 홍길동"),
+    ...field("birthdate", "생년월일", "", "date"), ...field("height", "키 (cm)", "예: 165", "number"));
+  const val = (k) => document.getElementById(`pf-${k}`).value.trim();
+  const status = h("p", { class: "meta" },
+    p.source ? `출처: ${p.source}` : p.looked_up ? (p.lookup_found ? "" : "인터넷에서 정보를 찾지 못했습니다. 직접 입력해 주세요.") : "아직 인터넷에서 찾아보지 않았습니다.");
+  $app.replaceChildren(h("div", { class: "settings" },
+    h("div", { class: "panel" },
+      h("div", { class: "row", style: "justify-content:space-between" },
+        h("h2", { style: "margin:0;font-size:22px" }, p.name),
+        h("a", { class: "btn sm", href: `#/?performer=${p.id}` }, "영상 보기")),
+      p.birthdate ? h("p", { class: "meta" }, `만 ${age(p.birthdate)}세`) : null),
+    h("div", { class: "panel" }, h("h3", {}, "프로필"), form,
+      h("div", { class: "row", style: "margin-top:12px" },
+        h("button", { class: "btn primary", onclick: async () => {
+          await api(`performers/${id}`, { method: "PATCH", body: { info: { group: val("group"), real_name: val("real_name"), birthdate: val("birthdate"), height: val("height") } } });
+          toast("저장했습니다"); renderPerformer(id);
+        } }, "저장"),
+        h("button", { class: "btn", onclick: async (ev) => {
+          const b = ev.currentTarget; b.disabled = true; b.textContent = "찾는 중…";
+          try {
+            const r = await api(`performers/${id}/lookup`, { method: "POST" });
+            toast(r.lookup_found ? "인터넷에서 정보를 찾았습니다" : "정보를 찾지 못했습니다");
+          } catch (e) { toast(e.message); }
+          renderPerformer(id);
+        } }, "인터넷에서 다시 찾기")),
+      status,
+      h("p", { class: "meta" }, "그룹 이름을 정확히 적어 두면 동명이인을 거르는 데 쓰입니다. 인터넷 정보는 틀릴 수 있으니 확인 후 고쳐 주세요."))));
 }
 
 // ---------------------------------------------------------------- 앱 서버 (안드로이드)
@@ -662,4 +722,7 @@ function renderLogin() {
 
 route();
 pollStatus();
-api("settings").then((st) => { if (st.mega_supported) document.getElementById("tab-mega").hidden = false; }).catch(() => {});
+api("settings").then((st) => {
+  serverCaps = st;
+  if (st.mega_supported) document.getElementById("tab-mega").hidden = false;
+}).catch(() => {});
