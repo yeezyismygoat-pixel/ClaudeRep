@@ -142,6 +142,7 @@ window.addEventListener("hashchange", route);
 let pageCleanup = null;   // 화면을 떠날 때 정리할 일 (숏폼 영상 멈추기 등)
 /** 화면이 바뀔 때 살짝 떠오르며 나타나게 */
 function pageIn() {
+  if (window.__noPageIn) { window.__noPageIn = false; return; }   // 밀어서 넘어온 경우는 따로 움직임
   const dir = window.__slideDir;   // 밀어서 넘긴 경우 그 방향에서 들어옴
   window.__slideDir = 0;
   $app.classList.remove("page-in", "slide-l", "slide-r");
@@ -154,8 +155,7 @@ async function route() {
   const { path, params } = parseHash();
   stopPlayer();
   if (pageCleanup) { try { pageCleanup(); } catch (e) {} pageCleanup = null; }
-  swipeHandler = null;
-  document.body.classList.remove("shorts-mode");
+  document.body.classList.remove("shorts-mode", "nav-hidden");
   window.scrollTo(0, 0);
   try {
     let m;
@@ -178,6 +178,8 @@ async function route() {
     location.hash = "#/";
   } catch (e) {
     if (e.message !== "login required") $app.replaceChildren(h("div", { class: "empty" }, "오류: " + e.message));
+  } finally {
+    finishTabSwipe();   // 밀어서 넘어온 경우 새 화면이 옆에서 들어옴
   }
 }
 
@@ -301,9 +303,90 @@ function onSwipe(el, cb) {
   }, { passive: true });
 }
 
-/** 지금 화면의 ‘좌우로 밀기’ 동작 (화면마다 정하고, 화면이 바뀌면 지워짐) */
-let swipeHandler = null;
-onSwipe($app, (dir) => swipeHandler && swipeHandler(dir));
+// ---------------------------------------------------------------- 하단 탭 사이를 좌우로 밀어 이동 (갤러리처럼 손가락을 따라옴)
+const TAB_ORDER = ["home", "media", "shorts", "comics", "library"];
+const TAB_HASH = { home: "#/home", media: "#/media", shorts: () => "#/shorts?s=" + (Date.now() % 1000000), comics: "#/comics", library: "#/library" };
+/** 지금 화면이 하단 탭의 첫 화면이면 그 탭 이름 (영상 화면·설정 등에서는 밀기 없음) */
+function currentRootTab() {
+  const p = parseHash().path;
+  if (p === "/home" || (p === "/" && !location.hash)) return "home";
+  if (p === "/media" || p === "/" || p === "/photos") return "media";
+  if (p === "/shorts") return "shorts";
+  if (p === "/comics") return "comics";
+  if (p === "/library") return "library";
+  return null;
+}
+let tabSwipePending = 0;
+function finishTabSwipe() {
+  if (!tabSwipePending) return;
+  const dir = tabSwipePending;
+  tabSwipePending = 0;
+  $app.style.transition = "none";
+  $app.style.transform = `translateX(${dir * 28}%)`;
+  $app.style.opacity = "0";
+  void $app.offsetWidth;
+  $app.style.transition = "transform .34s cubic-bezier(.2,.8,.2,1), opacity .25s ease";
+  $app.style.transform = "";
+  $app.style.opacity = "";
+  setTimeout(() => { $app.style.transition = ""; }, 380);
+}
+(function tabSwipe() {
+  let sx = 0, sy = 0, t0 = 0, mode = null, from = null, dx = 0;
+  const W = () => window.innerWidth;
+  const blocked = (tgt) => {
+    if (tgt.closest("input, textarea, select, .sheet, .viewer, .modal")) return true;
+    for (let n = tgt; n && n !== document.body; n = n.parentElement) {   // 가로로 스크롤되는 줄은 그 줄이 먼저
+      if (n.scrollWidth > n.clientWidth + 4) { const ox = getComputedStyle(n).overflowX; if (ox === "auto" || ox === "scroll") return true; }
+    }
+    return false;
+  };
+  document.addEventListener("touchstart", (e) => {
+    mode = null; from = null;
+    if (e.touches.length !== 1 || tabSwipePending) return;
+    from = currentRootTab();
+    if (!from || !$app.contains(e.target) || blocked(e.target)) { from = null; return; }
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; t0 = Date.now(); dx = 0;
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!from) return;
+    const x = e.touches[0].clientX - sx, y = e.touches[0].clientY - sy;
+    if (!mode) {
+      if (Math.abs(x) < 10 && Math.abs(y) < 10) return;
+      mode = Math.abs(x) > Math.abs(y) * 1.2 ? "h" : "v";   // 처음 움직인 방향으로 고정
+      if (mode === "v") { from = null; return; }
+      $app.style.transition = "none";
+    }
+    e.preventDefault();
+    const i = TAB_ORDER.indexOf(from);
+    const edge = (x > 0 && i === 0) || (x < 0 && i === TAB_ORDER.length - 1);
+    dx = edge ? x * 0.25 : x;   // 처음·마지막 탭에서는 살짝만 끌림
+    $app.style.transform = `translateX(${dx}px)`;
+    $app.style.opacity = String(1 - Math.min(0.35, Math.abs(dx) / W() * 0.5));
+  }, { passive: false });
+  document.addEventListener("touchend", () => {
+    if (!from || mode !== "h") { from = null; return; }
+    const i = TAB_ORDER.indexOf(from);
+    const v = Math.abs(dx) / Math.max(1, Date.now() - t0);   // 빠르게 튕기면 짧게 밀어도 넘어감
+    const dir = dx < 0 ? 1 : -1;
+    const target = TAB_ORDER[i + dir];
+    from = null;
+    $app.style.transition = "transform .22s cubic-bezier(.3,.7,.3,1), opacity .22s ease";
+    if (target && (Math.abs(dx) > W() * 0.28 || (v > 0.5 && Math.abs(dx) > 40))) {
+      $app.style.transform = `translateX(${-dir * W()}px)`;   // 끝까지 밀려 나감
+      $app.style.opacity = "0";
+      tabSwipePending = dir;
+      setTimeout(() => {
+        const hash = typeof TAB_HASH[target] === "function" ? TAB_HASH[target]() : TAB_HASH[target];
+        window.__noPageIn = true;
+        location.hash = hash;
+      }, 200);
+    } else {
+      $app.style.transform = "";   // 제자리로
+      $app.style.opacity = "";
+      setTimeout(() => { $app.style.transition = ""; }, 240);
+    }
+  });
+})();
 
 /** 같은 탭 안 다른 모드로 이동 (밀어서 넘길 때 그 방향으로 들어오게) */
 function slideTo(hash, dir) {
@@ -391,11 +474,6 @@ async function renderMedia(params0, type0) {
     h("div", { class: "home-head" }, h("div", {}, countLine, h("h1", {}, "미디어")), h("div", { class: "row", style: "flex-wrap:nowrap" }, viewBtn, filterBtn)),
     typeSeg, chipsBox, content));
 
-  // 좌우로 밀면 전체 ↔ 동영상 ↔ 사진
-  swipeHandler = (dir) => {
-    const i = TYPES.indexOf(type) + dir;
-    if (i >= 0 && i < TYPES.length) update({ t: TYPES[i], anim: dir > 0 ? "left" : "right" });
-  };
 
   api("media?type=video&per=1").then((d) => (typeCounts.video.textContent = d.total.toLocaleString())).catch(() => {});
   if (TYPES.includes("photo")) api("media?type=photo&per=1").then((d) => (typeCounts.photo.textContent = d.total.toLocaleString())).catch(() => {});
@@ -1540,6 +1618,7 @@ async function renderShorts(params) {
   function activate(i) {
     if (i === active) return;
     active = i;
+    document.body.classList.toggle("nav-hidden", i > 0);   // 첫 영상을 넘기면 하단 메뉴를 숨김
     items.forEach((it, k) => {
       setSrc(it, Math.abs(k - i) <= 1);   // 지금 영상과 앞뒤 하나만 받아 둠
       if (k !== i) it.video.pause();
@@ -1729,11 +1808,6 @@ async function renderComics(params) {
     h("a", { class: tab === "ko" ? "on" : "", href: "#/comics" }, "한국어"),
     h("a", { class: tab === "fav" ? "on" : "", href: "#/comics?tab=fav" }, "♥ 즐겨찾기"),
     h("a", { class: tab === "saved" ? "on" : "", href: "#/comics?tab=saved" }, "💾 저장"));
-  const COMIC_TABS = ["ko", "fav", "saved"], COMIC_HASH = { ko: "#/comics", fav: "#/comics?tab=fav", saved: "#/comics?tab=saved" };
-  swipeHandler = (dir) => {   // 좌우로 밀면 한국어 ↔ 즐겨찾기 ↔ 저장
-    const i = COMIC_TABS.indexOf(tab) + dir;
-    if (i >= 0 && i < COMIC_TABS.length) slideTo(COMIC_HASH[COMIC_TABS[i]], dir);
-  };
   if (tab === "saved") return renderSavedComics(tabs);
   if (tab === "fav" && !st.logged_in) { $app.replaceChildren(h("div", {}, tabs, ehLoginForm(st.in_app))); return; }
 

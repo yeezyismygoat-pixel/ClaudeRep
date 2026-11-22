@@ -601,3 +601,18 @@ body { overflow-x: hidden; }
 /* 다른 화면으로 밀어 넘길 때 (만화 탭 등) */
 #app.slide-l > * { animation: inLeft .3s var(--ease) both; }
 #app.slide-r > * { animation: inRight .3s var(--ease) both; }
+
+/* 화면이 가로로 넘쳐 전체가 밀리거나 작아지는 문제 방지 (사진 모드에서 가끔 어긋나던 것) */
+html, body { overflow-x: clip; max-width: 100%; }
+#app, .media, .mcontent-wrap, .mcontent { max-width: 100%; }
+.mcontent-wrap { overflow-x: clip; }
+.wall .tile { max-width: 100%; }
+#app { will-change: auto; touch-action: pan-y; }
+
+/* 숏폼: 첫 영상을 넘기면 하단 메뉴가 아래로 부드럽게 사라짐 */
+.topbar .tabs { transition: transform .35s cubic-bezier(.2,.8,.2,1), opacity .3s ease, background-color .25s ease; }
+body.nav-hidden .topbar .tabs { transform: translateY(calc(100% + 30px)); opacity: 0; pointer-events: none; }
+.sinfo, .sside, .sbar-wrap { transition: padding .35s cubic-bezier(.2,.8,.2,1), bottom .35s cubic-bezier(.2,.8,.2,1); }
+body.nav-hidden .sinfo { padding-bottom: calc(26px + env(safe-area-inset-bottom)) !important; }
+body.nav-hidden .sside { bottom: calc(34px + env(safe-area-inset-bottom)) !important; }
+body.nav-hidden .sbar-wrap { bottom: calc(12px + env(safe-area-inset-bottom)) !important; }
