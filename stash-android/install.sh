@@ -23,7 +23,9 @@ esac
 
 # 2) 필요한 패키지: ffmpeg(썸네일/미리보기/트랜스코딩), proot(DNS 설정용), CA 인증서
 echo "==> 패키지 설치 (ffmpeg, proot, ca-certificates, curl)"
-pkg update -y
+# 오래된 패키지가 남아 있으면 ffmpeg가 "CANNOT LINK EXECUTABLE" 오류로 실패하므로 전체 업그레이드
+export DEBIAN_FRONTEND=noninteractive
+yes | pkg upgrade -y -o Dpkg::Options::=--force-confold
 pkg install -y ffmpeg proot ca-certificates curl
 
 # 3) 휴대폰 저장소(/sdcard) 접근 권한 요청 — 팝업이 뜨면 '허용'
