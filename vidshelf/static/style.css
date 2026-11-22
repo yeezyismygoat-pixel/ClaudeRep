@@ -647,3 +647,25 @@ body.shorts-mode #app { position: fixed; inset: 0; z-index: 1; }
 .fav-pop { animation: favPop .42s var(--ease); }
 @keyframes favPop { 0% { transform: scale(1); } 35% { transform: scale(.92); } 70% { transform: scale(1.04); } 100% { transform: scale(1); } }
 .sq, .tile, .pcard { -webkit-user-select: none; user-select: none; }
+
+/* ================= 설정 · 보관함 정리 ================= */
+.set-group { margin-bottom: 18px; }
+.set-group-title { margin: 18px 4px 8px; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+.set-list a { gap: 12px; padding: 12px 14px; min-height: 60px; box-sizing: border-box; }
+.set-ico { flex: none; width: 36px; height: 36px; border-radius: 11px; background: color-mix(in srgb, var(--accent) 12%, var(--panel)); color: var(--accent); display: grid; place-items: center; }
+.set-ico .ico { width: 20px; height: 20px; }
+.set-text { flex: 1; min-width: 0; }
+.set-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.set-text .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chev { color: var(--muted); font-size: 20px; line-height: 1; }
+.set-alert { display: block; font-size: 14px; margin-bottom: 4px; }
+.back-btn { display: inline-block; margin-bottom: 10px; }
+.set-page-title { margin: 0 0 14px; font-size: 26px; letter-spacing: -0.02em; }
+.settings.solo .panel > h3:first-child { display: none; }
+.clean-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.clean-row:first-child { border-top: 0; padding-top: 2px; }
+.clean-row .btn { flex: none; }
+.lib-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.lib-grid.three .lib-tile { min-height: 100px; padding: 14px 12px; }
+.libhub .home-head { align-items: center; }
+.libhub .lib-list, .settings .lib-list { max-width: 760px; margin-top: 0; }

@@ -1267,75 +1267,143 @@ async function renderEntities(ep, label, filterKey) {
 }
 
 // ---------------------------------------------------------------- settings
+/** 설정 아이콘 (선 그림) */
+const SET_ICON = {
+  display: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/>',
+  folder: '<path d="M3 7.5a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  cloud: '<path d="M17.5 19H7.2a4.7 4.7 0 0 1-.8-9.3A6 6 0 0 1 18 9.6a4.7 4.7 0 0 1-.5 9.4z"/>',
+  heart: '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>',
+  broom: '<path d="M14.5 3.5l6 6"/><path d="M17.5 6.5l-7 7"/><path d="M10.5 13.5c-3 0-6 2-7 7 5-1 7-4 7-7z"/>',
+  backup: '<path d="M12 3v12"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+  lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+};
+function setIcon(name) {
+  const span = document.createElement("span");
+  span.className = "set-ico";
+  span.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${SET_ICON[name]}</svg>`;
+  return span;
+}
+
+/** 설정: 첫 화면은 항목 목록, 항목을 누르면 그 항목만 보이는 화면 */
 async function renderSettings(opts = {}) {
   setTab("settings");
+  const section = opts.section !== undefined ? opts.section : parseHash().params.get("section");
+  const reload = () => renderSettings({ section });
   const [st, status] = await Promise.all([api("settings"), api("status")]);
-  const paths = st.library_paths.map((p) => p.path);
-  const savePaths = async (list) => { await api("settings", { method: "PUT", body: { library_paths: list } }); renderSettings(); };
-
-  const pathList = h("ul", { class: "pathlist" }, st.library_paths.length ? st.library_paths.map((p) =>
-    h("li", {}, h("span", { class: "p" }, p.path, !p.exists ? h("div", { class: "warn" }, "폴더를 찾을 수 없습니다 (저장소 권한을 확인하세요)") : null),
-      h("button", { class: "btn sm danger", onclick: () => savePaths(paths.filter((x) => x !== p.path)) }, "제거")))
-    : h("li", { class: "meta" }, "아직 추가된 폴더가 없습니다."));
-
-  const suggestions = st.suggestions.length ? h("div", {}, h("p", { class: "meta" }, "빠르게 추가:"),
-    h("div", { class: "chips" }, st.suggestions.map((s) =>
-      h("button", { class: "chip", onclick: () => savePaths(paths.concat([s])) }, "+ " + s.replace(/\/+$/, "").split("/").slice(-1)[0])))) : null;
-
-  const manual = h("input", { type: "text", placeholder: "직접 입력: " + (st.example_path || "/storage/emulated/0/Movies") });
   const c = status.counts || {};
-  const pw = h("input", { type: "password", placeholder: st.password_set ? "새 비밀번호 (비우면 해제)" : "비밀번호", autocomplete: "new-password" });
+  const themeName = { system: "시스템 설정", light: "라이트", dark: "다크" }[themePref()] || "시스템 설정";
+  const nCloud = (st.mega || []).length + (st.icloud || []).length;
 
-  $app.replaceChildren(h("div", { class: "settings" },
-    themePanel(),
-    st.fav_sync !== undefined ? favSyncPanel(st) : null,
-    h("div", { class: "panel" }, h("h3", {}, "라이브러리"),
-      h("div", { class: "stats" },
-        h("div", { class: "stat" }, h("b", {}, (c.total || 0).toLocaleString()), h("span", {}, "영상")),
-        h("div", { class: "stat" }, h("b", {}, fmtSize(c.bytes)), h("span", {}, "전체 크기")),
-        h("div", { class: "stat" }, h("b", {}, (c.seconds || 0) >= 3600 ? ((c.seconds / 3600).toFixed(1) + "시간") : fmtDur(c.seconds)), h("span", {}, "전체 길이")),
-        h("div", { class: "stat" }, h("b", {}, c.favorites || 0), h("span", {}, "즐겨찾기")))),
-    st.server ? serverPanel(st) : null,
-    h("div", { class: "panel" }, h("h3", {}, "영상 폴더"), pathList,
-      h("div", { class: "row" },
-        h("button", { class: "btn", onclick: () => folderPicker((p) => savePaths(paths.concat([p]))) }, "📁 폴더 찾아보기"),
-        h("button", { class: "btn primary", disabled: status.scanning || !paths.length, onclick: async () => {
-          await api("scan", { method: "POST" }); toast("스캔을 시작했습니다"); setTimeout(renderSettings, 800);
-        } }, status.scanning ? "스캔 중…" : "지금 스캔")),
-      h("div", { class: "taginput" }, manual, h("button", { class: "btn", onclick: () => manual.value.trim() && savePaths(paths.concat([manual.value.trim()])) }, "추가")),
-      suggestions ? h("div", { style: "margin-top:12px" }, suggestions) : null,
-      status.last_scan ? h("p", { class: "meta" }, `마지막 스캔: ${fmtDate(status.last_scan)}`) : null),
-    megaQuotaText(status) ? h("div", { class: "panel warn", style: "font-size:14px" }, megaQuotaText(status)) : null,
-    st.mega_supported ? cloudPanel(st) : null,
-    h("div", { class: "panel" }, h("h3", {}, "정리"),
-      h("p", { class: "meta" }, `찾을 수 없는 파일: ${c.missing || 0}개 (옮겨졌거나 삭제된 파일)`),
-      h("button", { class: "btn", disabled: !c.missing, onclick: async () => {
-        const r = await api("cleanup", { method: "POST" }); toast(`${r.removed}개를 정리했습니다`); renderSettings();
-      } }, "찾을 수 없는 파일 목록에서 지우기"),
-      st.duplicates ? h("div", { style: "margin-top:14px" },
-        h("p", { class: "meta" }, "같은 영상이 이 기기와 MEGA 에 함께 있거나, 여러 폴더에 들어 있는 경우를 찾습니다."),
-        h("a", { class: "btn", href: "#/duplicates" }, "중복 영상 찾기")) : null,
-      st.hidden_count !== undefined ? h("div", { style: "margin-top:14px" },
-        h("p", { class: "meta" }, `숨긴 영상: ${st.hidden_count}개 (라이브러리에서 제거했거나 중복이라 숨긴 영상)`),
-        h("a", { class: "btn", href: "#/hidden" }, "숨긴 영상 보기")) : null),
-    st.backup ? backupPanel() : null,
-    h("div", { class: "panel" }, h("h3", {}, "비밀번호 (같은 Wi-Fi에서 접속할 때 권장)"),
-      h("div", { class: "taginput" }, pw, h("button", { class: "btn", onclick: async () => {
-        await api("settings", { method: "PUT", body: { password: pw.value } });
-        toast(pw.value ? "비밀번호를 설정했습니다" : "비밀번호를 해제했습니다");
-        const a = await api("auth").catch(() => ({ ok: false }));
-        if (a.ok) renderSettings(); else renderLogin();
-      } }, "저장")),
-      h("p", { class: "meta" }, st.password_set ? "현재 비밀번호가 설정되어 있습니다." : "현재 비밀번호 없이 접속할 수 있습니다.")),
-    st.platform === "android" ? null : h("div", { class: "panel" }, h("h3", {}, "시스템"),
+  const SECTIONS = [
+    { group: "일반", items: [
+      { id: "display", icon: "display", title: "화면", sub: themeName },
+      { id: "library", icon: "folder", title: "라이브러리와 영상 폴더", sub: `영상 ${(c.total || 0).toLocaleString()}개 · 폴더 ${st.library_paths.length}개` },
+      st.mega_supported ? { id: "cloud", icon: "cloud", title: "클라우드", sub: nCloud ? `MEGA ${(st.mega || []).length} · iCloud ${(st.icloud || []).length}` : "연결된 곳 없음" } : null,
+      st.fav_sync !== undefined ? { id: "favorites", icon: "heart", title: "즐겨찾기 연동", sub: st.fav_sync ? (st.manage_media ? "갤러리와 연동 · 바로 반영" : "갤러리와 연동") : "앱 안에서만" } : null,
+    ] },
+    { group: "관리", items: [
+      { id: "cleanup", icon: "broom", title: "정리", sub: [c.missing ? `찾을 수 없는 파일 ${c.missing}` : "", st.hidden_count ? `숨긴 영상 ${st.hidden_count}` : ""].filter(Boolean).join(" · ") || "중복 영상 · 숨긴 영상" },
+      st.backup ? { id: "backup", icon: "backup", title: "백업 / 복원", sub: "정보를 파일로 저장하고 되살리기" } : null,
+      { id: "security", icon: "lock", title: "비밀번호와 다른 기기 접속", sub: (st.password_set ? "비밀번호 있음" : "비밀번호 없음") + (st.server && st.server.lan ? " · 다른 기기 접속 켜짐" : "") },
+      st.platform === "android" ? null : { id: "system", icon: "info", title: "시스템", sub: "데이터 폴더 · ffmpeg" },
+    ] },
+  ];
+
+  // ---- 첫 화면: 항목 목록
+  if (!section) {
+    const quota = megaQuotaText(status);
+    $app.replaceChildren(h("div", { class: "settings" },
+      h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "VidShelf"), h("h1", {}, "설정"))),
+      quota ? h("a", { class: "panel warn set-alert", href: "#/settings?section=cloud" }, "⚠ " + quota) : null,
+      ...SECTIONS.map((g) => h("section", { class: "set-group" },
+        h("h2", { class: "set-group-title" }, g.group),
+        h("div", { class: "lib-list set-list" }, g.items.filter(Boolean).map((it) =>
+          h("a", { href: `#/settings?section=${it.id}` }, setIcon(it.icon),
+            h("div", { class: "set-text" }, h("div", { class: "set-title" }, it.title), h("div", { class: "meta" }, it.sub)),
+            h("span", { class: "chev", "aria-hidden": "true" }, "›"))))))));
+    return;
+  }
+
+  // ---- 하위 화면
+  const info = SECTIONS.flatMap((g) => g.items).find((x) => x && x.id === section) || { title: "설정" };
+  const page = (...kids) => $app.replaceChildren(h("div", { class: "settings sub" + (kids.filter(Boolean).length === 1 ? " solo" : "") },
+    h("a", { class: "btn sm back-btn", href: "#/settings" }, "‹ 설정"),
+    h("h1", { class: "set-page-title" }, info.title),
+    ...kids.filter(Boolean)));
+
+  if (section === "display") return page(themePanel());
+  if (section === "favorites") return page(favSyncPanel(st));
+  if (section === "backup") return page(backupPanel());
+  if (section === "cloud") {
+    const quota = megaQuotaText(status);
+    return page(quota ? h("div", { class: "panel warn", style: "font-size:14px" }, quota) : null, cloudPanel(st));
+  }
+
+  if (section === "library") {
+    const paths = st.library_paths.map((p) => p.path);
+    const savePaths = async (list) => { await api("settings", { method: "PUT", body: { library_paths: list } }); reload(); };
+    const pathList = h("ul", { class: "pathlist" }, st.library_paths.length ? st.library_paths.map((p) =>
+      h("li", {}, h("span", { class: "p" }, p.path, !p.exists ? h("div", { class: "warn" }, "폴더를 찾을 수 없습니다 (저장소 권한을 확인하세요)") : null),
+        h("button", { class: "btn sm danger", onclick: () => savePaths(paths.filter((x) => x !== p.path)) }, "제거")))
+      : h("li", { class: "meta" }, "아직 추가된 폴더가 없습니다."));
+    const suggestions = st.suggestions.length ? h("div", { style: "margin-top:12px" }, h("p", { class: "meta" }, "빠르게 추가:"),
+      h("div", { class: "chips" }, st.suggestions.map((sg) =>
+        h("button", { class: "chip", onclick: () => savePaths(paths.concat([sg])) }, "+ " + sg.replace(/\/+$/, "").split("/").slice(-1)[0])))) : null;
+    const manual = h("input", { type: "text", placeholder: "직접 입력: " + (st.example_path || "/storage/emulated/0/Movies") });
+    return page(
+      h("div", { class: "panel" }, h("h3", {}, "한눈에"),
+        h("div", { class: "stats" },
+          h("div", { class: "stat" }, h("b", {}, (c.total || 0).toLocaleString()), h("span", {}, "영상")),
+          h("div", { class: "stat" }, h("b", {}, fmtSize(c.bytes)), h("span", {}, "전체 크기")),
+          h("div", { class: "stat" }, h("b", {}, (c.seconds || 0) >= 3600 ? ((c.seconds / 3600).toFixed(1) + "시간") : fmtDur(c.seconds)), h("span", {}, "전체 길이")),
+          h("div", { class: "stat" }, h("b", {}, c.favorites || 0), h("span", {}, "즐겨찾기")))),
+      h("div", { class: "panel" }, h("h3", {}, "영상 폴더"),
+        h("p", { class: "meta", style: "margin-top:0" }, "이 기기에서 영상과 사진을 가져올 폴더입니다."),
+        pathList,
+        h("div", { class: "row" },
+          h("button", { class: "btn", onclick: () => folderPicker((p) => savePaths(paths.concat([p]))) }, "📁 폴더 찾아보기"),
+          h("button", { class: "btn primary", disabled: status.scanning || !paths.length, onclick: async () => {
+            await api("scan", { method: "POST" }); toast("스캔을 시작했습니다"); setTimeout(reload, 800);
+          } }, status.scanning ? "스캔 중…" : "지금 스캔")),
+        h("div", { class: "taginput" }, manual, h("button", { class: "btn", onclick: () => manual.value.trim() && savePaths(paths.concat([manual.value.trim()])) }, "추가")),
+        suggestions,
+        status.last_scan ? h("p", { class: "meta" }, `마지막 스캔: ${fmtDate(status.last_scan)}`) : null));
+  }
+
+  if (section === "cleanup") {
+    const row = (title, sub, action) => h("div", { class: "clean-row" }, h("div", {}, h("div", { class: "set-title" }, title), h("div", { class: "meta" }, sub)), action);
+    return page(h("div", { class: "panel" },
+      row("찾을 수 없는 파일", `${c.missing || 0}개 · 옮겨졌거나 삭제된 파일의 기록`,
+        h("button", { class: "btn sm", disabled: !c.missing, onclick: async () => {
+          const r = await api("cleanup", { method: "POST" }); toast(`${r.removed}개를 정리했습니다`); reload();
+        } }, "지우기")),
+      st.duplicates ? row("중복 영상", "기기와 클라우드, 여러 폴더에 같은 영상이 있는지 찾기", h("a", { class: "btn sm", href: "#/duplicates" }, "찾기")) : null,
+      st.hidden_count !== undefined ? row("숨긴 영상", `${st.hidden_count}개 · 라이브러리에서 제거했거나 중복이라 숨긴 영상`, h("a", { class: "btn sm", href: "#/hidden" }, "보기")) : null));
+  }
+
+  if (section === "security") {
+    const pw = h("input", { type: "password", placeholder: st.password_set ? "새 비밀번호 (비우면 해제)" : "비밀번호", autocomplete: "new-password", "aria-label": "비밀번호" });
+    return page(
+      h("div", { class: "panel" }, h("h3", {}, "비밀번호"),
+        h("p", { class: "meta", style: "margin-top:0" }, st.password_set ? "비밀번호가 설정되어 있습니다. 같은 Wi-Fi 의 다른 기기에서 접속할 때 필요합니다." : "비밀번호가 없습니다. 다른 기기에서 접속하려면 먼저 정하세요."),
+        h("div", { class: "taginput" }, pw, h("button", { class: "btn", onclick: async () => {
+          await api("settings", { method: "PUT", body: { password: pw.value } });
+          toast(pw.value ? "비밀번호를 설정했습니다" : "비밀번호를 해제했습니다");
+          const au = await api("auth").catch(() => ({ ok: false }));
+          if (au.ok) reload(); else renderLogin();
+        } }, "저장"))),
+      st.server ? serverPanel(st) : null);
+  }
+
+  if (section === "system") {
+    return page(h("div", { class: "panel" },
       h("dl", { class: "info" },
         h("dt", {}, "데이터 폴더"), h("dd", {}, st.data_dir),
         h("dt", {}, "ffmpeg"), h("dd", {}, st.ffmpeg ? "사용 가능" : "없음 — pkg install ffmpeg"),
-        h("dt", {}, "ffprobe"), h("dd", {}, st.ffprobe ? "사용 가능" : "없음 — pkg install ffmpeg")))));
-  if (opts.section === "cloud") {   // ‘클라우드 파일’에서 온 경우 클라우드 칸으로 바로
-    const el = document.getElementById("cloud-settings");
-    if (el) requestAnimationFrame(() => { el.scrollIntoView({ behavior: "smooth", block: "start" }); el.classList.add("flash"); });
+        h("dt", {}, "ffprobe"), h("dd", {}, st.ffprobe ? "사용 가능" : "없음 — pkg install ffmpeg"))));
   }
+  location.hash = "#/settings";
 }
 
 // ---------------------------------------------------------------- 출연자 프로필
@@ -1519,7 +1587,7 @@ function cloudPanel(st) {
     try {
       await api(kind, { method: "POST", body: { url } });
       toast(kind === "mega" ? "MEGA 폴더를 추가했습니다" : "iCloud 앨범을 추가했습니다");
-      renderSettings({ section: "cloud" });
+      renderSettings();
     } catch (e) { msg.textContent = e.message; btn.disabled = false; }
   };
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(addBtn); } });
@@ -1530,7 +1598,7 @@ function cloudPanel(st) {
     h("a", { class: "btn sm", href: open }, "열기"),
     h("button", { class: "btn sm danger", onclick: async () => {
       if (!confirm(`‘${l.name}’ 연결을 끊을까요? (클라우드의 파일은 그대로입니다)`)) return;
-      await api(del, { method: "DELETE" }); renderSettings({ section: "cloud" });
+      await api(del, { method: "DELETE" }); renderSettings();
     } }, "제거"));
   const rows = [
     ...mega.map((l) => item("mega", l, `파일 ${l.files}개 · 영상 ${l.videos}개`, `#/mega?link=${l.index}`, `mega/${l.index}`)),
@@ -1548,7 +1616,7 @@ function cloudPanel(st) {
     mega.length && st.mega_thumbs !== undefined ? megaThumbToggle(st) : null,
     rows.length && st.mega_refresh_hours !== undefined ? megaRefreshSelect(st) : null,
     rows.length ? h("button", { class: "btn sm", style: "margin-top:8px", onclick: async (e) => {
-      e.currentTarget.disabled = true; await api("mega/refresh", { method: "POST" }); toast("클라우드 목록을 새로 받았습니다"); renderSettings({ section: "cloud" });
+      e.currentTarget.disabled = true; await api("mega/refresh", { method: "POST" }); toast("클라우드 목록을 새로 받았습니다"); renderSettings();
     } }, "클라우드 목록 새로고침") : null);
 }
 
@@ -1602,7 +1670,7 @@ async function renderCloud() {
     h("h2", { class: "pf-sec" }, "iCloud 공유 앨범"),
     icloud.length ? h("div", { class: "lib-list" }, icloud.map((a) => row(`#/icloud?a=${a.index}`, " " + a.name, `사진 ${a.photos}장 · 영상 ${a.videos}개`, a.error)))
       : h("p", { class: "meta" }, "연결된 iCloud 공유 앨범이 없습니다."),
-    h("a", { class: "btn", href: "#/settings?section=cloud", style: "margin-top:16px;display:inline-block" }, "설정에서 링크 추가·삭제")));
+    h("a", { class: "btn", href: "#/settings?section=cloud", style: "margin-top:16px;display:inline-block" }, "링크 추가·삭제")));
 }
 
 async function renderICloudAlbum(i) {
@@ -1761,6 +1829,7 @@ async function renderShorts(params) {
 
 // ---------------------------------------------------------------- 보관함 (사진·출연자·태그·설정 모음)
 const LIB_ICON = {
+  heart: '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>',
   photos: '<rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="9" cy="9" r="1.8"/><path d="M21 15.5l-5-5L4.5 21"/>',
   people: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5"/>',
   tags: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.4"/>',
@@ -1774,21 +1843,28 @@ function libIcon(name) {
 async function renderLibraryHub() {
   setTab("library");
   if (!Object.keys(serverCaps).length) serverCaps = await api("settings").catch(() => ({}));
-  const tile = (href, icon, title, sub) => h("a", { class: "lib-tile", href }, libIcon(icon), h("div", {}, h("b", {}, title), h("br"), h("span", {}, sub)));
-  const photoSub = h("span", {}, "…"), peopleSub = h("span", {}, "…"), tagSub = h("span", {}, "…");
-  $app.replaceChildren(h("div", {},
-    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "출연자 · 태그 · 설정"), h("h1", {}, "보관함"))),
-    h("div", { class: "lib-grid" },
-      h("a", { class: "lib-tile", href: "#/performers" }, libIcon("people"), h("div", {}, h("b", {}, "출연자"), h("br"), peopleSub)),
-      h("a", { class: "lib-tile", href: "#/tags" }, libIcon("tags"), h("div", {}, h("b", {}, "태그"), h("br"), tagSub)),
-      tile("#/settings", "settings", "설정", "폴더 · 클라우드 · 백업 · 화면")),
-    h("div", { class: "lib-list" },
-      serverCaps.mega_supported ? h("a", { href: "#/cloud" }, "☁ 클라우드 파일", h("span", {}, "MEGA · iCloud ›")) : null,
-      serverCaps.duplicates ? h("a", { href: "#/duplicates" }, "중복 영상 찾기", h("span", {}, "›")) : null,
-      serverCaps.hidden_count !== undefined ? h("a", { href: "#/hidden" }, "숨긴 영상", h("span", {}, `${serverCaps.hidden_count}개 ›`)) : null,
-      h("a", { href: "#/?fav=1" }, "즐겨찾기 영상", h("span", {}, "›")))));
-  api("performers").then((l) => (peopleSub.textContent = `${l.length}명`)).catch(() => {});
-  api("tags").then((l) => (tagSub.textContent = `${l.length}개`)).catch(() => {});
+  const count = (txt) => h("span", { class: "meta" }, txt);
+  const peopleN = count("…"), tagN = count("…"), favN = count("…");
+  const cloudN = (serverCaps.mega || []).length + (serverCaps.icloud || []).length;
+  const tile = (href, icon, title, n) => h("a", { class: "lib-tile", href }, libIcon(icon), h("div", {}, h("b", {}, title), h("br"), n));
+  const row = (href, icon, title, sub) => h("a", { href }, setIcon(icon), h("div", { class: "set-text" }, h("div", { class: "set-title" }, title), sub ? h("div", { class: "meta" }, sub) : null), h("span", { class: "chev", "aria-hidden": "true" }, "›"));
+  $app.replaceChildren(h("div", { class: "libhub" },
+    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "출연자 · 태그 · 즐겨찾기 · 파일"), h("h1", {}, "보관함"))),
+    h("h2", { class: "set-group-title" }, "모아 보기"),
+    h("div", { class: "lib-grid three" },
+      tile("#/performers", "people", "출연자", peopleN),
+      tile("#/tags", "tags", "태그", tagN),
+      tile("#/media?fav=1", "heart", "즐겨찾기", favN)),
+    h("h2", { class: "set-group-title" }, "파일"),
+    h("div", { class: "lib-list set-list" },
+      serverCaps.mega_supported ? row("#/cloud", "cloud", "클라우드 파일", cloudN ? `MEGA ${(serverCaps.mega || []).length} · iCloud ${(serverCaps.icloud || []).length}` : "MEGA · iCloud 링크 연결") : null,
+      serverCaps.duplicates ? row("#/duplicates", "broom", "중복 영상", "같은 영상이 여러 곳에 있는지 찾기") : null,
+      serverCaps.hidden_count !== undefined ? row("#/hidden", "info", "숨긴 영상", `${serverCaps.hidden_count}개`) : null),
+    h("h2", { class: "set-group-title" }, "앱"),
+    h("div", { class: "lib-list set-list" }, row("#/settings", "display", "설정", "화면 · 폴더 · 클라우드 · 백업 · 비밀번호"))));
+  api("performers").then((l) => (peopleN.textContent = `${l.length}명`)).catch(() => {});
+  api("tags").then((l) => (tagN.textContent = `${l.length}개`)).catch(() => {});
+  api("media?type=all&fav=1&per=1").then((d) => (favN.textContent = `${d.total.toLocaleString()}개`)).catch(() => {});
 }
 
 function favSyncPanel(st) {
