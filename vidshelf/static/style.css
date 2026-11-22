@@ -701,7 +701,7 @@ body.shorts-mode #app { position: fixed; inset: 0; z-index: 1; }
   border-color: color-mix(in srgb, var(--nav-border) 70%, transparent) !important; }
 
 /* ---------- 미디어 위쪽: 네모난 판 없이 버튼만 떠 있게, 상태 표시줄과 조금 떨어지게 ---------- */
-.media-bar { top: 10px !important; margin: 0 0 10px !important; padding: 0 !important;
+.media-bar { top: 22px !important; margin: 0 0 10px !important; padding: 0 !important;
   background: none !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; border: 0 !important; }
 .media-bar .type-seg, .media-bar .round-btn, .media-bar .fchip, .sel-bar .round-btn, .sel-bar .sel-count, .sel-bar .btn {
   background: color-mix(in srgb, var(--panel) 76%, transparent) !important;

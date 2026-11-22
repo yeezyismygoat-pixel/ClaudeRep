@@ -36,8 +36,15 @@ public class ServerService extends Service {
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
 
+    /** 다른 기기 접속이 켜져 있을 때만 ‘실행 중’ 알림과 함께 계속 돌고, 아니면 알림 없이 앱을 쓰는 동안만 돔. */
     public static void start(Context ctx) {
-        ctx.startForegroundService(new Intent(ctx, ServerService.class));
+        Library lib = Library.get(ctx);
+        boolean lan = lib.lanEnabled() && lib.passwordSet();
+        Intent i = new Intent(ctx, ServerService.class);
+        try {
+            if (lan) ctx.startForegroundService(i); else ctx.startService(i);
+        } catch (Exception ignored) {   // 앱이 뒤에 있을 때는 시작이 막힘 → 앱을 다시 열면 시작됨
+        }
     }
 
     public static void stop(Context ctx) {
@@ -54,10 +61,14 @@ public class ServerService extends Service {
         }
         Library lib = Library.get(this);
         boolean lan = lib.lanEnabled() && lib.passwordSet();
-        if (Build.VERSION.SDK_INT >= 34)
-            startForeground(1, buildNotification(lan), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
-        else
-            startForeground(1, buildNotification(lan));
+        if (lan) {   // 다른 기기에서 접속할 수 있게 뒤에서도 계속 돌아야 하므로 알림 표시 (안드로이드 규칙)
+            if (Build.VERSION.SDK_INT >= 34)
+                startForeground(1, buildNotification(lan), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            else
+                startForeground(1, buildNotification(lan));
+        } else {
+            stopForeground(STOP_FOREGROUND_REMOVE);   // 알림 없이
+        }
         try {
             if (server == null) server = new HttpServer(lib);
             Exception last = null;

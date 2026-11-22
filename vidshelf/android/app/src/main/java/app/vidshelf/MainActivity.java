@@ -343,7 +343,6 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33) {
             perms.add(Manifest.permission.READ_MEDIA_VIDEO);
             perms.add(Manifest.permission.READ_MEDIA_IMAGES);
-            perms.add(Manifest.permission.POST_NOTIFICATIONS);
         } else {
             perms.add(Manifest.permission.READ_EXTERNAL_STORAGE);
         }

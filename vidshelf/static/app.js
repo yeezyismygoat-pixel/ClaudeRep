@@ -1438,7 +1438,7 @@ async function renderEntities(ep, label, filterKey) {
             h("span", { class: "name", title: e.name }, e.name),
             h("span", { class: "meta" }, e.photo_count ? `${e.count} · 사진 ${e.photo_count}` : `${e.count}`)),
           e.group !== undefined ? h("div", { class: "body meta", style: "padding-top:0;display:block" },
-            [e.group, e.birthdate ? `${e.birthdate} (${age(e.birthdate)}세)` : "", e.height ? `${e.height}cm` : ""].filter(Boolean).join(" · ") || "정보 없음") : null);
+            [e.group, e.birthdate ? `${age(e.birthdate)}세` : "", e.height ? `${e.height}cm` : ""].filter(Boolean).join(" · ") || "정보 없음") : null);
       }
       // 태그: 누르면 그 태그 영상 목록. 이름 변경·삭제는 ‘수정’을 눌렀을 때만
       const href = `#/?${filterKey}=${e.id}`;
@@ -1782,6 +1782,7 @@ function serverPanel(st) {
       : "⚠ 일반 공간에서 실행 중입니다. 보안 폴더 영상만 보려면 보안 폴더 안의 VidShelf 를 쓰세요."),
     h("label", { class: "row", for: "lan-toggle", style: "margin:10px 0" }, toggle, h("span", {}, "같은 Wi-Fi 의 다른 기기에서 접속 허용")),
     !st.password_set ? h("p", { class: "meta" }, "켜려면 먼저 아래 ‘비밀번호’에서 비밀번호를 정하세요. 다른 기기에서는 그 비밀번호로 로그인합니다.") : null,
+    h("p", { class: "meta" }, "켜 두면 앱을 닫아도 계속 접속할 수 있도록 ‘VidShelf 실행 중’ 알림이 표시됩니다 (안드로이드 규칙). 끄면 알림 없이 앱을 쓰는 동안만 동작합니다."),
     sv.lan ? (sv.lan_addresses.length
       ? h("div", {}, h("p", { class: "meta" }, "다른 기기의 브라우저에서 이 주소를 여세요:"),
           ...sv.lan_addresses.map((a) => h("p", { style: "font-size:18px;margin:4px 0;user-select:all" }, a)))
