@@ -701,6 +701,191 @@ function slideTo(hash, dir) {
   location.hash = hash;
 }
 
+/** 선택 모드: 길게 누르면 선택, 이어서 누르면 더 고르기, 고른 항목을 한꺼번에 수정.
+ *  opts: holder(위쪽 막대 자리), refresh(바뀐 뒤 다시 그리기), performers, tags */
+function makeSelection(opts) {
+// ---- 선택 모드: 길게 누르면 선택, 이어서 누르면 더 고르기, 고른 항목을 한꺼번에 수정
+const selected = new Map();   // "kind:id" → 항목
+const keyOf = (it) => `${it.kind}:${it.id}`;
+const cells = new Map();      // "kind:id" → 칸
+const selCount = h("b");
+const selBar = h("div", { class: "sel-bar", hidden: true },
+  h("button", { class: "round-btn", "aria-label": "선택 취소", onclick: () => endSelect() }, icon("close")),
+  h("span", { class: "sel-count" }, selCount, "개 선택"),
+  h("button", { class: "btn sm", onclick: () => { cells.forEach((el, k) => { if (!selected.has(k)) toggleSel(el._item, el); }); } }, "모두 선택"));
+const act = (label, ico, fn) => { const b = h("button", { class: "sel-act", onclick: fn }); b.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ico}</svg>`; b.append(label); return b; };
+const actBar = h("div", { class: "sel-actions", hidden: true },
+  act("태그", '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.4"/>', () => editLinks("tags")),
+  act("출연자", '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5"/>', () => editLinks("performers")),
+  act("날짜", '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>', () => editDate()),
+  act("즐겨찾기", '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>', () => editFav()),
+  act("삭제", '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>', () => editDelete()));
+opts.holder.append(selBar);   // 아래 버튼 막대는 움직임 효과가 걸린 화면 밖(body)에 붙여야 화면 맨 아래에 고정됨
+let selecting = false;
+function onSelPop() { if (selecting) endSelect(false, true, true); }
+function startSelect() {
+  selecting = true;
+  history.pushState({ vsSel: true }, "");   // 뒤로 가기를 누르면 이전 화면이 아니라 선택 모드만 끝남
+  window.addEventListener("popstate", onSelPop);
+  document.body.classList.add("selecting");
+  if (!actBar.isConnected) document.body.append(actBar);
+  selBar.hidden = false; actBar.hidden = false;
+  pageCleanup = () => endSelect(true);
+}
+function endSelect(silent, animate, fromPop) {
+  if (!selecting && !fromPop) return;
+  selecting = false;
+  window.removeEventListener("popstate", onSelPop);
+  if (!fromPop && !silent && history.state && history.state.vsSel) history.back();   // 넣어 둔 기록을 정리
+  selected.clear();
+  cells.forEach((el) => el.classList.remove("sel"));
+  document.body.classList.remove("selecting");
+  const finish = () => { selBar.hidden = true; actBar.hidden = true; actBar.remove(); selBar.classList.remove("leaving"); actBar.classList.remove("leaving"); };
+  if (animate) {   // 막대들이 부드럽게 사라지고 원래 버튼·하단 메뉴가 돌아옴
+    selBar.classList.add("leaving"); actBar.classList.add("leaving");
+    setTimeout(finish, 220);
+  } else finish();
+  if (!silent) pageCleanup = null;
+}
+function toggleSel(it, el) {
+  const k = keyOf(it);
+  if (selected.has(k)) { selected.delete(k); el.classList.remove("sel"); } else { selected.set(k, it); el.classList.add("sel"); }
+  selCount.textContent = selected.size;
+  if (!selected.size) { endSelect(false, true); return; }   // 하나도 안 남으면 선택 모드 끝
+}
+function selectable(el, it) {
+  el._item = it;
+  cells.set(keyOf(it), el);
+  if (selected.has(keyOf(it))) el.classList.add("sel");
+  let timer = null, sx = 0, sy = 0, fired = false;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  el.addEventListener("touchstart", (e) => {
+    fired = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    if (selecting) return;
+    timer = setTimeout(() => {   // 길게 누르면 선택 모드 시작
+      timer = null; fired = true;
+      try { navigator.vibrate && navigator.vibrate(18); } catch (er) {}
+      startSelect(); toggleSel(it, el);
+    }, 480);
+  }, { passive: true });
+  el.addEventListener("touchmove", (e) => { if (timer && Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 10) cancel(); }, { passive: true });
+  el.addEventListener("touchend", cancel);
+  el.addEventListener("touchcancel", cancel);
+  el.addEventListener("contextmenu", (e) => { e.preventDefault(); if (!selecting) { startSelect(); toggleSel(it, el); } });
+  el.addEventListener("click", (e) => {   // 선택 모드에서는 열지 않고 고르기
+    if (fired) { e.preventDefault(); e.stopImmediatePropagation(); fired = false; return; }
+    if (selecting) { e.preventDefault(); e.stopImmediatePropagation(); toggleSel(it, el); }
+  }, true);
+  return el;
+}
+const selItems = () => [...selected.values()].map((it) => ({ kind: it.kind, id: it.id }));
+async function applyBatch(body, msg) {
+  try {
+    const r = await api("batch", { method: "POST", body: { items: selItems(), ...body } });
+    toast(msg.replace("{n}", r.updated));
+    endSelect();
+    opts.refresh();
+  } catch (e) { toast(e.message); }
+}
+
+/** 태그·출연자: 선택한 항목에 붙은 것은 빼고, 새로 넣을 것은 추가 */
+async function editLinks(field) {
+  const label = field === "tags" ? "태그" : "출연자";
+  const info = await api("batch/info", { method: "POST", body: { items: selItems() } }).catch(() => null);
+  if (!info) return;
+  const remove = new Set(), add = new Set();
+  const curBox = h("div", { class: "chips" });
+  const drawCur = () => curBox.replaceChildren(...(info[field].length ? info[field].map((t) => {
+    const off = remove.has(t.id);
+    return h("button", { class: "chip" + (off ? " struck" : ""), "aria-pressed": off ? "true" : "false",
+      onclick: () => { off ? remove.delete(t.id) : remove.add(t.id); drawCur(); } },
+      (field === "tags" ? "#" : "") + t.name, h("span", { class: "meta" }, ` ${t.count}/${info.total}`), off ? " ✕" : "");
+  }) : [h("span", { class: "meta" }, `선택한 항목에 붙은 ${label}이(가) 없습니다.`)]));
+  const all = (field === "tags" ? opts.tags : opts.performers) || [];
+  const addBox = h("div", { class: "chips" });
+  const drawAdd = () => addBox.replaceChildren(...[...add].map((n) => h("span", { class: "chip on" }, (field === "tags" ? "#" : "") + n,
+    h("button", { "aria-label": `${n} 빼기`, onclick: () => { add.delete(n); drawAdd(); } }, "×"))));
+  const listId = "dl-batch-" + field;
+  const input = h("input", { type: "text", list: listId, placeholder: `추가할 ${label} 이름 (Enter)`, "aria-label": `추가할 ${label}` });
+  const addName = () => { input.value.split(",").map((x) => x.trim()).filter(Boolean).forEach((n) => add.add(n)); input.value = ""; drawAdd(); };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addName(); } });
+  const quick = all.slice().sort((a, b) => ((b.count || 0) + (b.photo_count || 0)) - ((a.count || 0) + (a.photo_count || 0))).slice(0, 12)
+    .map((t) => h("button", { class: "chip", onclick: () => { add.add(t.name); drawAdd(); } }, "+ " + (field === "tags" ? "#" : "") + t.name));
+  drawCur(); drawAdd();
+  const close = openSheet(`${label} 한꺼번에 고치기 · ${selected.size}개`, [
+    h("div", { class: "sheet-sec" }, h("h3", {}, `붙어 있는 ${label} (누르면 빼기)`), curBox),
+    h("div", { class: "sheet-sec" }, h("h3", {}, `추가할 ${label}`), addBox, h("div", { class: "taginput" }, input, h("button", { class: "btn", onclick: addName }, "추가")),
+      h("datalist", { id: listId }, all.map((t) => h("option", { value: t.name }))),
+      quick.length ? h("div", { class: "chips", style: "margin-top:4px" }, ...quick) : null),
+  ], [
+    h("button", { class: "btn", onclick: () => close() }, "취소"),
+    h("button", { class: "btn primary sheet-go", onclick: () => {
+      if (input.value.trim()) addName();
+      if (!add.size && !remove.size) { close(); return; }
+      close(() => applyBatch({ ["add_" + field]: [...add], ["remove_" + field]: [...remove] }, `${label}를 {n}개 항목에 반영했습니다`));
+    } }, "적용"),
+  ]);
+}
+
+/** 날짜: 선택한 항목의 날짜를 한꺼번에 바꾸기 (정렬·사진 정보에 쓰임) */
+function editDate() {
+  const first = [...selected.values()][0] || {};
+  const ts = first.taken || first.added_at || Date.now() / 1000;
+  const d = new Date(ts * 1000), pad = (n) => String(n).padStart(2, "0");
+  const input = h("input", { type: "datetime-local", value: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`, "aria-label": "날짜와 시간" });
+  const close = openSheet(`날짜 바꾸기 · ${selected.size}개`, [
+    h("p", { class: "meta", style: "margin:0" }, "고른 사진·영상의 날짜를 아래 날짜로 바꿉니다. ‘추가한 날짜’ 정렬과 사진의 촬영 날짜에 쓰입니다. 파일 자체는 바뀌지 않습니다."),
+    input,
+    h("button", { class: "btn", onclick: () => close(() => applyBatch({ date: 0 }, "{n}개 항목을 원래 날짜로 되돌렸습니다")) }, "원래 날짜로 되돌리기"),
+  ], [
+    h("button", { class: "btn", onclick: () => close() }, "취소"),
+    h("button", { class: "btn primary sheet-go", onclick: () => {
+      const t = new Date(input.value).getTime();
+      if (!t) { toast("날짜를 고르세요"); return; }
+      close(() => applyBatch({ date: Math.round(t / 1000) }, "{n}개 항목의 날짜를 바꿨습니다"));
+    } }, "적용"),
+  ]);
+}
+
+function editFav() {
+  const allFav = [...selected.values()].every((it) => it.favorite);
+  const close = openSheet(`즐겨찾기 · ${selected.size}개`, [
+    h("p", { class: "meta", style: "margin:0" }, "기기 사진·영상은 갤러리 즐겨찾기에도 반영됩니다."),
+  ], [
+    h("button", { class: "btn", onclick: () => close(() => applyBatch({ favorite: false }, "{n}개를 즐겨찾기에서 뺐습니다")) }, "즐겨찾기에서 빼기"),
+    h("button", { class: "btn primary sheet-go", onclick: () => close(() => applyBatch({ favorite: true }, "♥ {n}개를 즐겨찾기에 넣었습니다")) }, allFav ? "이미 모두 즐겨찾기" : "♥ 즐겨찾기에 넣기"),
+  ]);
+}
+
+/** 삭제: 기기 파일은 휴지통으로 옮기거나 영구 삭제 (안드로이드가 한 번 확인), 클라우드 항목은 목록에서 숨김 */
+function editDelete() {
+  const list = [...selected.values()];
+  const cloud = list.filter((it) => it.source && it.source !== "local").length;
+  const reloadSoon = () => {   // 확인 창을 닫고 돌아오면 목록을 새로 고침
+    const onVis = () => { if (document.visibilityState === "visible") { document.removeEventListener("visibilitychange", onVis); setTimeout(() => opts.refresh(), 600); } };
+    document.addEventListener("visibilitychange", onVis);
+    setTimeout(() => opts.refresh(), 2500);
+  };
+  const run = async (mode) => {
+    try {
+      await api("batch", { method: "POST", body: { items: selItems(), delete: mode } });
+      toast(mode === "trash" ? "휴지통으로 옮깁니다. 확인 창에서 허용하세요." : "영구 삭제합니다. 확인 창에서 허용하세요.");
+      endSelect(); reloadSoon();
+    } catch (e) { toast(e.message); }
+  };
+  const close = openSheet(`삭제 · ${list.length}개`, [
+    h("p", { class: "meta", style: "margin:0" }, "휴대폰의 실제 파일을 지웁니다. 안드로이드가 한 번 더 확인합니다."),
+    h("button", { class: "del-opt", onclick: () => close(() => run("trash")) },
+      h("b", {}, "휴지통으로 옮기기"), h("span", { class: "meta" }, "갤러리 휴지통에서 약 30일 동안 되살릴 수 있습니다.")),
+    h("button", { class: "del-opt danger", onclick: () => { if (confirm(`${list.length}개를 영구 삭제할까요? 되돌릴 수 없습니다.`)) close(() => run("delete")); } },
+      h("b", {}, "영구 삭제"), h("span", { class: "meta" }, "바로 지워지고 되돌릴 수 없습니다.")),
+    cloud ? h("p", { class: "meta", style: "margin:0" }, `MEGA·iCloud 항목 ${cloud}개는 공유 링크라 지울 수 없어서, 이 앱 목록에서만 숨깁니다 (설정 → 정리 → 숨긴 영상에서 되돌릴 수 있음).`) : null,
+  ], [h("button", { class: "btn", style: "grid-column: 1 / -1", onclick: () => close() }, "취소")]);
+}
+
+  return { selectable, cells, endSelect, isSelecting: () => selecting };
+}
+
 /** 미디어 탭 (1번 시안: 필터 시트). type = all | video | photo
  *  종류·보기 방식·필터를 바꿀 때는 화면 전체가 아니라 목록 부분만 바꿉니다. */
 async function renderMedia(params0, type0) {
@@ -758,6 +943,9 @@ async function renderMedia(params0, type0) {
   const chipsBox = h("div", { class: "fchips" });
   const content = h("div", { class: "mcontent-wrap" });
   const selHolder = h("div"), actHolder = h("div");   // 선택 모드 막대 자리
+  const sel = makeSelection({ holder: selHolder, refresh: () => update({ anim: "fade" }), performers, tags });
+  const { selectable, cells } = sel;
+  const mediaTab = parseHash().path === "/media";   // 미디어 탭의 목록 보기는 꾹 누르면 미리보기, 태그·출연자로 들어온 목록은 선택
 
   function drawHeader() {
     const mode = viewMode("media") === "wall" ? "wall" : "feed";
@@ -848,12 +1036,12 @@ async function renderMedia(params0, type0) {
             if (!run || !run.classList.contains("photo-run")) { run = h("div", { class: "wall photo-run" }); grid.append(run); }
             const fb = parseFloat(cell.style.flexBasis);   // 목록 사이에서는 줄 높이를 낮춰 한 줄에 여러 장
             if (fb) cell.style.flexBasis = `${Math.round(fb * 0.5)}px`;
-            run.append(cell);
+            run.append(mediaTab ? cell : selectable(cell, it));
           }
         } else if (mode === "wall") {
           grid.append(selectable(videoTile(it), it));
         } else {
-          grid.append(holdPreview(ytCell(it, null), it));   // 목록 보기: 꾹 누르면 미리보기 재생 (선택 기능 없음)
+          grid.append(mediaTab ? holdPreview(ytCell(it, null), it) : selectable(ytCell(it, null), it));   // 미디어 탭 목록 보기: 꾹 누르면 미리보기
         }
       }
       const shown = (page - 1) * d.per + d.items.length;
@@ -863,153 +1051,6 @@ async function renderMedia(params0, type0) {
       if (shown < d.total) autoMore(more, () => { page++; load(); }); else more.replaceChildren();
     }
     await load();
-  }
-
-  // ---- 선택 모드: 길게 누르면 선택, 이어서 누르면 더 고르기, 고른 항목을 한꺼번에 수정
-  const selected = new Map();   // "kind:id" → 항목
-  const keyOf = (it) => `${it.kind}:${it.id}`;
-  const cells = new Map();      // "kind:id" → 칸
-  const selCount = h("b");
-  const selBar = h("div", { class: "sel-bar", hidden: true },
-    h("button", { class: "round-btn", "aria-label": "선택 취소", onclick: () => endSelect() }, icon("close")),
-    h("span", { class: "sel-count" }, selCount, "개 선택"),
-    h("button", { class: "btn sm", onclick: () => { cells.forEach((el, k) => { if (!selected.has(k)) toggleSel(el._item, el); }); } }, "모두 선택"));
-  const act = (label, ico, fn) => { const b = h("button", { class: "sel-act", onclick: fn }); b.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ico}</svg>`; b.append(label); return b; };
-  const actBar = h("div", { class: "sel-actions", hidden: true },
-    act("태그", '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.4"/>', () => editLinks("tags")),
-    act("출연자", '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5"/>', () => editLinks("performers")),
-    act("날짜", '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>', () => editDate()),
-    act("즐겨찾기", '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>', () => editFav()),
-    act("삭제", '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>', () => editDelete()));
-  selHolder.append(selBar);   // 아래 버튼 막대는 움직임 효과가 걸린 화면 밖(body)에 붙여야 화면 맨 아래에 고정됨
-  let selecting = false;
-  function startSelect() {
-    selecting = true;
-    document.body.classList.add("selecting");
-    if (!actBar.isConnected) document.body.append(actBar);
-    selBar.hidden = false; actBar.hidden = false;
-    pageCleanup = () => endSelect(true);
-  }
-  function endSelect(silent, animate) {
-    selecting = false;
-    selected.clear();
-    cells.forEach((el) => el.classList.remove("sel"));
-    document.body.classList.remove("selecting");
-    const finish = () => { selBar.hidden = true; actBar.hidden = true; actBar.remove(); selBar.classList.remove("leaving"); actBar.classList.remove("leaving"); };
-    if (animate) {   // 막대들이 부드럽게 사라지고 원래 버튼·하단 메뉴가 돌아옴
-      selBar.classList.add("leaving"); actBar.classList.add("leaving");
-      setTimeout(finish, 220);
-    } else finish();
-    if (!silent) pageCleanup = null;
-  }
-  function toggleSel(it, el) {
-    const k = keyOf(it);
-    if (selected.has(k)) { selected.delete(k); el.classList.remove("sel"); } else { selected.set(k, it); el.classList.add("sel"); }
-    selCount.textContent = selected.size;
-    if (!selected.size) { endSelect(false, true); return; }   // 하나도 안 남으면 선택 모드 끝
-  }
-  function selectable(el, it) {
-    el._item = it;
-    cells.set(keyOf(it), el);
-    if (selected.has(keyOf(it))) el.classList.add("sel");
-    let timer = null, sx = 0, sy = 0, fired = false;
-    const cancel = () => { clearTimeout(timer); timer = null; };
-    el.addEventListener("touchstart", (e) => {
-      fired = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-      if (selecting) return;
-      timer = setTimeout(() => {   // 길게 누르면 선택 모드 시작
-        timer = null; fired = true;
-        try { navigator.vibrate && navigator.vibrate(18); } catch (er) {}
-        startSelect(); toggleSel(it, el);
-      }, 480);
-    }, { passive: true });
-    el.addEventListener("touchmove", (e) => { if (timer && Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 10) cancel(); }, { passive: true });
-    el.addEventListener("touchend", cancel);
-    el.addEventListener("touchcancel", cancel);
-    el.addEventListener("contextmenu", (e) => { e.preventDefault(); if (!selecting) { startSelect(); toggleSel(it, el); } });
-    el.addEventListener("click", (e) => {   // 선택 모드에서는 열지 않고 고르기
-      if (fired) { e.preventDefault(); e.stopImmediatePropagation(); fired = false; return; }
-      if (selecting) { e.preventDefault(); e.stopImmediatePropagation(); toggleSel(it, el); }
-    }, true);
-    return el;
-  }
-  const selItems = () => [...selected.values()].map((it) => ({ kind: it.kind, id: it.id }));
-  async function applyBatch(body, msg) {
-    try {
-      const r = await api("batch", { method: "POST", body: { items: selItems(), ...body } });
-      toast(msg.replace("{n}", r.updated));
-      endSelect();
-      update({ anim: "fade" });
-    } catch (e) { toast(e.message); }
-  }
-
-  /** 태그·출연자: 선택한 항목에 붙은 것은 빼고, 새로 넣을 것은 추가 */
-  async function editLinks(field) {
-    const label = field === "tags" ? "태그" : "출연자";
-    const info = await api("batch/info", { method: "POST", body: { items: selItems() } }).catch(() => null);
-    if (!info) return;
-    const remove = new Set(), add = new Set();
-    const curBox = h("div", { class: "chips" });
-    const drawCur = () => curBox.replaceChildren(...(info[field].length ? info[field].map((t) => {
-      const off = remove.has(t.id);
-      return h("button", { class: "chip" + (off ? " struck" : ""), "aria-pressed": off ? "true" : "false",
-        onclick: () => { off ? remove.delete(t.id) : remove.add(t.id); drawCur(); } },
-        (field === "tags" ? "#" : "") + t.name, h("span", { class: "meta" }, ` ${t.count}/${info.total}`), off ? " ✕" : "");
-    }) : [h("span", { class: "meta" }, `선택한 항목에 붙은 ${label}이(가) 없습니다.`)]));
-    const all = field === "tags" ? tags : performers;
-    const addBox = h("div", { class: "chips" });
-    const drawAdd = () => addBox.replaceChildren(...[...add].map((n) => h("span", { class: "chip on" }, (field === "tags" ? "#" : "") + n,
-      h("button", { "aria-label": `${n} 빼기`, onclick: () => { add.delete(n); drawAdd(); } }, "×"))));
-    const listId = "dl-batch-" + field;
-    const input = h("input", { type: "text", list: listId, placeholder: `추가할 ${label} 이름 (Enter)`, "aria-label": `추가할 ${label}` });
-    const addName = () => { input.value.split(",").map((x) => x.trim()).filter(Boolean).forEach((n) => add.add(n)); input.value = ""; drawAdd(); };
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addName(); } });
-    const quick = all.slice().sort((a, b) => ((b.count || 0) + (b.photo_count || 0)) - ((a.count || 0) + (a.photo_count || 0))).slice(0, 12)
-      .map((t) => h("button", { class: "chip", onclick: () => { add.add(t.name); drawAdd(); } }, "+ " + (field === "tags" ? "#" : "") + t.name));
-    drawCur(); drawAdd();
-    const close = openSheet(`${label} 한꺼번에 고치기 · ${selected.size}개`, [
-      h("div", { class: "sheet-sec" }, h("h3", {}, `붙어 있는 ${label} (누르면 빼기)`), curBox),
-      h("div", { class: "sheet-sec" }, h("h3", {}, `추가할 ${label}`), addBox, h("div", { class: "taginput" }, input, h("button", { class: "btn", onclick: addName }, "추가")),
-        h("datalist", { id: listId }, all.map((t) => h("option", { value: t.name }))),
-        quick.length ? h("div", { class: "chips", style: "margin-top:4px" }, ...quick) : null),
-    ], [
-      h("button", { class: "btn", onclick: () => close() }, "취소"),
-      h("button", { class: "btn primary sheet-go", onclick: () => {
-        if (input.value.trim()) addName();
-        if (!add.size && !remove.size) { close(); return; }
-        close(() => applyBatch({ ["add_" + field]: [...add], ["remove_" + field]: [...remove] }, `${label}를 {n}개 항목에 반영했습니다`));
-      } }, "적용"),
-    ]);
-  }
-
-  /** 날짜: 선택한 항목의 날짜를 한꺼번에 바꾸기 (정렬·사진 정보에 쓰임) */
-  function editDate() {
-    const first = [...selected.values()][0] || {};
-    const ts = first.taken || first.added_at || Date.now() / 1000;
-    const d = new Date(ts * 1000), pad = (n) => String(n).padStart(2, "0");
-    const input = h("input", { type: "datetime-local", value: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`, "aria-label": "날짜와 시간" });
-    const close = openSheet(`날짜 바꾸기 · ${selected.size}개`, [
-      h("p", { class: "meta", style: "margin:0" }, "고른 사진·영상의 날짜를 아래 날짜로 바꿉니다. ‘추가한 날짜’ 정렬과 사진의 촬영 날짜에 쓰입니다. 파일 자체는 바뀌지 않습니다."),
-      input,
-      h("button", { class: "btn", onclick: () => close(() => applyBatch({ date: 0 }, "{n}개 항목을 원래 날짜로 되돌렸습니다")) }, "원래 날짜로 되돌리기"),
-    ], [
-      h("button", { class: "btn", onclick: () => close() }, "취소"),
-      h("button", { class: "btn primary sheet-go", onclick: () => {
-        const t = new Date(input.value).getTime();
-        if (!t) { toast("날짜를 고르세요"); return; }
-        close(() => applyBatch({ date: Math.round(t / 1000) }, "{n}개 항목의 날짜를 바꿨습니다"));
-      } }, "적용"),
-    ]);
-  }
-
-  function editFav() {
-    const allFav = [...selected.values()].every((it) => it.favorite);
-    const close = openSheet(`즐겨찾기 · ${selected.size}개`, [
-      h("p", { class: "meta", style: "margin:0" }, "기기 사진·영상은 갤러리 즐겨찾기에도 반영됩니다."),
-    ], [
-      h("button", { class: "btn", onclick: () => close(() => applyBatch({ favorite: false }, "{n}개를 즐겨찾기에서 뺐습니다")) }, "즐겨찾기에서 빼기"),
-      h("button", { class: "btn primary sheet-go", onclick: () => close(() => applyBatch({ favorite: true }, "♥ {n}개를 즐겨찾기에 넣었습니다")) }, allFav ? "이미 모두 즐겨찾기" : "♥ 즐겨찾기에 넣기"),
-    ]);
   }
 
   /** 유튜브처럼: 큰 썸네일 + 아래에 출연자 동그라미·제목·한 줄 정보 */
@@ -1041,32 +1082,6 @@ async function renderMedia(params0, type0) {
     ];
     return isPhoto ? h("button", { class: "yt", onclick: open, "aria-label": it.title || "사진" }, ...kids)
       : h("a", { class: "yt", href: `#/v/${it.id}`, "aria-label": it.title || "영상" }, ...kids);
-  }
-
-  /** 삭제: 기기 파일은 휴지통으로 옮기거나 영구 삭제 (안드로이드가 한 번 확인), 클라우드 항목은 목록에서 숨김 */
-  function editDelete() {
-    const list = [...selected.values()];
-    const cloud = list.filter((it) => it.source && it.source !== "local").length;
-    const reloadSoon = () => {   // 확인 창을 닫고 돌아오면 목록을 새로 고침
-      const onVis = () => { if (document.visibilityState === "visible") { document.removeEventListener("visibilitychange", onVis); setTimeout(() => update({ anim: "fade" }), 600); } };
-      document.addEventListener("visibilitychange", onVis);
-      setTimeout(() => update({ anim: "fade" }), 2500);
-    };
-    const run = async (mode) => {
-      try {
-        await api("batch", { method: "POST", body: { items: selItems(), delete: mode } });
-        toast(mode === "trash" ? "휴지통으로 옮깁니다. 확인 창에서 허용하세요." : "영구 삭제합니다. 확인 창에서 허용하세요.");
-        endSelect(); reloadSoon();
-      } catch (e) { toast(e.message); }
-    };
-    const close = openSheet(`삭제 · ${list.length}개`, [
-      h("p", { class: "meta", style: "margin:0" }, "휴대폰의 실제 파일을 지웁니다. 안드로이드가 한 번 더 확인합니다."),
-      h("button", { class: "del-opt", onclick: () => close(() => run("trash")) },
-        h("b", {}, "휴지통으로 옮기기"), h("span", { class: "meta" }, "갤러리 휴지통에서 약 30일 동안 되살릴 수 있습니다.")),
-      h("button", { class: "del-opt danger", onclick: () => { if (confirm(`${list.length}개를 영구 삭제할까요? 되돌릴 수 없습니다.`)) close(() => run("delete")); } },
-        h("b", {}, "영구 삭제"), h("span", { class: "meta" }, "바로 지워지고 되돌릴 수 없습니다.")),
-      cloud ? h("p", { class: "meta", style: "margin:0" }, `MEGA·iCloud 항목 ${cloud}개는 공유 링크라 지울 수 없어서, 이 앱 목록에서만 숨깁니다 (설정 → 정리 → 숨긴 영상에서 되돌릴 수 있음).`) : null,
-    ], [h("button", { class: "btn", style: "grid-column: 1 / -1", onclick: () => close() }, "취소")]);
   }
 
   /** 정사각형 칸: 영상은 ▶ 길이, 즐겨찾기는 ♥ */
@@ -2204,7 +2219,12 @@ async function renderPerformer(id) {
   const pTitle = h("h3", { class: "pf-sec" }, "사진");
   const pSection = showPhotos ? h("section", {}, pTitle, pGrid, pMore) : null;
 
-  $app.replaceChildren(h("div", { class: "profile" }, head, editPanel, vSection, pSection));
+  // --- 선택 모드 (꾹 눌러 여러 개 골라 태그·출연자·날짜·즐겨찾기·삭제)
+  const selHolder = h("div", { class: "sel-float" });
+  const [allPerf, allTags] = await Promise.all([api("performers").catch(() => []), api("tags").catch(() => [])]);
+  const sel = makeSelection({ holder: selHolder, refresh: () => route(), performers: allPerf, tags: allTags });
+
+  $app.replaceChildren(h("div", { class: "profile" }, selHolder, head, editPanel, vSection, pSection));
 
   let vTotal = 0, pTotal = 0;
   const drawCounts = () => { counts.textContent = `영상 ${vTotal.toLocaleString()}개` + (showPhotos ? ` · 사진 ${pTotal.toLocaleString()}장` : ""); };
@@ -2215,7 +2235,7 @@ async function renderPerformer(id) {
     vTitle.textContent = `영상 ${d.total.toLocaleString()}`;
     if (vPage === 1 && !d.total) { vGrid.replaceWith(h("p", { class: "meta" }, "이 출연자가 지정된 영상이 없습니다.")); return; }
     if (vPage === 1 && d.items[0] && d.items[0].thumbs > 0) setAvatar(thumbUrl(d.items[0].id, 0, d.items[0].thumbs));
-    d.items.forEach((v) => vGrid.append(vMode === "wall" ? videoTile(v) : videoCard(v)));
+    d.items.forEach((v) => { v.kind = "video"; vGrid.append(sel.selectable(vMode === "wall" ? videoTile(v) : videoCard(v), v)); });
     const shown = (vPage - 1) * d.per + d.items.length;
     vMore.replaceChildren(...(shown < d.total ? [h("button", { class: "btn", onclick: () => { vPage++; loadVideos(); } }, `영상 더 보기 (${shown}/${d.total})`)] : []));
   }
@@ -2230,7 +2250,8 @@ async function renderPerformer(id) {
     for (const ph of d.items) {
       const i = pItems.length;
       pItems.push(ph);
-      pGrid.append(photoCell(ph, pMode, () => openViewer(pItems, i)));
+      ph.kind = "photo";
+      pGrid.append(sel.selectable(photoCell(ph, pMode, () => openViewer(pItems, i)), ph));
     }
     const shown = (pPage - 1) * d.per + d.items.length;
     pMore.replaceChildren(...(shown < d.total ? [h("button", { class: "btn", onclick: () => { pPage++; loadPhotos(); } }, `사진 더 보기 (${shown}/${d.total})`)] : []));

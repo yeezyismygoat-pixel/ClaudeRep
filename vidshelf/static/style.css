@@ -931,3 +931,13 @@ body:not(.selecting) .media-bar-row { animation: fadeIn .25s ease; }
 .yt-thumb { position: relative; }
 .yt, .yt * { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 @media (max-width: 560px) { .ytfeed .photo-run { padding: 0 4px; } }
+
+/* 출연자 화면 등: 선택 막대가 위에 떠 있음 */
+.sel-float { position: sticky; top: 22px; z-index: 35; margin-bottom: 0; }
+.sel-float .sel-bar:not([hidden]) { margin-bottom: 10px; }
+.card.sel .thumb, .pcard.sel .thumb { outline: 3px solid var(--accent); outline-offset: -3px; }
+.card .thumb::before, .pcard .thumb::before { content: ""; position: absolute; right: 6px; top: 6px; width: 22px; height: 22px; border-radius: 11px; z-index: 2;
+  border: 2px solid #fff; box-sizing: border-box; background: rgba(0,0,0,.25); opacity: 0; transition: opacity .2s ease, background-color .2s ease; }
+body.selecting .card .thumb::before, body.selecting .pcard .thumb::before { opacity: 1; }
+.card.sel .thumb::before, .pcard.sel .thumb::before { background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E") center/14px no-repeat; border-color: var(--accent); }
+.card, .pcard { -webkit-touch-callout: none; }
