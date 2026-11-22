@@ -76,6 +76,11 @@ public class Library implements HttpServer.Handler {
         Uri uri;
         Mega.Link link;      // MEGA 영상이면 설정됨
         Mega.Node node;
+        ICloud.Album album;  // iCloud 공유 앨범 항목이면 설정됨
+        ICloud.Item item;
+
+        boolean cloud() { return node != null || item != null; }
+        String source() { return node != null ? "mega" : item != null ? "icloud" : "local"; }
         long taken;          // 사진: 촬영 시각 (초)
     }
 
@@ -87,13 +92,13 @@ public class Library implements HttpServer.Handler {
 
     private final Context ctx;
     private final File storeFile, thumbDir;
-    private final EHentai eh;
     private JSONObject store;                         // settings, videos(meta), tags, performers, seq
     private List<Video> all = new ArrayList<>();      // MediaStore 의 모든 영상
     private final Map<Long, Video> byId = new HashMap<>();
     private long lastScan = 0;
     private final Semaphore frameLock = new Semaphore(2);
     private final List<Mega.Link> megaLinks = new ArrayList<>();
+    private final List<ICloud.Album> icloudAlbums = new ArrayList<>();
     private static final Set<String> MEGA_VIDEO_EXTS = new HashSet<>(java.util.Arrays.asList(
             "mp4", "m4v", "mov", "mkv", "webm", "3gp", "ogv", "avi", "wmv", "flv", "ts", "mpg", "mpeg"));
 
@@ -101,47 +106,27 @@ public class Library implements HttpServer.Handler {
         this.ctx = ctx;
         storeFile = new File(ctx.getFilesDir(), "library.json");
         thumbDir = new File(ctx.getCacheDir(), "thumbs");
-        eh = new EHentai(new File(ctx.getCacheDir(), "eh"), new File(ctx.getFilesDir(), "eh-saved"), new File(ctx.getCacheDir(), "eh-thumbs"));
         load();
-        loadEhLogin();
         JSONArray links = settings().optJSONArray("mega_links");
         for (int i = 0; links != null && i < links.length(); i++) {
             try { megaLinks.add(Mega.parse(links.optString(i))); } catch (Exception ignored) {}
         }
+        loadICloudLinks();
         new Thread(this::refreshMega).start();
         // MEGA 목록 자동 새로고침: 15분마다 확인해서 정한 시간이 지났으면 새로 받음
         bg.scheduleWithFixedDelay(() -> {
             try {
                 int hours = megaRefreshHours();
-                if (hours > 0 && !megaLinks.isEmpty() && System.currentTimeMillis() - lastMegaRefresh > hours * 3600_000L)
+                if (hours > 0 && (!megaLinks.isEmpty() || !icloudAlbums.isEmpty()) && System.currentTimeMillis() - lastMegaRefresh > hours * 3600_000L)
                     new Thread(this::refreshMega).start();
             } catch (Exception ignored) {}
         }, 15, 15, java.util.concurrent.TimeUnit.MINUTES);
-        new Thread(this::ehSaveLoop).start();   // 저장하다 만 만화 이어 받기
     }
 
     private final java.util.concurrent.ScheduledExecutorService bg = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
     private volatile long lastMegaRefresh = 0;
 
     private synchronized int megaRefreshHours() { return settings().optInt("mega_refresh_hours", 6); }
-
-    /** 로그인 쿠키 불러오기. 예전 버전이 평문으로 저장한 값은 암호화해서 다시 저장. */
-    private synchronized void loadEhLogin() {
-        JSONObject st = settings();
-        eh.memberId = st.optString("eh_member_id", "");
-        String plain = st.optString("eh_pass_hash", "");
-        if (!plain.isEmpty()) {
-            String sealed = SecretBox.seal(plain);
-            if (sealed != null) {
-                try { st.put("eh_pass_hash_enc", sealed); } catch (JSONException ignored) {}
-                st.remove("eh_pass_hash");
-                save();
-            }
-            eh.passHash = plain;
-        } else {
-            eh.passHash = SecretBox.open(st.optString("eh_pass_hash_enc", ""));
-        }
-    }
 
     // ------------------------------------------------------------------ MEGA
     /** 모든 MEGA 링크의 파일 목록을 다시 받습니다 (네트워크 작업, 잠금 밖에서 실행). */
@@ -150,6 +135,9 @@ public class Library implements HttpServer.Handler {
         synchronized (this) { links = new ArrayList<>(megaLinks); }
         lastMegaRefresh = System.currentTimeMillis();
         for (Mega.Link l : links) Mega.load(l);
+        List<ICloud.Album> albums;
+        synchronized (this) { albums = new ArrayList<>(icloudAlbums); }
+        for (ICloud.Album a : albums) ICloud.load(a);   // iCloud 공유 앨범도 함께 새로 받음
         scan();
         autoPerformers();
         lookupMissingSoon();
@@ -232,286 +220,13 @@ public class Library implements HttpServer.Handler {
         }, "mega-thumbs").start();
     }
 
-    // ------------------------------------------------------------------ e-hentai 즐겨찾기 만화
-    private synchronized JSONObject ehProgress() throws JSONException {
-        JSONObject o = store.optJSONObject("eh_progress");
-        if (o == null) { o = new JSONObject(); store.put("eh_progress", o); }
-        return o;
-    }
-
-    private synchronized void ehSaveLogin(String id, String hash) throws JSONException {
-        settings().put("eh_member_id", id);
-        String sealed = SecretBox.seal(hash);
-        if (sealed != null) { settings().put("eh_pass_hash_enc", sealed); settings().remove("eh_pass_hash"); }
-        else settings().put("eh_pass_hash", hash);   // 키 저장소를 못 쓰는 기기
-        if (hash.isEmpty()) { settings().remove("eh_pass_hash_enc"); settings().remove("eh_pass_hash"); }
-        eh.memberId = id;
-        eh.passHash = hash;
-        save();
-    }
-
-    // ------------------------------------------------------------------ 기기에 저장한 만화
-    private volatile String ehSaveStatus = "";
-    private final java.util.concurrent.atomic.AtomicBoolean ehSaving = new java.util.concurrent.atomic.AtomicBoolean();
-
-    private synchronized JSONObject ehSaved() throws JSONException {
-        JSONObject o = store.optJSONObject("eh_saved");
-        if (o == null) { o = new JSONObject(); store.put("eh_saved", o); }
-        return o;
-    }
-
-    /** 저장 목록에서 다 받지 못한 만화를 하나씩 받습니다. */
-    private void ehSaveLoop() {
-        if (!ehSaving.compareAndSet(false, true)) return;
-        try {
-            while (true) {
-                long gid = -1;
-                String token = null, title = "", thumb = "";
-                int pages = 0;
-                synchronized (this) {
-                    JSONObject saved = ehSaved();
-                    Iterator<String> it = saved.keys();
-                    while (it.hasNext()) {
-                        String k = it.next();
-                        JSONObject g = saved.optJSONObject(k);
-                        if (g == null || g.optBoolean("done", false) || g.optBoolean("paused", false)) continue;
-                        gid = Long.parseLong(k); token = g.optString("token"); title = g.optString("title");
-                        thumb = g.optString("thumb"); pages = g.optInt("pages");
-                        break;
-                    }
-                }
-                if (gid < 0) break;
-                eh.saveCover(gid, thumb);
-                String error = null;
-                for (int n = 1; n <= pages; n++) {
-                    synchronized (this) { if (ehSaved().optJSONObject(String.valueOf(gid)) == null) break; }   // 저장 취소됨
-                    ehSaveStatus = "만화 저장 중… " + title + " " + n + "/" + pages;
-                    try {
-                        eh.savePage(gid, token, n);
-                    } catch (IOException e) {
-                        error = e.getMessage();
-                        break;
-                    }
-                }
-                synchronized (this) {
-                    JSONObject g = ehSaved().optJSONObject(String.valueOf(gid));
-                    if (g != null) {
-                        try {
-                            if (error == null) { g.put("done", true); g.remove("error"); }
-                            else { g.put("paused", true); g.put("error", error); }   // 오류가 나면 멈추고, 다시 시도를 누르면 이어 받음
-                        } catch (JSONException ignored) {}
-                        save();
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-        } finally {
-            ehSaveStatus = "";
-            ehSaving.set(false);
-        }
-    }
-
-    /** 앱 안 로그인 화면에서 읽은 쿠키를 저장합니다. */
-    public void ehSetLogin(String id, String hash) {
-        try { ehSaveLogin(id, hash); } catch (JSONException ignored) {}
-    }
-
-    /** 앱 화면(WebView)에서 온 요청인지 */
-    private boolean fromApp(HttpServer.Request r) {
-        String cookie = r.header("cookie");
-        if (cookie == null) return false;
-        for (String part : cookie.split(";")) {
-            String p = part.trim();
-            if (p.startsWith("vs_app=") && MessageDigest.isEqual(p.substring(7).getBytes(), appToken().getBytes())) return true;
-        }
-        return false;
-    }
-
-    private void ehApi(HttpServer.Request r, HttpServer.Response res, String action, String m) throws Exception {
-        if (action.equals("status")) {
-            res.json(200, new JSONObject().put("logged_in", eh.loggedIn()).put("in_app", fromApp(r)).toString());
-            return;
-        }
-        if (action.equals("login") && m.equals("POST")) {
-            JSONObject b = body(r);
-            String id, hash;
-            try {
-                if (b.has("member_id")) {   // 쿠키로 로그인
-                    id = b.optString("member_id").trim();
-                    hash = b.optString("pass_hash").trim();
-                    if (!id.matches("\\d+") || !hash.matches("[0-9a-fA-F]{32}")) { res.error(400, "ipb_member_id 는 숫자, ipb_pass_hash 는 32자리 영문·숫자입니다"); return; }
-                } else {
-                    String[] c = eh.login(b.optString("user").trim(), b.optString("pass"));
-                    id = c[0];
-                    hash = c[1];
-                }
-            } catch (IOException e) {
-                res.error(400, e.getMessage());
-                return;
-            }
-            String oldId = eh.memberId, oldHash = eh.passHash;
-            ehSaveLogin(id, hash);
-            try {
-                eh.favorites("all", null, null);   // 실제로 즐겨찾기를 볼 수 있는지 확인
-            } catch (EHentai.NotLoggedIn e) {
-                ehSaveLogin(oldId, oldHash);
-                res.error(400, "로그인 정보가 맞지 않습니다. 쿠키 값을 다시 확인하세요.");
-                return;
-            } catch (IOException ignored) {
-                // 네트워크 문제는 로그인 실패로 보지 않음
-            }
-            res.json(200, "{\"ok\":true}");
-            return;
-        }
-        if (action.equals("logout") && m.equals("POST")) {
-            ehSaveLogin("", "");
-            res.json(200, "{\"ok\":true}");
-            return;
-        }
-        if (action.equals("saved")) {
-            JSONArray items = new JSONArray();
-            synchronized (this) {
-                JSONObject saved = ehSaved(), prog = ehProgress();
-                List<String> keys = new ArrayList<>();
-                Iterator<String> it = saved.keys();
-                while (it.hasNext()) keys.add(it.next());
-                keys.sort((a, b2) -> Long.compare(saved.optJSONObject(b2).optLong("at"), saved.optJSONObject(a).optLong("at")));
-                for (String k : keys) {
-                    JSONObject g = saved.optJSONObject(k), pr = prog.optJSONObject(k);
-                    long gid = Long.parseLong(k);
-                    items.put(new JSONObject().put("gid", gid).put("token", g.optString("token")).put("title", g.optString("title"))
-                            .put("title_jpn", "").put("category", g.optString("category")).put("pages", g.optInt("pages"))
-                            .put("thumb", eh.savedCover(gid).length() > 0 ? "/eh/cover/" + gid : g.optString("thumb"))
-                            .put("saved_pages", eh.savedCount(gid)).put("done", g.optBoolean("done", false))
-                            .put("error", g.optString("error", "")).put("read_page", pr == null ? 0 : pr.optInt("page")));
-                }
-            }
-            res.json(200, new JSONObject().put("items", items).toString());
-            return;
-        }
-        if (action.equals("save") && m.equals("POST")) {
-            JSONObject b = body(r);
-            long gid = b.optLong("gid", -1);
-            if (gid < 0 || !b.optString("token").matches("[0-9a-f]{10}")) { res.error(400, "잘못된 갤러리"); return; }
-            synchronized (this) {
-                JSONObject g = ehSaved().optJSONObject(String.valueOf(gid));
-                if (g == null) {
-                    g = new JSONObject().put("at", System.currentTimeMillis() / 1000);
-                    ehSaved().put(String.valueOf(gid), g);
-                }
-                for (String k : new String[]{"token", "title", "thumb", "category"}) if (b.has(k)) g.put(k, b.optString(k));
-                g.put("pages", b.optInt("pages", g.optInt("pages")));
-                g.remove("paused");
-                g.remove("error");
-                g.put("done", false);
-                save();
-            }
-            new Thread(this::ehSaveLoop).start();
-            res.json(200, "{\"ok\":true}");
-            return;
-        }
-        if (action.equals("unsave") && m.equals("POST")) {
-            long gid = body(r).optLong("gid", -1);
-            synchronized (this) { ehSaved().remove(String.valueOf(gid)); save(); }
-            eh.deleteSaved(gid);
-            res.json(200, "{\"ok\":true}");
-            return;
-        }
-        if (action.equals("favstate") || (action.equals("fav") && m.equals("POST"))) {
-            long gid = parseLong(r.param("gid"), -1);
-            String t = nz(r.param("t"));
-            JSONObject b = action.equals("fav") ? body(r) : null;
-            if (b != null) { gid = b.optLong("gid", -1); t = b.optString("t"); }
-            if (gid < 0 || !t.matches("[0-9a-f]{10}")) { res.error(400, "잘못된 갤러리"); return; }
-            try {
-                if (b != null) eh.setFavorite(gid, t, b.optInt("favcat", -1));
-                res.json(200, eh.favoriteState(gid, t).put("logged_in", true).toString());
-            } catch (EHentai.NotLoggedIn e) {
-                res.json(200, new JSONObject().put("logged_in", false).put("favcat", -1).toString());
-            } catch (IOException e) {
-                res.error(502, e.getMessage());
-            }
-            return;
-        }
-        if (action.equals("recent")) {   // 최근 읽은 만화 (네트워크 없이, 저장해 둔 정보로)
-            List<JSONObject> list = new ArrayList<>();
-            synchronized (this) {
-                JSONObject prog = ehProgress();
-                Iterator<String> it = prog.keys();
-                while (it.hasNext()) {
-                    String gid = it.next();
-                    JSONObject pr = prog.optJSONObject(gid);
-                    if (pr == null || !pr.has("token")) continue;
-                    list.add(new JSONObject().put("gid", Long.parseLong(gid)).put("token", pr.optString("token"))
-                            .put("title", pr.optString("title")).put("title_jpn", "").put("thumb", pr.optString("thumb"))
-                            .put("pages", pr.optInt("pages")).put("read_page", pr.optInt("page")).put("category", "")
-                            .put("at", pr.optLong("at")));
-                }
-            }
-            list.sort((a, b2) -> Long.compare(b2.optLong("at"), a.optLong("at")));
-            JSONArray items = new JSONArray();
-            for (JSONObject o : list.subList(0, Math.min(20, list.size()))) items.put(o);
-            res.json(200, new JSONObject().put("items", items).toString());
-            return;
-        }
-        if (action.equals("progress") && m.equals("POST")) {
-            JSONObject b = body(r);
-            synchronized (this) {
-                JSONObject pr = new JSONObject().put("page", b.optInt("page", 1)).put("at", System.currentTimeMillis() / 1000);
-                for (String k : new String[]{"token", "title", "thumb"}) if (b.has(k)) pr.put(k, b.optString(k));
-                if (b.has("pages")) pr.put("pages", b.optInt("pages"));
-                ehProgress().put(String.valueOf(b.optLong("gid")), pr);
-                save();
-            }
-            res.json(200, "{\"ok\":true}");
-            return;
-        }
-        if (action.equals("favorites") || action.equals("gallery") || action.equals("search")) {
-            JSONArray items;
-            JSONObject out = new JSONObject();
-            try {
-                if (action.equals("favorites")) {
-                    out = eh.favorites(r.param("favcat"), r.param("q"), r.param("next"));
-                    items = out.getJSONArray("items");
-                } else if (action.equals("search")) {
-                    String q = nz(r.param("q")).trim();
-                    out = eh.search("language:korean" + (q.isEmpty() ? "" : " " + q), r.param("next"));
-                    items = out.getJSONArray("items");
-                } else {
-                    List<Object[]> one = new ArrayList<>();
-                    String t = nz(r.param("t"));
-                    if (!t.matches("[0-9a-f]{10}")) { res.error(400, "잘못된 갤러리 주소"); return; }
-                    one.add(new Object[]{parseLong(r.param("gid"), -1), t});
-                    items = eh.gdata(one);
-                    if (items.length() == 0) { res.error(404, "갤러리를 찾지 못했습니다 (삭제되었을 수 있습니다)"); return; }
-                }
-            } catch (EHentai.NotLoggedIn e) {
-                res.json(200, new JSONObject().put("logged_in", false).toString());
-                return;
-            } catch (IOException e) {
-                res.error(502, e.getMessage() == null ? "e-hentai 연결 실패" : e.getMessage());
-                return;
-            }
-            synchronized (this) {
-                JSONObject prog = ehProgress();
-                for (int i = 0; i < items.length(); i++) {
-                    JSONObject g = items.getJSONObject(i), pr = prog.optJSONObject(String.valueOf(g.optLong("gid")));
-                    g.put("read_page", pr == null ? 0 : pr.optInt("page", 0));
-                }
-            }
-            res.json(200, (action.equals("gallery") ? items.getJSONObject(0) : out.put("logged_in", eh.loggedIn())).toString());
-            return;
-        }
-        res.error(404, "unknown endpoint");
-    }
-
     // ------------------------------------------------------------------ 숨긴 영상
     private synchronized JSONArray hiddenVideos() throws JSONException {
         if (lastScan == 0) scan();
         JSONArray out = new JSONArray();
         for (Video v : all) {
             if (!meta(v).optBoolean("hidden", false)) continue;
-            out.put(summary(v).put("filename", v.name).put("folder", v.relPath).put("source", v.node != null ? "mega" : "local"));
+            out.put(summary(v).put("filename", v.name).put("folder", v.relPath).put("source", v.source()));
         }
         return out;
     }
@@ -554,8 +269,8 @@ public class Library implements HttpServer.Handler {
     }
 
     // ------------------------------------------------------------------ 백업 / 복원
-    private static final String[] BACKUP_KEYS = {"videos", "tags", "performers", "performer_info", "eh_progress", "eh_saved", "seq"};
-    private static final String[] BACKUP_SETTINGS = {"library_paths", "mega_links", "mega_thumbs", "mega_refresh_hours"};
+    private static final String[] BACKUP_KEYS = {"videos", "tags", "performers", "performer_info", "seq"};
+    private static final String[] BACKUP_SETTINGS = {"library_paths", "mega_links", "icloud_links", "mega_thumbs", "mega_refresh_hours"};
 
     /** 태그·별점·출연자 등 사용자 정보. 비밀번호와 로그인 쿠키는 넣지 않음. */
     private synchronized JSONObject backupJson() throws JSONException {
@@ -581,6 +296,11 @@ public class Library implements HttpServer.Handler {
         JSONObject st = b.optJSONObject("settings");
         if (st != null) for (String k : BACKUP_SETTINGS) if (st.has(k)) settings().put(k, st.get(k));
         megaLinks.clear();
+        JSONArray il = settings().optJSONArray("icloud_links");
+        icloudAlbums.clear();
+        for (int i = 0; il != null && i < il.length(); i++) {
+            try { icloudAlbums.add(ICloud.parse(il.optString(i))); } catch (Exception ignored) {}
+        }
         JSONArray links = settings().optJSONArray("mega_links");
         for (int i = 0; links != null && i < links.length(); i++) {
             try { megaLinks.add(Mega.parse(links.optString(i))); } catch (Exception ignored) {}
@@ -605,7 +325,7 @@ public class Library implements HttpServer.Handler {
             for (Video v : g) {
                 if (v.node != null) mega = true; else local = true;
                 folders.add(v.relPath);
-                items.put(summary(v).put("filename", v.name).put("folder", v.relPath).put("source", v.node != null ? "mega" : "local"));
+                items.put(summary(v).put("filename", v.name).put("folder", v.relPath).put("source", v.source()));
             }
             String reason = mega && local ? "이 기기 + MEGA" : folders.size() > 1 ? "여러 폴더" : "같은 폴더";
             out.put(new JSONObject().put("size", g.get(0).size).put("reason", reason).put("items", items));
@@ -972,6 +692,7 @@ public class Library implements HttpServer.Handler {
                 list.add(v);
             }
         }
+        for (ICloud.Album a : icloudAlbums) addICloud(a, list, true);
         all = list;
         byId.clear();
         for (Video v : list) byId.put(v.id, v);
@@ -1029,9 +750,106 @@ public class Library implements HttpServer.Handler {
                 list.add(v);
             }
         }
+        for (ICloud.Album a : icloudAlbums) addICloud(a, list, false);
         allPhotos = list;
         photoById.clear();
         for (Video v : list) photoById.put(v.id, v);
+    }
+
+    /** iCloud 공유 앨범의 영상(videos=true) 또는 사진을 목록에 넣음 */
+    private void addICloud(ICloud.Album a, List<Video> list, boolean videos) {
+        List<ICloud.Item> items;
+        synchronized (a) { items = new ArrayList<>(a.items); }
+        for (ICloud.Item it : items) {
+            if (it.video != videos) continue;
+            Video v = new Video();
+            v.id = it.id;
+            v.name = it.name;
+            v.relPath = "iCloud/" + a.name + "/";
+            v.size = it.size;
+            v.width = it.width;
+            v.height = it.height;
+            v.dateAdded = it.ts;
+            v.dateModified = it.ts;
+            v.taken = it.ts;
+            v.mime = it.video ? "video/mp4" : "image/jpeg";
+            v.key = "icloud:" + it.guid;
+            v.album = a;
+            v.item = it;
+            list.add(v);
+        }
+    }
+
+    // ------------------------------------------------------------------ iCloud 공유 앨범
+    private synchronized void loadICloudLinks() {
+        icloudAlbums.clear();
+        JSONArray a = settings().optJSONArray("icloud_links");
+        for (int i = 0; a != null && i < a.length(); i++) {
+            try { icloudAlbums.add(ICloud.parse(a.optString(i))); } catch (Exception ignored) {}
+        }
+    }
+
+    private synchronized void saveICloudLinks() {
+        JSONArray a = new JSONArray();
+        for (ICloud.Album x : icloudAlbums) a.put(x.url);
+        try { settings().put("icloud_links", a); } catch (JSONException ignored) {}
+        save();
+    }
+
+    private synchronized JSONArray icloudJson() throws JSONException {
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < icloudAlbums.size(); i++) {
+            ICloud.Album a = icloudAlbums.get(i);
+            int photos = 0, vids = 0;
+            synchronized (a) { for (ICloud.Item it : a.items) if (it.video) vids++; else photos++; }
+            out.put(new JSONObject().put("index", i).put("name", a.name).put("photos", photos).put("videos", vids)
+                    .put("loaded", a.loadedAt > 0).put("error", a.error == null ? JSONObject.NULL : a.error));
+        }
+        return out;
+    }
+
+    /** iCloud 파일을 앱을 거쳐 보냄 (재생 위치 이동을 위해 Range 그대로 전달) */
+    private void icloudStream(Video v, HttpServer.Request r, HttpServer.Response res, boolean download) throws IOException {
+        java.net.HttpURLConnection c;
+        try {
+            c = ICloud.open(v.album, v.item, v.item.mediaChecksum, r.header("range"));
+        } catch (IOException e) {
+            res.error(502, e.getMessage() == null ? "iCloud 연결 실패" : e.getMessage());
+            return;
+        }
+        try (InputStream in = c.getInputStream()) {
+            int code = c.getResponseCode();
+            long len = c.getContentLengthLong();
+            res.header("Content-Type", v.mime).header("Accept-Ranges", "bytes");
+            String cr = c.getHeaderField("Content-Range");
+            if (cr != null) res.header("Content-Range", cr);
+            if (download) res.header("Content-Disposition", "attachment; filename*=UTF-8''" + java.net.URLEncoder.encode(v.name, "UTF-8").replace("+", "%20"));
+            OutputStream out = res.start(code == 206 ? 206 : 200, len);
+            if (r.method.equals("HEAD")) return;
+            byte[] buf = new byte[128 * 1024];
+            int k;
+            while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
+        }
+    }
+
+    /** iCloud 미리보기 이미지 (작은 사진 / 영상 포스터), 기기에 보관 */
+    private void icloudThumb(Video v, HttpServer.Response res) throws IOException {
+        File f = new File(new File(thumbDir, "icloud"), v.item.guid + ".jpg");
+        if (f.length() == 0) {
+            java.net.HttpURLConnection c;
+            try {
+                c = ICloud.open(v.album, v.item, v.item.thumbChecksum, null);
+            } catch (IOException e) {
+                res.error(502, e.getMessage() == null ? "iCloud 연결 실패" : e.getMessage());
+                return;
+            }
+            byte[] data;
+            try (InputStream in = c.getInputStream()) { data = readAll(in); }
+            f.getParentFile().mkdirs();
+            try (FileOutputStream o = new FileOutputStream(f)) { o.write(data); }
+        }
+        res.header("Cache-Control", "max-age=86400");
+        res.send(200, "image/jpeg", readAll(new FileInputStream(f)));
     }
 
     private synchronized List<Video> visiblePhotos() {
@@ -1040,7 +858,7 @@ public class Library implements HttpServer.Handler {
         List<Video> out = new ArrayList<>();
         for (Video v : allPhotos) {
             if (meta(v).optBoolean("hidden", false)) continue;
-            if (v.node == null) {
+            if (!v.cloud()) {
                 boolean in = false;
                 for (String p : paths) if (v.relPath.startsWith(p)) { in = true; break; }
                 if (!in) continue;
@@ -1062,7 +880,7 @@ public class Library implements HttpServer.Handler {
         return new JSONObject().put("id", v.id).put("title", title(v)).put("width", wh[0]).put("height", wh[1])
                 .put("size", v.size).put("favorite", m.optBoolean("favorite", false) ? 1 : 0).put("rating", m.optInt("rating", 0))
                 .put("performers", performerNames(m)).put("added_at", v.dateAdded).put("taken", v.taken)
-                .put("source", v.node != null ? "mega" : "local");
+                .put("source", v.source());
     }
 
     private synchronized JSONObject photoDetail(Video v) throws JSONException {
@@ -1221,7 +1039,7 @@ public class Library implements HttpServer.Handler {
         List<String> paths = libraryPaths();
         List<Video> out = new ArrayList<>();
         for (Video v : all) {
-            if (v.node != null) {   // MEGA 영상은 폴더 설정과 관계없이 표시
+            if (v.cloud()) {   // MEGA·iCloud 영상은 폴더 설정과 관계없이 표시
                 if (!meta(v).optBoolean("hidden", false)) out.add(v);
                 continue;
             }
@@ -1257,7 +1075,7 @@ public class Library implements HttpServer.Handler {
         o.put("rating", m.optInt("rating", 0));
         o.put("favorite", m.optBoolean("favorite", false) ? 1 : 0);
         o.put("play_count", m.optInt("play_count", 0));
-        o.put("thumbs", v.node != null ? (megaHasThumb(v.node) ? 1 : 0) : N_FRAMES);
+        o.put("thumbs", v.node != null ? (megaHasThumb(v.node) ? 1 : 0) : v.item != null ? 1 : N_FRAMES);
         o.put("missing", 0);
         o.put("resume_pos", m.optDouble("resume_pos", 0));
         o.put("added_at", v.dateAdded);
@@ -1319,7 +1137,7 @@ public class Library implements HttpServer.Handler {
         o.put("direct_play", DIRECT_EXTS.contains(ext));
         o.put("can_transcode", false);
         o.put("can_delete", false);
-        o.put("source", v.node != null ? "mega" : "local");
+        o.put("source", v.source());
         return o;
     }
 
@@ -1529,9 +1347,9 @@ public class Library implements HttpServer.Handler {
                 .put("password_set", passwordSet()).put("data_dir", "앱 내부 저장소")
                 .put("ffmpeg", false).put("ffprobe", false).put("platform", "android")
                 .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
-                .put("mega_supported", true).put("mega", megaJson())
+                .put("mega_supported", true).put("mega", megaJson()).put("icloud", icloudJson())
                 .put("server", serverJson()).put("performer_info", true).put("photos", true)
-                .put("duplicates", true).put("eh", true).put("backup", true).put("mega_refresh_hours", megaRefreshHours())
+                .put("duplicates", true).put("backup", true).put("mega_refresh_hours", megaRefreshHours())
                 .put("mega_last_refresh", lastMegaRefresh / 1000).put("hidden_count", hiddenCount()).put("mega_thumbs", megaThumbsOn())
                 .put("mega_thumb_missing", megaThumbMissing()[0]).put("mega_thumb_failed", megaThumbMissing()[1]);
     }
@@ -1619,42 +1437,6 @@ public class Library implements HttpServer.Handler {
             megaStream(l, n, mimeFor(ext(n.name)), r, res, "1".equals(r.param("dl")));
             return;
         }
-        if (path.equals("/eh/thumb") || path.startsWith("/eh/cover/")) {
-            if (!authed(r)) { res.error(401, "login required"); return; }
-            byte[] img;
-            try {
-                if (path.startsWith("/eh/cover/")) {
-                    File f = eh.savedCover(parseLong(path.substring(10), -1));
-                    if (f.length() == 0) { res.error(404, "not found"); return; }
-                    img = readAll(new FileInputStream(f));
-                } else {
-                    img = eh.thumb(nz(r.param("u")));
-                }
-            } catch (IOException e) {
-                res.error(502, e.getMessage() == null ? "표지를 받지 못했습니다" : e.getMessage());
-                return;
-            }
-            res.header("Cache-Control", "max-age=604800");
-            res.send(200, EHentai.imageType(img), img);
-            return;
-        }
-        if (path.startsWith("/eh/page/")) {   // /eh/page/{gid}/{token}/{n}
-            if (!authed(r)) { res.error(401, "login required"); return; }
-            String[] p = path.split("/");
-            long gid = p.length > 5 ? parseLong(p[3], -1) : -1;
-            int n = p.length > 5 ? parseInt(p[5], -1) : -1;
-            if (gid < 0 || n < 1 || !p[4].matches("[0-9a-f]{10}")) { res.error(404, "not found"); return; }
-            byte[] img;
-            try {
-                img = eh.page(gid, p[4], n);
-            } catch (IOException e) {
-                res.error(502, e.getMessage() == null ? "e-hentai 연결 실패" : e.getMessage());
-                return;
-            }
-            res.header("Cache-Control", "max-age=604800");
-            res.send(200, EHentai.imageType(img), img);
-            return;
-        }
         if (path.startsWith("/photo/") || path.startsWith("/photothumb/")) {
             if (!authed(r)) { res.error(401, "login required"); return; }
             String[] p = path.split("/");
@@ -1664,7 +1446,8 @@ public class Library implements HttpServer.Handler {
                 v = photoById.get(parseLong(p.length > 2 ? p[2].replace(".jpg", "") : "", -1));
             }
             if (v == null) { res.error(404, "not found"); return; }
-            if (path.startsWith("/photo/")) photoFull(v, r, res); else photoThumb(v, r, res);
+            if (v.item != null) { if (path.startsWith("/photo/")) icloudStream(v, r, res, "1".equals(r.param("dl"))); else icloudThumb(v, res); }
+            else if (path.startsWith("/photo/")) photoFull(v, r, res); else photoThumb(v, r, res);
             return;
         }
         if (path.startsWith("/media/") || path.startsWith("/thumbs/") || path.startsWith("/transcode/")) {
@@ -1677,7 +1460,9 @@ public class Library implements HttpServer.Handler {
                 v = byId.get(parseLong(p.length > 2 ? p[2] : "", -1));
             }
             if (v == null) { res.error(404, "not found"); return; }
-            if (path.startsWith("/media/") && v.node != null) megaStream(v.link, v.node, v.mime, r, res, "1".equals(r.param("dl")));
+            if (path.startsWith("/media/") && v.item != null) icloudStream(v, r, res, "1".equals(r.param("dl")));
+            else if (v.item != null) icloudThumb(v, res);
+            else if (path.startsWith("/media/") && v.node != null) megaStream(v.link, v.node, v.mime, r, res, "1".equals(r.param("dl")));
             else if (path.startsWith("/media/")) media(v, r, res);
             else if (v.node != null) megaThumb(v, parseInt(p.length > 3 ? p[3].replace(".jpg", "") : "0", 0), r, res);
             else thumb(v, parseInt(p.length > 3 ? p[3].replace(".jpg", "") : "0", 0), r, res);
@@ -1919,6 +1704,51 @@ public class Library implements HttpServer.Handler {
             }
         }
 
+        if (p0.equals("icloud")) {
+            if (parts.length == 1 && m.equals("GET")) { res.json(200, icloudJson().toString()); return; }
+            if (parts.length == 1 && m.equals("POST")) {
+                ICloud.Album a;
+                try {
+                    a = ICloud.parse(body(r).optString("url"));
+                } catch (IllegalArgumentException e) {
+                    res.error(400, e.getMessage());
+                    return;
+                }
+                synchronized (this) {
+                    for (ICloud.Album x : icloudAlbums) if (x.token.equals(a.token)) { res.error(400, "이미 추가된 앨범입니다"); return; }
+                }
+                ICloud.load(a);   // 네트워크 — 잠금 밖
+                if (a.error != null) { res.error(400, a.error); return; }
+                synchronized (this) { icloudAlbums.add(a); }
+                saveICloudLinks();
+                scan();
+                res.json(200, icloudJson().toString());
+                return;
+            }
+            int idx = parts.length > 1 ? parseInt(parts[1], -1) : -1;
+            if (parts.length == 2 && m.equals("DELETE")) {
+                synchronized (this) { if (idx >= 0 && idx < icloudAlbums.size()) icloudAlbums.remove(idx); }
+                saveICloudLinks();
+                scan();
+                res.json(200, icloudJson().toString());
+                return;
+            }
+            if (parts.length == 3 && parts[2].equals("items") && m.equals("GET")) {   // 앨범 안 사진·영상
+                JSONArray items = new JSONArray();
+                synchronized (this) {
+                    if (idx < 0 || idx >= icloudAlbums.size()) { res.error(404, "not found"); return; }
+                    ICloud.Album a = icloudAlbums.get(idx);
+                    if (lastScan == 0) scan();
+                    List<Video> vs = new ArrayList<>();
+                    for (Video v : all) if (v.album == a) vs.add(v);
+                    for (Video v : allPhotos) if (v.album == a) vs.add(v);
+                    vs.sort(Comparator.comparingLong((Video v) -> v.dateAdded).reversed());
+                    for (Video v : vs) items.put((v.item.video ? summary(v) : photoSummary(v)).put("kind", v.item.video ? "video" : "photo"));
+                    res.json(200, new JSONObject().put("name", a.name).put("error", a.error == null ? JSONObject.NULL : a.error).put("items", items).toString());
+                }
+                return;
+            }
+        }
         if (p0.equals("mega")) {
             if (parts.length == 1 && m.equals("GET")) { res.json(200, megaJson().toString()); return; }
             if (parts.length == 1 && m.equals("POST")) {
@@ -1998,7 +1828,6 @@ public class Library implements HttpServer.Handler {
             res.json(200, settingsJson().toString());
             return;
         }
-        if (p0.equals("eh")) { ehApi(r, res, parts.length > 1 ? parts[1] : "", m); return; }
         if (p0.equals("duplicates") && m.equals("GET")) { res.json(200, duplicates().toString()); return; }
         if (p0.equals("duplicates") && parts.length == 2 && parts[1].equals("keep") && m.equals("POST")) {
             JSONObject b = body(r);
@@ -2031,7 +1860,6 @@ public class Library implements HttpServer.Handler {
                 return;
             }
             new Thread(this::refreshMega).start();
-            new Thread(this::ehSaveLoop).start();
             res.json(200, new JSONObject().put("videos", n).toString());
             return;
         }
@@ -2054,7 +1882,7 @@ public class Library implements HttpServer.Handler {
                 }
                 counts = new JSONObject().put("total", vis.size()).put("bytes", bytes).put("seconds", secs).put("missing", 0).put("favorites", favs);
             }
-            String job = !lookupStatus.isEmpty() ? lookupStatus : ehSaveStatus;
+            String job = lookupStatus;
             res.json(200, new JSONObject().put("scanning", !job.isEmpty()).put("scan_found", 0).put("scan_new", 0)
                     .put("scan_current", job)
                     .put("mega_quota_hit", Mega.quotaHitAt > 0 && System.currentTimeMillis() - Mega.quotaHitAt < 6 * 3600_000L ? Mega.quotaHitAt / 1000 : 0)

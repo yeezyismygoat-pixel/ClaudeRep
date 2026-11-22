@@ -147,7 +147,6 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
                 Uri u = req.getUrl();
-                if ("vidshelf".equals(u.getScheme()) && "eh-login".equals(u.getHost())) { openEhLogin(); return true; }
                 // 앱 서버 주소만 앱 안에서 열고, 그 밖의 주소는 열지 않음
                 return !("127.0.0.1".equals(u.getHost()) || "localhost".equals(u.getHost()));
             }
@@ -223,10 +222,6 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (ehBox != null) {
-            if (ehWeb.canGoBack()) ehWeb.goBack(); else closeEhLogin();
-            return;
-        }
         if (customView != null) { exitFullscreen(); return; }
         if (web != null && web.canGoBack()) { web.goBack(); return; }
         moveTaskToBack(true);   // 앱만 내리고 서버는 계속 (다른 기기 접속용)
@@ -309,84 +304,6 @@ public class MainActivity extends Activity {
         super.onConfigurationChanged(c);
         // 휴대폰 다크 모드를 바꾸면 ‘시스템 설정’ 테마도 바로 따라감
         if (web != null) web.evaluateJavascript("window.onSystemTheme && window.onSystemTheme()", null);
-    }
-
-    // ------------------------------------------------------------------ e-hentai 로그인 (앱 안 브라우저)
-    private LinearLayout ehBox;
-    private WebView ehWeb;
-
-    /** e-hentai 로그인 페이지를 앱 안에서 열고, 로그인되면 쿠키를 읽어 저장합니다. 캡차도 이 화면에서 풀 수 있음. */
-    @SuppressLint("SetJavaScriptEnabled")
-    private void openEhLogin() {
-        if (ehBox != null) return;
-        if (checkEhCookies()) return;   // 이미 로그인되어 있음
-        ehBox = new LinearLayout(this);
-        ehBox.setOrientation(LinearLayout.VERTICAL);
-        ehBox.setBackgroundColor(BG);
-        LinearLayout bar = new LinearLayout(this);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(16), dp(8), dp(8), dp(8));
-        TextView title = text("e-hentai 로그인 — 로그인하면 자동으로 돌아갑니다", 14, TEXT, false);
-        bar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        Button close = button("닫기", v -> closeEhLogin());
-        ((LinearLayout.LayoutParams) close.getLayoutParams()).topMargin = 0;
-        bar.addView(close);
-        ehBox.addView(bar);
-        ehWeb = new WebView(this);
-        WebSettings s = ehWeb.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        s.setAllowFileAccess(false);
-        s.setAllowContentAccess(false);
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(ehWeb, true);   // 로봇 확인(캡차)용
-        ehWeb.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                checkEhCookies();
-            }
-
-            @Override
-            public void onReceivedError(WebView view, WebResourceRequest req, android.webkit.WebResourceError err) {
-                if (!req.isForMainFrame()) return;
-                // 국내 차단으로 연결이 끊기면 안내 화면을 보여 줌
-                String html = "<html><body style='background:#0f1115;color:#e9e7e3;font:16px sans-serif;padding:24px;line-height:1.6'>"
-                        + "<h2>e-hentai 에 접속하지 못했습니다</h2>"
-                        + "<p>국내에서는 e-hentai 가 차단되어 있어 연결이 끊깁니다 (" + android.text.Html.escapeHtml(String.valueOf(err.getDescription())) + ").</p>"
-                        + "<p><b>보안 폴더 안에</b> VPN 앱(예: 1.1.1.1)을 설치해 켠 뒤 다시 시도하세요. 일반 공간에서 켠 VPN 은 보안 폴더 앱에 적용되지 않습니다.</p>"
-                        + "<p><a style='color:#e8a33d' href='https://forums.e-hentai.org/index.php?act=Login&amp;CODE=00'>다시 시도</a></p></body></html>";
-                view.loadDataWithBaseURL("https://forums.e-hentai.org/", html, "text/html", "utf-8", null);
-            }
-        });
-        ehBox.addView(ehWeb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
-        root.addView(ehBox, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        ehWeb.loadUrl("https://forums.e-hentai.org/index.php?act=Login&CODE=00");
-    }
-
-    /** 로그인 쿠키가 있으면 저장하고 만화 탭으로 돌아갑니다. */
-    private boolean checkEhCookies() {
-        String c = CookieManager.getInstance().getCookie("https://forums.e-hentai.org");
-        String id = "", hash = "";
-        if (c != null) for (String part : c.split(";")) {
-            String kv = part.trim();
-            if (kv.startsWith("ipb_member_id=")) id = kv.substring(14);
-            if (kv.startsWith("ipb_pass_hash=")) hash = kv.substring(14);
-        }
-        if (!id.matches("\\d+") || id.equals("0") || !hash.matches("[0-9a-fA-F]{32}")) return false;
-        Library.get(this).ehSetLogin(id, hash);
-        closeEhLogin();
-        Toast.makeText(this, "e-hentai 에 로그인했습니다", Toast.LENGTH_SHORT).show();
-        if (web != null) web.evaluateJavascript("location.hash = '#/comics'; route();", null);
-        return true;
-    }
-
-    private void closeEhLogin() {
-        if (ehBox == null) return;
-        root.removeView(ehBox);
-        ehWeb.destroy();
-        ehWeb = null;
-        ehBox = null;
-        CookieManager.getInstance().flush();
     }
 
     // ------------------------------------------------------------------ native screens

@@ -74,7 +74,8 @@ function parseHash() {
   const [path, qs] = raw.split("?");
   return { path, params: new URLSearchParams(qs || "") };
 }
-const TAB_GROUP = { videos: "media", photos: "media", media: "media", tags: "library", performers: "library", settings: "library", library: "library" };
+const TAB_GROUP = { videos: "media", photos: "media", media: "media", tags: "library", performers: "library", settings: "library", library: "library", cloud: "library" };
+const SOURCE_LABEL = { mega: "MEGA", icloud: "iCloud", local: "이 기기" };
 function setTab(name) {
   const t = TAB_GROUP[name] || name;   // 사진·출연자·태그·설정은 ‘보관함’ 탭 안에 있음
   document.querySelectorAll(".tabs a").forEach((a) => a.classList.toggle("on", a.dataset.tab === t));
@@ -179,14 +180,14 @@ async function route() {
     if (path === "/performer") return await renderPerformer(+params.get("id"));
     if (path === "/settings") return await renderSettings();
     if (path === "/mega") return await renderMega(params);
+    if (path === "/cloud") return await renderCloud();
+    if (path === "/icloud") return await renderICloudAlbum(+params.get("a") || 0);
     if (path === "/photos") return await renderMedia(params, "photo");
     if (path === "/shorts") return await renderShorts(params);
     if (path === "/library") return await renderLibraryHub();
     if (path === "/media") return await renderMedia(params, params.get("type") || "all");
     if (path === "/duplicates") return await renderDuplicates();
     if (path === "/hidden") return await renderHidden();
-    if (path === "/comics") return await renderComics(params);
-    if (path === "/comic") return await renderComic(+params.get("gid"), params.get("t") || "", params);
     location.hash = "#/";
   } catch (e) {
     if (e.message !== "login required") $app.replaceChildren(h("div", { class: "empty" }, "오류: " + e.message));
@@ -316,15 +317,14 @@ function onSwipe(el, cb) {
 }
 
 // ---------------------------------------------------------------- 하단 탭 사이를 좌우로 밀어 이동 (갤러리처럼 손가락을 따라옴)
-const TAB_ORDER = ["home", "media", "shorts", "comics", "library"];
-const TAB_HASH = { home: "#/home", media: "#/media", shorts: () => "#/shorts?s=" + (Date.now() % 1000000), comics: "#/comics", library: "#/library" };
+const TAB_ORDER = ["home", "media", "shorts", "library"];
+const TAB_HASH = { home: "#/home", media: "#/media", shorts: () => "#/shorts?s=" + (Date.now() % 1000000), library: "#/library" };
 /** 지금 화면이 하단 탭의 첫 화면이면 그 탭 이름 (영상 화면·설정 등에서는 밀기 없음) */
 function currentRootTab() {
   const p = parseHash().path;
   if (p === "/home" || (p === "/" && !location.hash)) return "home";
   if (p === "/media" || p === "/" || p === "/photos") return "media";
   if (p === "/shorts") return "shorts";
-  if (p === "/comics") return "comics";
   if (p === "/library") return "library";
   return null;
 }
@@ -829,7 +829,7 @@ async function openViewer(items, start) {
     favBtn.classList.toggle("fav", !!cur.favorite);
     const taken = cur.taken ? new Date(cur.taken * 1000).toLocaleString("ko-KR") : "-";
     const rows = [["촬영", taken], ["해상도", cur.width ? `${cur.width} × ${cur.height}` : "-"], ["크기", fmtSize(cur.size)],
-      ["폴더", cur.folder || "-"], ["출처", cur.source === "mega" ? "MEGA" : "이 기기"]];
+      ["폴더", cur.folder || "-"], ["출처", SOURCE_LABEL[cur.source] || "이 기기"]];
     info.replaceChildren(
       h("h2", {}, cur.filename || cur.title),
       h("dl", {}, ...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])),
@@ -1006,7 +1006,7 @@ async function renderVideo(id, params) {
     if (!counted) { counted = true; api(`videos/${v.id}/play`, { method: "POST" }).catch(() => {}); }
   });
   video.addEventListener("error", () => {
-    if (mode === "direct" && video.error && v.source === "mega") {
+    if (mode === "direct" && video.error && (v.source === "mega" || v.source === "icloud")) {
       api("status").then((st) => toast(megaQuotaText(st) || "재생하지 못했습니다. 지원하지 않는 형식이거나 MEGA 연결 문제입니다.")).catch(() => {});
     } else if (mode === "direct" && video.error && !canTranscode) {
       toast("이 영상 형식은 브라우저에서 재생할 수 없습니다");
@@ -1050,7 +1050,7 @@ async function renderVideo(id, params) {
   })) : null;
 
   const favBtn = () => h("button", { class: "favbtn" + (v.favorite ? " on" : ""), onclick: () => save({ favorite: !v.favorite }) }, v.favorite ? "♥ 즐겨찾기" : "♡ 즐겨찾기");
-  const dlBtn = () => v.source === "mega" ? h("a", { class: "btn sm", href: `/media/${v.id}?dl=1` }, "휴대폰에 저장")
+  const dlBtn = () => v.source === "mega" || v.source === "icloud" ? h("a", { class: "btn sm", href: `/media/${v.id}?dl=1` }, "휴대폰에 저장")
     : v.can_delete === false ? null : h("a", { class: "btn sm", href: `/media/${v.id}`, download: v.filename }, "다운로드");
   const addMarker = async (titleIn) => {
     v.markers = await api(`videos/${v.id}/markers`, { method: "POST", body: { seconds: currentTime(), title: titleIn ? titleIn.value.trim() : "" } });
@@ -1079,7 +1079,7 @@ async function renderVideo(id, params) {
           h("button", { class: "chip dashed", onclick: () => setEditing(true) }, "✎ 수정"))),
       h("div", { class: "actions", style: "margin-top:12px" }, dlBtn(),
         h("button", { class: "btn sm", onclick: () => addMarker(null) }, "🔖 지금 위치 북마크"),
-        v.source === "mega" ? h("span", { class: "meta" }, "MEGA · " + fmtSize(v.size)) : h("span", { class: "meta" }, fmtSize(v.size))),
+        h("span", { class: "meta" }, (v.source !== "local" ? SOURCE_LABEL[v.source] + " · " : "") + fmtSize(v.size))),
       v.details ? h("p", { class: "vmemo" }, v.details) : null,
       v.markers.length ? h("div", { class: "vmarks" }, v.markers.map((m) =>
         h("button", { onclick: () => seekTo(m.seconds) }, h("b", {}, fmtDur(m.seconds)), h("span", {}, m.title || "북마크")))) : null,
@@ -1268,6 +1268,7 @@ async function renderSettings() {
       status.last_scan ? h("p", { class: "meta" }, `마지막 스캔: ${fmtDate(status.last_scan)}`) : null),
     megaQuotaText(status) ? h("div", { class: "panel warn", style: "font-size:14px" }, megaQuotaText(status)) : null,
     st.mega_supported ? megaPanel(st.mega || [], st) : null,
+    st.icloud ? icloudPanel(st.icloud) : null,
     h("div", { class: "panel" }, h("h3", {}, "정리"),
       h("p", { class: "meta" }, `찾을 수 없는 파일: ${c.missing || 0}개 (옮겨졌거나 삭제된 파일)`),
       h("button", { class: "btn", disabled: !c.missing, onclick: async () => {
@@ -1474,7 +1475,7 @@ function megaPanel(links, st) {
     } catch (e) { msg.textContent = e.message; btn.disabled = false; }
   };
   const addBtn = h("button", { class: "btn primary", onclick: (e) => add(e.currentTarget) }, "추가");
-  return h("div", { class: "panel" }, h("h3", {}, "MEGA 폴더 링크"),
+  return h("div", { class: "panel" }, h("h3", {}, "클라우드 · MEGA 폴더 링크"),
     h("p", { class: "meta" }, "MEGA 앱이나 웹에서 폴더 → 공유 → 링크 복사로 만든 링크를 붙여넣으세요. 링크에는 열쇠(# 뒤)가 포함되어야 합니다. 영상은 라이브러리에, 모든 파일은 ‘MEGA 파일 보기’에 나옵니다."),
     h("ul", { class: "pathlist" }, links.length ? links.map((l) => h("li", {},
       h("span", { class: "p" }, "☁ " + l.name, h("div", { class: "meta" }, `파일 ${l.files}개 · 영상 ${l.videos}개`),
@@ -1531,6 +1532,66 @@ function megaThumbToggle(st) {
     st.mega_thumb_missing ? h("p", { class: "meta", style: "margin:4px 0 0" }, `썸네일이 없는 MEGA 영상: ${st.mega_thumb_missing}개` + (st.mega_thumb_failed ? ` (만들지 못한 영상 ${st.mega_thumb_failed}개)` : "")) : null);
 }
 
+// ---------------------------------------------------------------- 클라우드 파일 (MEGA · iCloud)
+async function renderCloud() {
+  setTab("cloud");
+  const st = await api("settings");
+  const mega = st.mega || [], icloud = st.icloud || [];
+  const row = (href, title, sub, err) => h("a", { href }, h("div", {}, h("div", {}, title), h("div", { class: "meta" }, sub), err ? h("div", { class: "warn" }, err) : null), h("span", {}, "›"));
+  $app.replaceChildren(h("div", {},
+    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "MEGA · iCloud"), h("h1", {}, "클라우드 파일"))),
+    h("h2", { class: "pf-sec" }, "MEGA 폴더"),
+    mega.length ? h("div", { class: "lib-list" }, mega.map((l) => row(`#/mega?link=${l.index}`, "☁ " + l.name, `파일 ${l.files}개 · 영상 ${l.videos}개`, l.error)))
+      : h("p", { class: "meta" }, "연결된 MEGA 폴더가 없습니다."),
+    h("h2", { class: "pf-sec" }, "iCloud 공유 앨범"),
+    icloud.length ? h("div", { class: "lib-list" }, icloud.map((a) => row(`#/icloud?a=${a.index}`, " " + a.name, `사진 ${a.photos}장 · 영상 ${a.videos}개`, a.error)))
+      : h("p", { class: "meta" }, "연결된 iCloud 공유 앨범이 없습니다."),
+    h("a", { class: "btn", href: "#/settings", style: "margin-top:16px;display:inline-block" }, "설정에서 링크 추가·삭제")));
+}
+
+async function renderICloudAlbum(i) {
+  setTab("cloud");
+  const d = await api(`icloud/${i}/items`);
+  const photos = d.items.filter((x) => x.kind === "photo");
+  const grid = h("div", { class: "sqgrid" }, d.items.map((it) => {
+    const isPhoto = it.kind === "photo";
+    const img = h("img", { loading: "lazy", alt: it.title || "", src: isPhoto ? `/photothumb/${it.id}.jpg` : thumbUrl(it.id, 0, 1) });
+    img.onerror = () => (img.hidden = true);
+    return isPhoto
+      ? h("button", { class: "sq", "aria-label": it.title, onclick: () => openViewer(photos, photos.indexOf(it)) }, img)
+      : h("a", { class: "sq", href: `#/v/${it.id}`, "aria-label": it.title }, img, h("span", { class: "sq-dur" }, "▶ " + (it.duration ? fmtDur(it.duration) : "")));
+  }));
+  $app.replaceChildren(h("div", {},
+    h("a", { class: "btn sm", href: "#/cloud", style: "margin-bottom:12px;display:inline-block" }, "‹ 클라우드 파일"),
+    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, `iCloud 공유 앨범 · ${d.items.length}개`), h("h1", {}, d.name))),
+    d.error ? h("div", { class: "panel warn" }, d.error) : null,
+    d.items.length ? grid : h("div", { class: "empty" }, "이 앨범은 비어 있습니다.")));
+}
+
+function icloudPanel(albums) {
+  const input = h("input", { type: "text", placeholder: "https://www.icloud.com/sharedalbum/#…", autocomplete: "off" });
+  const msg = h("p", { class: "meta" });
+  const addBtn = h("button", { class: "btn primary", onclick: async (e) => {
+    const url = input.value.trim();
+    if (!url) return;
+    const btn = e.currentTarget;
+    btn.disabled = true; msg.textContent = "iCloud 앨범을 불러오는 중…";
+    try { await api("icloud", { method: "POST", body: { url } }); toast("iCloud 앨범을 추가했습니다"); renderSettings(); }
+    catch (err) { msg.textContent = err.message; btn.disabled = false; }
+  } }, "추가");
+  return h("div", { class: "panel" }, h("h3", {}, "클라우드 · iCloud 공유 앨범"),
+    h("p", { class: "meta" }, "아이폰 사진 앱 → 앨범 → 공유 앨범 → 사람 아이콘 → ‘공개 웹사이트’를 켜면 나오는 링크를 붙여넣으세요. 그 앨범의 사진과 영상이 미디어 탭에 나옵니다. (iCloud Drive 와 일반 사진 보관함은 로그인이 필요해서 지원하지 않습니다)"),
+    h("ul", { class: "pathlist" }, albums.length ? albums.map((a) => h("li", {},
+      h("span", { class: "p" }, " " + a.name, h("div", { class: "meta" }, `사진 ${a.photos}장 · 영상 ${a.videos}개`), a.error ? h("div", { class: "warn" }, a.error) : null),
+      h("a", { class: "btn sm", href: `#/icloud?a=${a.index}` }, "열기"),
+      h("button", { class: "btn sm danger", onclick: async () => {
+        if (!confirm(`‘${a.name}’ iCloud 앨범 연결을 끊을까요? (iCloud 의 사진은 그대로입니다)`)) return;
+        await api(`icloud/${a.index}`, { method: "DELETE" }); renderSettings();
+      } }, "제거")))
+      : h("li", { class: "meta" }, "연결된 iCloud 공유 앨범이 없습니다.")),
+    h("div", { class: "taginput" }, input, addBtn), msg);
+}
+
 async function renderMega(params) {
   setTab("settings");   // MEGA 파일 보기는 설정 안에 있음
   const links = await api("mega");
@@ -1567,7 +1628,7 @@ async function renderMega(params) {
     }
   }
   $app.replaceChildren(h("div", {},
-    h("a", { class: "btn sm", href: "#/settings", style: "margin-bottom:12px;display:inline-block" }, "‹ 설정"),
+    h("a", { class: "btn sm", href: "#/cloud", style: "margin-bottom:12px;display:inline-block" }, "‹ 클라우드 파일"),
     linkChips, crumbs,
     data.error ? h("div", { class: "panel warn" }, data.error) : null,
     folders.length ? h("div", { class: "chips", style: "margin-bottom:14px" }, folders) : null,
@@ -1687,9 +1748,9 @@ async function renderLibraryHub() {
     h("div", { class: "lib-grid" },
       h("a", { class: "lib-tile", href: "#/performers" }, libIcon("people"), h("div", {}, h("b", {}, "출연자"), h("br"), peopleSub)),
       h("a", { class: "lib-tile", href: "#/tags" }, libIcon("tags"), h("div", {}, h("b", {}, "태그"), h("br"), tagSub)),
-      tile("#/settings", "settings", "설정", "폴더 · MEGA · 백업 · 화면")),
+      tile("#/settings", "settings", "설정", "폴더 · 클라우드 · 백업 · 화면")),
     h("div", { class: "lib-list" },
-      serverCaps.mega_supported ? h("a", { href: "#/mega" }, "☁ MEGA 파일", h("span", {}, "›")) : null,
+      serverCaps.mega_supported ? h("a", { href: "#/cloud" }, "☁ 클라우드 파일", h("span", {}, "MEGA · iCloud ›")) : null,
       serverCaps.duplicates ? h("a", { href: "#/duplicates" }, "중복 영상 찾기", h("span", {}, "›")) : null,
       serverCaps.hidden_count !== undefined ? h("a", { href: "#/hidden" }, "숨긴 영상", h("span", {}, `${serverCaps.hidden_count}개 ›`)) : null,
       h("a", { href: "#/?fav=1" }, "즐겨찾기 영상", h("span", {}, "›")))));
@@ -1726,13 +1787,12 @@ async function renderHome() {
   const resume = shelf("이어 보기", "#/?sort=played", "vids");
   const recent = shelf("최근 추가된 영상", "#/?sort=added", "vids");
   const favs = shelf("즐겨찾기 영상", "#/?fav=1", "vids");
-  const comics = shelf("이어 읽는 만화", "#/comics", "comics");
   const photos = shelf("최근 사진", "#/photos", "photos");
   const people = shelf("출연자", "#/performers", "people");
   $app.replaceChildren(h("div", { class: "home" },
     h("div", { class: "home-head" }, h("div", {}, stats, h("h1", {}, "내 서재")),
       h("a", { class: "btn", href: "#/?q=", "aria-label": "검색" }, "검색")),
-    resume.sec, recent.sec, comics.sec, favs.sec, photos.sec, people.sec));
+    resume.sec, recent.sec, favs.sec, photos.sec, people.sec));
 
   const counts = { videos: null, photos: null, people: null };
   const n = (x) => (x == null ? "…" : x.toLocaleString());
@@ -1759,306 +1819,10 @@ async function renderHome() {
     photos.fill(d.items.map((p, i) => photoCell(p, "grid", () => openViewer(d.items, i))));
   }));
   else photos.fill([]);
-  if (serverCaps.eh) jobs.push(api("eh/recent").then((d) => {
-    comics.fill((d.items || []).map((g) => comicCard(g)));
-  }));
-  else comics.fill([]);
   await Promise.all(jobs.map((j) => j.catch(() => {})));
   // 모두 비어 있으면 안내
   if (!$app.querySelector(".shelf")) $app.querySelector(".home").append(h("div", { class: "empty" },
     h("p", {}, "아직 보여 줄 것이 없습니다."), h("a", { class: "btn primary", href: "#/settings" }, "설정에서 폴더나 MEGA 링크 추가")));
-}
-
-// ---------------------------------------------------------------- e-hentai 즐겨찾기 만화
-function ehLoginForm(inApp) {
-  const user = h("input", { type: "text", placeholder: "아이디", autocomplete: "username" });
-  const pass = h("input", { type: "password", placeholder: "비밀번호", autocomplete: "current-password" });
-  const msg = h("p", { class: "warn" });
-  const submit = async (body, btn) => {
-    btn.disabled = true; msg.textContent = "";
-    try { await api("eh/login", { method: "POST", body }); toast("로그인했습니다"); route(); }
-    catch (e) { msg.textContent = e.message; btn.disabled = false; }
-  };
-  const loginBtn = h("button", { class: "btn primary", onclick: (e) => submit({ user: user.value, pass: pass.value }, e.currentTarget) }, "로그인");
-  const mid = h("input", { type: "text", inputmode: "numeric", placeholder: "ipb_member_id (숫자)" });
-  const hash = h("input", { type: "text", placeholder: "ipb_pass_hash (32자리)", autocomplete: "off" });
-  const cookieBtn = h("button", { class: "btn", onclick: (e) => submit({ member_id: mid.value, pass_hash: hash.value }, e.currentTarget) }, "쿠키로 로그인");
-  const pwForm = h("div", { style: "display:grid;gap:8px;margin-top:10px" }, user, pass, loginBtn, msg);
-  const cookieForm = [
-    h("p", { class: "meta" }, "PC 브라우저에서 e-hentai 에 로그인한 뒤, 개발자 도구(F12) → Application(저장소) → Cookies → e-hentai.org 에서 ipb_member_id 와 ipb_pass_hash 값을 복사해 넣으세요."),
-    h("div", { style: "display:grid;gap:8px;margin-top:10px" }, mid, hash, cookieBtn)];
-  return h("div", { class: "settings" },
-    h("div", { class: "panel" }, h("h3", {}, "e-hentai 로그인"),
-      h("p", { class: "meta" }, "e-hentai(포럼) 계정으로 로그인하면 내 즐겨찾기 만화를 여기서 볼 수 있습니다. 비밀번호는 저장하지 않고 로그인 쿠키만 이 앱 안에 저장합니다."),
-      inApp ? h("div", { style: "margin-top:12px" },
-        h("a", { class: "btn primary", href: "vidshelf://eh-login", style: "display:block;text-align:center;padding:12px" }, "e-hentai 로그인 화면 열기"),
-        h("p", { class: "meta" }, "앱 안에 e-hentai 로그인 페이지가 열립니다. 아이디·비밀번호를 넣고 로봇 확인이 나오면 풀어 주세요. 로그인되면 자동으로 이 화면으로 돌아옵니다.")) : pwForm),
-    inApp ? h("details", { class: "panel" }, h("summary", {}, "다른 방법: 아이디·비밀번호를 여기에 입력"), pwForm) : null,
-    h("details", { class: "panel" }, h("summary", {}, inApp ? "다른 방법: 쿠키 값 직접 입력 (PC 필요)" : "쿠키로 로그인 (로봇 확인 때문에 위 로그인이 안 될 때)"), ...cookieForm));
-}
-
-/** 표지 주소: 앱을 거쳐 받아서 보관 (차단·오프라인 대비) */
-const comicThumb = (u) => !u ? "" : u.startsWith("/") ? u : `/eh/thumb?u=${encodeURIComponent(u)}`;
-
-function comicCard(g, extra) {
-  const img = h("img", { src: comicThumb(g.thumb), loading: "lazy", alt: "" });
-  img.onerror = () => (img.hidden = true);
-  const read = g.read_page > 0 ? Math.min(100, (g.read_page / Math.max(1, g.pages)) * 100) : 0;
-  return h("a", { class: "ccard", href: `#/comic?gid=${g.gid}&t=${g.token}` },
-    h("div", { class: "cthumb" }, img, h("span", { class: "badge dur" }, `${g.pages}p`),
-      read ? h("div", { class: "progress", style: `width:${read}%` }) : null),
-    h("div", { class: "title", title: g.title }, g.title_jpn || g.title),
-    h("div", { class: "sub" }, g.category ? h("span", {}, g.category) : null, g.read_page ? h("span", {}, `${g.read_page}쪽까지 읽음`) : null),
-    extra || null);
-}
-
-async function renderComics(params) {
-  setTab("comics");
-  const tab = ["fav", "saved"].includes(params.get("tab")) ? params.get("tab") : "ko";
-  const st = await api("eh/status");
-  const tabs = h("div", { class: "seg comic-tabs", role: "tablist" },
-    h("a", { class: tab === "ko" ? "on" : "", href: "#/comics" }, "한국어"),
-    h("a", { class: tab === "fav" ? "on" : "", href: "#/comics?tab=fav" }, "♥ 즐겨찾기"),
-    h("a", { class: tab === "saved" ? "on" : "", href: "#/comics?tab=saved" }, "💾 저장"));
-  if (tab === "saved") return renderSavedComics(tabs);
-  if (tab === "fav" && !st.logged_in) { $app.replaceChildren(h("div", {}, tabs, ehLoginForm(st.in_app))); return; }
-
-  const favcat = params.get("favcat") || "all", q = params.get("q") || "";
-  const update = (ch) => {
-    const p = new URLSearchParams(params);
-    for (const [k, v] of Object.entries(ch)) (v == null || v === "") ? p.delete(k) : p.set(k, v);
-    location.hash = "#/comics" + (p.toString() ? "?" + p : "");
-  };
-  let t;
-  const search = h("input", { type: "search", class: "search", value: q,
-    placeholder: tab === "fav" ? "즐겨찾기에서 검색 (제목, 태그)" : "한국어 만화 검색 (제목, 태그, 작가)",
-    oninput: (e) => { clearTimeout(t); t = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 700); } });
-  const folderChips = h("div", { class: "chips" });
-  const grid = h("div", { class: "cgrid" });
-  const more = h("div", { class: "more" });
-  const logout = st.logged_in ? h("button", { class: "btn sm", onclick: async () => {
-    if (!confirm("e-hentai 에서 로그아웃할까요? (이 앱에 저장한 로그인 쿠키를 지웁니다)")) return;
-    await api("eh/logout", { method: "POST" }); route();
-  } }, "로그아웃") : null;
-  $app.replaceChildren(h("div", {},
-    h("div", { class: "toolbar" }, tabs, h("span", { style: "flex:1" }), tab === "fav" ? logout : null),
-    h("div", { class: "toolbar" }, search),
-    tab === "fav" ? h("div", { class: "toolbar" }, folderChips) : null,
-    grid, more));
-  keepTypingFocus(search);
-  let next = null, first = true;
-  async function load() {
-    const qs = new URLSearchParams();
-    if (tab === "fav") qs.set("favcat", favcat);
-    if (q) qs.set("q", q);
-    if (next) qs.set("next", next);
-    more.replaceChildren(h("span", { class: "meta" }, "불러오는 중…"));
-    let d;
-    try { d = await api((tab === "fav" ? "eh/favorites?" : "eh/search?") + qs); }
-    catch (e) { more.replaceChildren(h("span", { class: "warn" }, e.message), h("button", { class: "btn sm", style: "margin-left:8px", onclick: load }, "다시 시도")); return; }
-    if (tab === "fav" && d.logged_in === false) { $app.replaceChildren(h("div", {}, tabs, h("p", { class: "warn" }, "로그인이 풀렸습니다. 다시 로그인하세요."), ehLoginForm(st.in_app))); return; }
-    if (first) {
-      first = false;
-      if (tab === "fav") {
-        const total = d.folders.reduce((n, f) => n + f.count, 0);
-        folderChips.replaceChildren(
-          h("button", { class: "chip" + (favcat === "all" ? " on" : ""), onclick: () => update({ favcat: null }) }, `전체${total ? " " + total : ""}`),
-          ...d.folders.filter((f) => f.count > 0 || f.cat === favcat).map((f) =>
-            h("button", { class: "chip" + (favcat === f.cat ? " on" : ""), onclick: () => update({ favcat: f.cat }) }, `${f.name} ${f.count}`)));
-      }
-      if (!d.items.length) {
-        grid.replaceWith(h("div", { class: "empty" }, q ? "검색 결과가 없습니다." : tab === "fav" ? "즐겨찾기한 만화가 없습니다." : "만화를 찾지 못했습니다."));
-        more.replaceChildren(); return;
-      }
-    }
-    d.items.forEach((g) => grid.append(comicCard(g)));
-    next = d.next;
-    if (next) autoMore(more, load); else more.replaceChildren();
-  }
-  await load();
-}
-
-async function renderSavedComics(tabs) {
-  const d = await api("eh/saved");
-  const grid = h("div", { class: "cgrid" });
-  for (const g of d.items) {
-    const status = g.done ? h("div", { class: "meta" }, `저장됨 · ${g.pages}쪽`)
-      : g.error ? h("div", { class: "warn" }, `멈춤 ${g.saved_pages}/${g.pages}: ${g.error}`)
-      : h("div", { class: "meta" }, `받는 중 ${g.saved_pages}/${g.pages}`);
-    const btns = h("div", { class: "row", style: "margin-top:4px;gap:4px" },
-      !g.done ? h("button", { class: "btn sm", onclick: async (e) => { e.preventDefault(); await api("eh/save", { method: "POST", body: g }); toast("이어서 받습니다"); route(); } }, "이어 받기") : null,
-      h("button", { class: "btn sm danger", onclick: async (e) => {
-        e.preventDefault();
-        if (!confirm(`‘${g.title}’ 저장본을 지울까요?`)) return;
-        await api("eh/unsave", { method: "POST", body: { gid: g.gid } }); route();
-      } }, "삭제"));
-    grid.append(h("div", {}, comicCard(g, status), btns));
-  }
-  $app.replaceChildren(h("div", {},
-    h("div", { class: "toolbar" }, tabs),
-    h("p", { class: "meta" }, "기기에 저장한 만화는 인터넷 없이 볼 수 있습니다. 만화 정보 화면의 ‘기기에 저장’으로 추가하세요."),
-    d.items.length ? grid : h("div", { class: "empty" }, "저장한 만화가 없습니다.")));
-}
-
-async function renderComic(gid, token, params) {
-  setTab("comics");
-  const g = await api(`eh/gallery?gid=${gid}&t=${token}`);
-  if (g.logged_in === false) { location.hash = "#/comics"; return; }
-  const cover = h("img", { src: comicThumb(g.thumb), alt: "" });
-  const groups = {};
-  for (const tag of g.tags) {
-    const [ns, name] = tag.includes(":") ? tag.split(/:(.*)/s) : ["misc", tag];
-    (groups[ns] = groups[ns] || []).push(name);
-  }
-  const NS = { language: "언어", parody: "패러디", character: "캐릭터", group: "그룹", artist: "작가", cosplayer: "코스플레이어", male: "남성", female: "여성", mixed: "혼합", other: "기타", misc: "기타", reclass: "분류", location: "장소" };
-  const tagRows = Object.entries(groups).flatMap(([ns, names]) => [h("dt", {}, NS[ns] || ns),
-    h("dd", {}, h("div", { class: "chips" }, names.map((n) => h("a", { class: "chip", href: `#/comics?q=${encodeURIComponent(`${ns}:"${n}$"`)}` }, n))))]);
-  const startAt = Math.min(Math.max(1, g.read_page || 1), g.pages);
-  // 즐겨찾기 (로그인했을 때만)
-  const favBox = h("div", { class: "row" });
-  const drawFav = (f) => {
-    if (!f || f.logged_in === false) { favBox.replaceChildren(); return; }
-    const sel = h("select", { "aria-label": "즐겨찾기 폴더" }, Array.from({ length: 10 }, (_, i) => h("option", { value: i, selected: i === Math.max(0, f.favcat) }, `폴더 ${i}`)));
-    const setFav = async (cat, btn) => {
-      btn.disabled = true;
-      try { drawFav(await api("eh/fav", { method: "POST", body: { gid: g.gid, t: g.token, favcat: cat } })); toast(cat < 0 ? "즐겨찾기에서 뺐습니다" : "즐겨찾기에 넣었습니다"); }
-      catch (e) { toast(e.message); btn.disabled = false; }
-    };
-    favBox.replaceChildren(...(f.favcat >= 0
-      ? [h("span", { class: "chip on" }, `♥ ${f.name || "즐겨찾기"}`), sel,
-         h("button", { class: "btn sm", onclick: (e) => setFav(+sel.value, e.currentTarget) }, "폴더 옮기기"),
-         h("button", { class: "btn sm danger", onclick: (e) => setFav(-1, e.currentTarget) }, "즐겨찾기 해제")]
-      : [sel, h("button", { class: "btn sm", onclick: (e) => setFav(+sel.value, e.currentTarget) }, "♡ 즐겨찾기 추가")]));
-  };
-  api(`eh/favstate?gid=${g.gid}&t=${g.token}`).then(drawFav).catch(() => {});
-  // 기기에 저장
-  const saveBox = h("div", { class: "row" });
-  const drawSave = async () => {
-    const d = await api("eh/saved").catch(() => ({ items: [] }));
-    const s = d.items.find((x) => x.gid === g.gid);
-    saveBox.replaceChildren(s
-      ? h("a", { class: "chip", href: "#/comics?tab=saved" }, s.done ? `💾 저장됨` : s.error ? `💾 멈춤 ${s.saved_pages}/${s.pages}` : `💾 받는 중 ${s.saved_pages}/${s.pages}`)
-      : h("button", { class: "btn sm", onclick: async (e) => {
-          e.currentTarget.disabled = true;
-          await api("eh/save", { method: "POST", body: { gid: g.gid, token: g.token, title: g.title_jpn || g.title, thumb: g.thumb, pages: g.pages, category: g.category } });
-          toast("기기에 저장을 시작했습니다. 위쪽 막대에 진행 상황이 나옵니다."); drawSave();
-        } }, "💾 기기에 저장"));
-  };
-  drawSave();
-  $app.replaceChildren(h("div", { class: "comic" },
-    h("div", { class: "panel comic-head" },
-      h("div", { class: "comic-cover", onclick: () => openReader(g, 1) }, cover),
-      h("div", { class: "pf-main" },
-        h("h2", { class: "pf-name", style: "font-size:18px" }, g.title_jpn || g.title),
-        g.title_jpn ? h("p", { class: "meta", style: "margin:4px 0 0" }, g.title) : null,
-        h("p", { class: "meta", style: "margin:6px 0 10px" }, [g.category, `${g.pages}쪽`, g.rating ? `★ ${g.rating}` : "", g.posted ? new Date(g.posted * 1000).toLocaleDateString("ko-KR") : ""].filter(Boolean).join(" · ")),
-        h("div", { class: "row" },
-          g.read_page > 1 ? h("button", { class: "btn primary", onclick: () => openReader(g, startAt) }, `이어 읽기 (${startAt}쪽)`) : null,
-          h("button", { class: "btn" + (g.read_page > 1 ? "" : " primary"), onclick: () => openReader(g, 1) }, "처음부터 읽기")),
-        h("div", { class: "row", style: "margin-top:8px" }, favBox, saveBox))),
-    tagRows.length ? h("div", { class: "panel" }, h("h3", {}, "태그"), h("dl", { class: "info", style: "gap:8px 12px;align-items:start" }, ...tagRows)) : null,
-    h("p", { class: "meta" }, h("a", { href: `https://e-hentai.org/g/${g.gid}/${g.token}/`, target: "_blank", rel: "noopener", style: "text-decoration:underline" }, "e-hentai 에서 열기"))));
-  if (params.get("read")) openReader(g, +params.get("read") || startAt);
-}
-
-/** 만화 보기: 세로 스크롤 또는 한 장씩 넘기기. 화면 근처 페이지만 받고, 읽은 위치를 기억. */
-function openReader(g, start) {
-  let closed = false, current = start, saveTimer;
-  let mode = (() => { try { return localStorage.getItem("vs-reader-mode") || "scroll"; } catch (e) { return "scroll"; } })();
-  const counter = h("span", { class: "count" });
-  const pageUrl = (n) => `/eh/page/${g.gid}/${g.token}/${n}`;
-  const progressBody = () => ({ gid: g.gid, page: current, token: g.token, title: g.title_jpn || g.title, thumb: g.thumb, pages: g.pages });
-  const drawCounter = () => (counter.textContent = `${current} / ${g.pages}`);
-  const saveProgress = () => {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => api("eh/progress", { method: "POST", body: progressBody() }).catch(() => {}), 800);
-  };
-  const setCurrent = (n) => { current = n; drawCounter(); saveProgress(); };
-
-  /** 실패한 페이지: 이유를 서버에 다시 물어서 표시 */
-  const failView = (n, src, retry) => {
-    const why = h("p", { class: "rerr" });
-    fetch(src).then((r) => r.json().then((d) => d.error, () => (r.ok ? "이미지를 표시하지 못했습니다" : `HTTP ${r.status}`)))
-      .then((t) => (why.textContent = t || "")).catch(() => (why.textContent = "앱 서버에 연결하지 못했습니다"));
-    return h("div", { class: "rfail" }, h("button", { class: "btn", onclick: (e) => { e.stopPropagation(); retry(); } }, `${n}쪽 불러오기 실패 · 다시 시도`), why);
-  };
-
-  // ---- 세로 스크롤
-  const pages = [];
-  const list = h("div", { class: "rpages" });
-  const load = (i) => {
-    const pg = pages[i];
-    if (!pg || pg.dataset.state) return;
-    pg.dataset.state = "loading";
-    const img = h("img", { alt: `${i + 1}쪽`, decoding: "async" });
-    img.onload = () => { pg.dataset.state = "done"; pg.classList.add("loaded"); };
-    img.onerror = () => { pg.dataset.state = "failed"; pg.replaceChildren(failView(i + 1, img.src, () => { pg.dataset.state = ""; pg.replaceChildren(h("span", { class: "meta" }, `${i + 1}`)); load(i); })); };
-    img.src = pageUrl(i + 1);
-    pg.replaceChildren(img);
-  };
-  for (let i = 0; i < g.pages; i++) {
-    const pg = h("div", { class: "rpage", "data-n": i + 1 }, h("span", { class: "meta" }, `${i + 1}`));
-    pages.push(pg); list.append(pg);
-  }
-  const near = new IntersectionObserver((ents) => ents.forEach((e) => e.isIntersecting && load(+e.target.dataset.n - 1)), { rootMargin: "300% 0px" });
-  const mid = new IntersectionObserver((ents) => ents.forEach((e) => { if (e.isIntersecting && mode === "scroll") setCurrent(+e.target.dataset.n); }), { rootMargin: "-50% 0px -50% 0px" });
-  const end = h("div", { class: "rend" }, h("p", {}, "마지막 쪽입니다"), h("button", { class: "btn", onclick: () => history.back() }, "닫기"));
-  const scrollView = h("div", {}, list, end);
-
-  // ---- 한 장씩
-  const single = h("div", { class: "rsingle" });
-  const showSingle = (n) => {
-    if (n < 1) return;
-    if (n > g.pages) { toast("마지막 쪽입니다"); return; }
-    setCurrent(n);
-    const img = h("img", { alt: `${n}쪽`, src: pageUrl(n) });
-    img.onerror = () => single.replaceChildren(failView(n, img.src, () => showSingle(n)));
-    single.replaceChildren(img);
-    for (const k of [n + 1, n + 2]) if (k <= g.pages) new Image().src = pageUrl(k);   // 다음 쪽 미리 받기
-  };
-  let sx = null, sy = null;
-  single.addEventListener("touchstart", (e) => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
-  single.addEventListener("touchend", (e) => {
-    if (sx == null) return;
-    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy; sx = null;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { e.preventDefault(); showSingle(dx < 0 ? current + 1 : current - 1); }
-  });
-  single.addEventListener("click", (e) => {   // 왼쪽 1/3: 이전, 오른쪽 1/3: 다음, 가운데: 막대 숨기기
-    const x = e.clientX / window.innerWidth;
-    if (x < 0.33) showSingle(current - 1); else if (x > 0.67) showSingle(current + 1); else bar.classList.toggle("hide");
-  });
-
-  const modeBtn = h("button", { class: "vbtn rmode", "aria-label": "보기 방식" });
-  const applyMode = () => {
-    modeBtn.textContent = mode === "scroll" ? "한 장" : "스크롤";
-    el.classList.toggle("paged", mode === "page");
-    if (mode === "page") { scrollView.hidden = true; single.hidden = false; showSingle(current); }
-    else { single.hidden = true; scrollView.hidden = false; requestAnimationFrame(() => pages[current - 1] && pages[current - 1].scrollIntoView()); }
-  };
-  modeBtn.onclick = () => { mode = mode === "scroll" ? "page" : "scroll"; try { localStorage.setItem("vs-reader-mode", mode); } catch (e) {} applyMode(); };
-
-  const close = () => {
-    if (closed) return;
-    closed = true; near.disconnect(); mid.disconnect(); el.remove(); document.body.style.overflow = "";
-    window.removeEventListener("popstate", onPop); document.removeEventListener("keydown", onKey);
-    api("eh/progress", { method: "POST", body: progressBody() }).catch(() => {}).then(() => route());
-  };
-  const onPop = () => close();
-  const onKey = (e) => {
-    if (mode !== "page") return;
-    if (e.key === "ArrowRight") showSingle(current + 1); else if (e.key === "ArrowLeft") showSingle(current - 1);
-  };
-  const bar = h("div", { class: "vtop" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, icon("close")), counter, modeBtn);
-  const el = h("div", { class: "viewer reader", role: "dialog", "aria-modal": "true" }, bar, scrollView, single);
-  list.addEventListener("click", (e) => { if (e.target.tagName === "IMG") bar.classList.toggle("hide"); });
-  document.body.append(el);
-  document.body.style.overflow = "hidden";
-  history.pushState({ viewer: true }, "");
-  window.addEventListener("popstate", onPop);
-  document.addEventListener("keydown", onKey);
-  pages.forEach((p) => { near.observe(p); mid.observe(p); });
-  drawCounter();
-  applyMode();
 }
 
 // ---------------------------------------------------------------- 백업 / 복원
@@ -2068,7 +1832,7 @@ function backupPanel() {
   file.addEventListener("change", async () => {
     const f = file.files[0];
     if (!f) return;
-    if (!confirm(`‘${f.name}’ 백업으로 지금 정보를 바꿀까요?\n지금 있는 태그·별점·출연자·만화 읽은 위치는 백업 내용으로 바뀝니다.`)) { file.value = ""; return; }
+    if (!confirm(`‘${f.name}’ 백업으로 지금 정보를 바꿀까요?\n지금 있는 태그·별점·출연자 정보는 백업 내용으로 바뀝니다.`)) { file.value = ""; return; }
     msg.textContent = "불러오는 중…";
     try {
       const text = await f.text();
@@ -2081,7 +1845,7 @@ function backupPanel() {
     file.value = "";
   });
   return h("div", { class: "panel" }, h("h3", {}, "백업 / 복원"),
-    h("p", { class: "meta" }, "태그·별점·즐겨찾기·출연자 정보·북마크·메모·만화 읽은 위치·MEGA 링크를 파일 하나로 저장합니다. 앱을 지웠다 다시 설치할 때 이 파일로 되살릴 수 있습니다. (비밀번호와 e-hentai 로그인은 넣지 않습니다)"),
+    h("p", { class: "meta" }, "태그·별점·즐겨찾기·출연자 정보·북마크·메모·클라우드 링크를 파일 하나로 저장합니다. 앱을 지웠다 다시 설치할 때 이 파일로 되살릴 수 있습니다. (비밀번호와 e-hentai 로그인은 넣지 않습니다)"),
     h("p", { class: "warn" }, "백업 파일에는 MEGA 링크(열쇠 포함)가 들어 있으니 다른 사람에게 보내지 마세요."),
     h("div", { class: "row" },
       h("a", { class: "btn primary", href: "/api/backup", download: "vidshelf-backup.json" }, "백업 파일 저장 (Download 폴더)"),
@@ -2104,7 +1868,7 @@ async function renderHidden() {
         h("div", { class: "thumb" }, img, h("div", { class: "noimg" }, "▶")),
         h("div", { class: "dup-body" },
           h("div", { class: "dup-name" }, v.filename),
-          h("div", { class: "meta" }, (v.source === "mega" ? "☁ MEGA · " : "📱 이 기기 · ") + (v.folder || "") + " · " + fmtSize(v.size)),
+          h("div", { class: "meta" }, (v.source === "local" ? "📱 이 기기 · " : "☁ " + (SOURCE_LABEL[v.source] || "") + " · ") + (v.folder || "") + " · " + fmtSize(v.size)),
           h("div", { class: "row", style: "margin-top:6px" }, h("button", { class: "btn sm", onclick: async (ev) => {
             await api(`videos/${v.id}/unhide`, { method: "POST" });
             ev.target.closest(".dup-item").classList.add("gone"); ev.target.replaceWith(h("span", { class: "meta" }, "다시 보입니다"));
@@ -2144,7 +1908,7 @@ async function renderDuplicates() {
           v.duration ? h("span", { class: "badge dur" }, fmtDur(v.duration)) : null),
         h("div", { class: "dup-body" },
           h("a", { class: "dup-name", href: `#/v/${v.id}` }, v.filename),
-          h("div", { class: "meta" }, (v.source === "mega" ? "☁ MEGA · " : "📱 이 기기 · ") + (v.folder || "")),
+          h("div", { class: "meta" }, (v.source === "local" ? "📱 이 기기 · " : "☁ " + (SOURCE_LABEL[v.source] || "") + " · ") + (v.folder || "")),
           h("div", { class: "meta" }, [v.rating ? "★".repeat(v.rating) : "", v.play_count ? `${v.play_count}회 재생` : "", v.performers && v.performers.length ? v.performers.join(", ") : ""].filter(Boolean).join(" · ")),
           h("div", { class: "row", style: "margin-top:6px" }, keepBtn, hideBtn)));
     })));
@@ -2198,5 +1962,4 @@ route();
 pollStatus();
 api("settings").then((st) => {
   serverCaps = st;
-  if (st.eh) document.getElementById("tab-comics").hidden = false;
 }).catch(() => {});
