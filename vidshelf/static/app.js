@@ -95,7 +95,15 @@ function applyTheme() {
   try { if (window.VidShelfApp) VidShelfApp.setDark(dark); } catch (e) {}   // 앱의 상태 표시줄 색도 맞춤
 }
 function setThemePref(p) { try { localStorage.setItem("vs-theme", p); } catch (e) {} applyTheme(); }
-window.onSystemTheme = () => applyTheme();   // 앱이 시스템 다크 모드 변경을 알려 줌
+window.onSystemTheme = () => applyTheme();
+
+// 숏폼 버튼을 누를 때마다 새 순서로 (이미 숏폼을 보고 있어도)
+document.addEventListener("click", (e) => {
+  const a = e.target.closest && e.target.closest('.tabs a[data-tab="shorts"]');
+  if (!a) return;
+  e.preventDefault();
+  location.hash = "#/shorts?s=" + (Date.now() % 1000000);
+});   // 앱이 시스템 다크 모드 변경을 알려 줌
 try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme); } catch (e) {}
 applyTheme();
 
@@ -1247,7 +1255,8 @@ let shortsMuted = false;
 async function renderShorts(params) {
   setTab("shorts");
   document.body.classList.add("shorts-mode");
-  const seed = params.get("seed") || String(Date.now() % 100000);
+  try { if (window.VidShelfApp) VidShelfApp.setDark(true); } catch (e) {}   // 영상 보는 동안 위아래 막대를 어둡게
+  const seed = params.get("s") || String(Date.now() % 100000);
   const feed = h("div", { class: "shorts" });
   $app.replaceChildren(feed);
   const items = [];   // { v, el, video, bar }
@@ -1271,7 +1280,7 @@ async function renderShorts(params) {
       if (!counted) { counted = true; api(`videos/${v.id}/play`, { method: "POST" }).catch(() => {}); }
     });
     video.addEventListener("timeupdate", () => { if (video.duration) bar.style.width = `${(video.currentTime / video.duration) * 100}%`; });
-    const el = h("section", { class: "short" }, video, icon,
+    const el = h("section", { class: "short" }, video, h("div", { class: "sshade", "aria-hidden": "true" }), icon,
       h("div", { class: "sinfo" },
         h("a", { class: "stitle", href: `#/v/${v.id}` }, v.title),
         v.performers && v.performers.length ? h("div", { class: "sperf" }, v.performers.join(", ")) : null),
@@ -1323,7 +1332,7 @@ async function renderShorts(params) {
         h("p", { class: "meta" }, "MEGA 영상은 한 번 재생하거나 미리보기를 만든 뒤에 길이를 알 수 있어서, 그 전에는 여기에 나오지 않습니다.")));
     } finally { loading = false; }
   }
-  pageCleanup = () => { watch.disconnect(); items.forEach((it) => setSrc(it, false)); };
+  pageCleanup = () => { watch.disconnect(); items.forEach((it) => setSrc(it, false)); applyTheme(); };
   await load();
 }
 
