@@ -1,0 +1,31 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "app.vidshelf"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "app.vidshelf"
+        minSdk 29
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // 웹 화면은 PC/Termux 버전과 같은 vidshelf/static 을 그대로 사용
+    sourceSets {
+        main.assets.srcDirs += ["../../static"]
+    }
+
+    buildTypes {
+        debug { minifyEnabled false }
+    }
+    lint { abortOnError false }
+}

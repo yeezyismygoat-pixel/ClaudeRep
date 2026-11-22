@@ -341,6 +341,7 @@ def video_detail(vid):
     v["performers"] = db.q("SELECT p.id, p.name FROM performers p JOIN video_performers vp ON vp.performer_id=p.id WHERE vp.video_id=? ORDER BY p.name", (vid,))
     v["markers"] = db.q("SELECT id, seconds, title FROM markers WHERE video_id=? ORDER BY seconds", (vid,))
     ext = os.path.splitext(v["path"])[1].lower()
+    v["can_transcode"] = bool(FFMPEG)
     v["direct_play"] = ext in DIRECT_EXTS and (v["vcodec"] or "h264") in DIRECT_VCODECS
     v["filename"] = os.path.basename(v["path"])
     v["folder"] = os.path.dirname(v["path"])

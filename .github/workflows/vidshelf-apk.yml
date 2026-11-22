@@ -1,0 +1,55 @@
+name: VidShelf APK
+
+on:
+  push:
+    branches: [ccr-51e89e69-zcgdip]
+    paths:
+      - "vidshelf/**"
+      - ".github/workflows/vidshelf-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      # 매번 같은 서명 키를 써야 새 버전을 덮어 설치할 수 있음
+      - name: Restore signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: vidshelf-debug-keystore-v1
+
+      - name: Build APK
+        working-directory: vidshelf/android
+        run: gradle --no-daemon assembleDebug
+
+      - name: Rename
+        run: cp vidshelf/android/app/build/outputs/apk/debug/app-debug.apk VidShelf.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VidShelf-apk
+          path: VidShelf.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: vidshelf-apk
+          name: VidShelf APK
+          body: "보안 폴더 안의 브라우저로 이 페이지를 열고 VidShelf.apk 를 받아 설치하세요."
+          files: VidShelf.apk
+          make_latest: true

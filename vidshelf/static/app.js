@@ -252,7 +252,8 @@ async function renderVideo(id, params) {
   const [allTags, allPerformers] = await Promise.all([api("tags"), api("performers")]);
 
   // --- player (직접 재생 / 호환 모드)
-  let mode = v.direct_play ? "direct" : "transcode";
+  const canTranscode = v.can_transcode !== false;
+  let mode = v.direct_play || !canTranscode ? "direct" : "transcode";
   let offset = 0;           // 호환 모드에서 스트림 시작 지점
   let counted = false;
   const video = h("video", { controls: true, playsinline: true, preload: "metadata", poster: v.thumbs ? thumbUrl(v.id, 0, v.thumbs) : null });
@@ -297,7 +298,9 @@ async function renderVideo(id, params) {
     if (!counted) { counted = true; api(`videos/${v.id}/play`, { method: "POST" }).catch(() => {}); }
   });
   video.addEventListener("error", () => {
-    if (mode === "direct" && video.error) {
+    if (mode === "direct" && video.error && !canTranscode) {
+      toast("이 영상 형식은 브라우저에서 재생할 수 없습니다");
+    } else if (mode === "direct" && video.error) {
       toast("이 형식은 바로 재생할 수 없어 호환 모드로 전환합니다");
       setMode("transcode", 0, true);
     }
@@ -405,7 +408,7 @@ async function renderVideo(id, params) {
     h("div", {},
       h("div", { class: "player" }, video),
       seekRow,
-      h("div", { class: "player-note" }, modeNote, modeBtn, resume),
+      h("div", { class: "player-note" }, canTranscode ? modeNote : null, canTranscode ? modeBtn : null, resume),
       h("div", { class: "titlebox" }, titleIn),
       h("div", { class: "actions" }, stars, favBtn,
         h("a", { class: "btn sm", href: `/media/${v.id}`, download: v.filename }, "다운로드")),
@@ -416,7 +419,7 @@ async function renderVideo(id, params) {
         h("div", { class: "taginput" }, markerTitle, h("button", { class: "btn", onclick: addMarker }, "현재 위치 추가"))),
       h("div", { class: "panel" }, h("h3", {}, "메모"), details),
       h("div", { class: "panel" }, h("h3", {}, "파일 정보"), info,
-        h("div", { class: "row", style: "margin-top:12px" }, regenBtn, removeBtn, deleteFileBtn)))));
+        h("div", { class: "row", style: "margin-top:12px" }, regenBtn, removeBtn, v.can_delete === false ? null : deleteFileBtn)))));
   drawStars(); drawFav(); drawTags(); drawPerformers(); drawMarkers();
 }
 
@@ -470,7 +473,7 @@ async function renderSettings() {
     h("div", { class: "chips" }, st.suggestions.map((s) =>
       h("button", { class: "chip", onclick: () => savePaths(paths.concat([s])) }, "+ " + s.split("/").slice(-1)[0])))) : null;
 
-  const manual = h("input", { type: "text", placeholder: "직접 입력: /storage/emulated/0/Movies" });
+  const manual = h("input", { type: "text", placeholder: "직접 입력: " + (st.example_path || "/storage/emulated/0/Movies") });
   const c = status.counts || {};
   const pw = h("input", { type: "password", placeholder: st.password_set ? "새 비밀번호 (비우면 해제)" : "비밀번호", autocomplete: "new-password" });
 
@@ -502,7 +505,7 @@ async function renderSettings() {
         if (pw.value) renderLogin(); else renderSettings();
       } }, "저장")),
       h("p", { class: "meta" }, st.password_set ? "현재 비밀번호가 설정되어 있습니다." : "현재 비밀번호 없이 접속할 수 있습니다.")),
-    h("div", { class: "panel" }, h("h3", {}, "시스템"),
+    st.platform === "android" ? null : h("div", { class: "panel" }, h("h3", {}, "시스템"),
       h("dl", { class: "info" },
         h("dt", {}, "데이터 폴더"), h("dd", {}, st.data_dir),
         h("dt", {}, "ffmpeg"), h("dd", {}, st.ffmpeg ? "사용 가능" : "없음 — pkg install ffmpeg"),
