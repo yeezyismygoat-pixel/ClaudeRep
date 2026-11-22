@@ -76,7 +76,12 @@ class EHentai {
 
     private String get(String url) throws IOException {
         HttpURLConnection c = open(url);
-        int code = c.getResponseCode();
+        int code;
+        try {
+            code = c.getResponseCode();
+        } catch (IOException e) {
+            throw new IOException(new URL(url).getHost() + " 연결 실패: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+        }
         if (code >= 400) throw new IOException("e-hentai 응답 오류 (HTTP " + code + ")");
         try (InputStream in = c.getInputStream()) {
             return new String(Library.readAll(in), StandardCharsets.UTF_8);
@@ -193,13 +198,25 @@ class EHentai {
     }
 
     // ------------------------------------------------------------------ 페이지 이미지
-    private static final Pattern PAGE_LINK = Pattern.compile("e-hentai\\.org/s/([0-9a-f]{10})/(\\d+)-(\\d+)");
+    private static final Pattern PAGE_LINK = Pattern.compile("/s/([0-9a-f]{10})/(\\d+)-(\\d+)");
+    private static final Pattern TITLE = Pattern.compile("<title>(.*?)</title>", Pattern.DOTALL);
+    private static final Pattern IMG_FALLBACK = Pattern.compile("src=\"(https?://[^\"]+?/(?:h|om)/[^\"]+)\"");
     private static final Pattern IMG = Pattern.compile("<img[^>]*id=\"img\"[^>]*src=\"([^\"]+)\"|<img[^>]*src=\"([^\"]+)\"[^>]*id=\"img\"");
     private static final Pattern NL = Pattern.compile("nl\\('([^']+)'\\)");
 
     /** 갤러리 목록 한 쪽(p, 0부터)을 읽어 페이지 토큰을 기억합니다. 그 쪽에 있던 페이지 수를 돌려줌. */
     private int loadGalleryPage(long gid, String token, Gallery g, int p) throws IOException {
-        String html = get(BASE + "/g/" + gid + "/" + token + "/?p=" + p);
+        String url = BASE + "/g/" + gid + "/" + token + "/?p=" + p;
+        String html = get(url);
+        if (!PAGE_LINK.matcher(html).find() && html.contains("nw=")) html = get(url + "&nw=session");   // 성인 경고 화면 넘기기
+        if (!PAGE_LINK.matcher(html).find()) {
+            if (html.contains("Key missing") || html.contains("Gallery not found")) throw new IOException("갤러리 주소가 맞지 않습니다 (삭제되었을 수 있습니다)");
+            if (html.contains("This gallery has been removed") || html.contains("unavailable")) throw new IOException("삭제되었거나 볼 수 없는 갤러리입니다");
+            if (p == 0) {
+                Matcher t = TITLE.matcher(html);
+                throw new IOException("갤러리 페이지에서 그림 목록을 찾지 못했습니다 (" + (t.find() ? unescape(t.group(1)).trim() : html.length() + "자") + ")");
+            }
+        }
         Matcher m = PAGE_LINK.matcher(html);
         Set<Integer> found = new LinkedHashSet<>();
         while (m.find()) {
@@ -223,10 +240,12 @@ class EHentai {
             String t = g.pageTokens.get(n);
             if (t != null) return t;
             if (g.perPage == 0) {
-                g.perPage = Math.max(1, loadGalleryPage(gid, token, g, 0));
+                int k = loadGalleryPage(gid, token, g, 0);
+                if (k > 0) g.perPage = k;
                 t = g.pageTokens.get(n);
                 if (t != null) return t;
             }
+            if (g.perPage == 0) throw new IOException("갤러리의 그림 목록을 읽지 못했습니다");
             int p = (n - 1) / g.perPage;
             loadGalleryPage(gid, token, g, p);
             t = g.pageTokens.get(n);
@@ -246,12 +265,15 @@ class EHentai {
     private String[] imageUrl(long gid, String pageToken, int n, String nl) throws IOException {
         String html = get(BASE + "/s/" + pageToken + "/" + gid + "-" + n + (nl == null ? "" : "?nl=" + enc(nl)));
         Matcher m = IMG.matcher(html);
-        if (!m.find()) {
+        boolean ok = m.find();
+        if (!ok) { m = IMG_FALLBACK.matcher(html); ok = m.find(); }
+        if (!ok) {
             if (html.contains("You have exceeded your image viewing limits") || html.contains("509.gif"))
                 throw new IOException("e-hentai 이미지 보기 한도를 넘었습니다. 잠시 후 다시 시도하세요.");
-            throw new IOException("이미지 주소를 찾지 못했습니다");
+            Matcher t = TITLE.matcher(html);
+            throw new IOException("이미지 주소를 찾지 못했습니다 (" + (t.find() ? unescape(t.group(1)).trim() : html.length() + "자") + ")");
         }
-        String src = unescape(m.group(1) != null ? m.group(1) : m.group(2));
+        String src = unescape(m.group(1) != null ? m.group(1) : m.group(m.groupCount() >= 2 ? 2 : 1));
         if (src.contains("509.gif") || src.contains("/509s.gif"))
             throw new IOException("e-hentai 이미지 보기 한도를 넘었습니다. 잠시 후 다시 시도하세요.");
         Matcher k = NL.matcher(html);
@@ -259,7 +281,20 @@ class EHentai {
     }
 
     private byte[] download(String url) throws IOException {
-        HttpURLConnection c = open(url);
+        String host = new URL(url).getHost();
+        try {
+            return downloadOnce(url);
+        } catch (IOException e) {
+            String why = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw new IOException("이미지 서버(" + host + ") 연결 실패: " + why);
+        }
+    }
+
+    private byte[] downloadOnce(String url) throws IOException {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();   // 이미지 서버에는 로그인 쿠키를 보내지 않음
+        c.setConnectTimeout(20000);
+        c.setReadTimeout(40000);
+        c.setRequestProperty("User-Agent", UA);
         c.setRequestProperty("Referer", BASE + "/");
         int code = c.getResponseCode();
         if (code >= 400) throw new IOException("HTTP " + code);
@@ -290,7 +325,11 @@ class EHentai {
             data = download(img[0]);
         } catch (IOException e) {
             if (img[1] == null) throw e;
-            data = download(imageUrl(gid, pt, n, img[1])[0]);   // 다른 서버로 한 번 더
+            try {
+                data = download(imageUrl(gid, pt, n, img[1])[0]);   // 다른 서버로 한 번 더
+            } catch (IOException e2) {
+                throw new IOException(e.getMessage() + " / 다른 서버: " + e2.getMessage());
+            }
         }
         f.getParentFile().mkdirs();
         File tmp = new File(f.getPath() + ".tmp");

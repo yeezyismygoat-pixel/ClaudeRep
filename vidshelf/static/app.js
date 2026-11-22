@@ -1240,9 +1240,16 @@ function openReader(g, start) {
     pg.dataset.state = "loading";
     const img = h("img", { alt: `${i + 1}쪽`, decoding: "async" });
     img.onload = () => { pg.dataset.state = "done"; pg.classList.add("loaded"); pg.style.aspectRatio = ""; };
-    img.onerror = () => {
-      pg.dataset.state = "";
-      pg.replaceChildren(h("button", { class: "btn", onclick: () => { pg.replaceChildren(h("span", { class: "meta" }, `${i + 1}`)); load(i); } }, `${i + 1}쪽 불러오기 실패 · 다시 시도`));
+    img.onerror = async () => {
+      pg.dataset.state = "failed";
+      const why = h("p", { class: "rerr" });
+      pg.replaceChildren(h("div", { class: "rfail" },
+        h("button", { class: "btn", onclick: () => { pg.dataset.state = ""; pg.replaceChildren(h("span", { class: "meta" }, `${i + 1}`)); load(i); } }, `${i + 1}쪽 불러오기 실패 · 다시 시도`), why));
+      try {   // 실패한 이유를 서버에 다시 물어서 표시
+        const r = await fetch(img.src);
+        const d = await r.json().catch(() => ({}));
+        why.textContent = d.error || (r.ok ? "이미지를 표시하지 못했습니다" : `HTTP ${r.status}`);
+      } catch (e) { why.textContent = "앱 서버에 연결하지 못했습니다"; }
     };
     img.src = `/eh/page/${g.gid}/${g.token}/${i + 1}`;
     pg.replaceChildren(img);
