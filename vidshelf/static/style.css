@@ -562,3 +562,42 @@ body.shorts-mode::before, body.shorts-mode .topbar::before { display: none; }
 .sheet-foot { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; padding: 12px 18px calc(16px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
 .sheet-foot .btn { height: 50px; font-size: 15px; justify-content: center; }
 .sheet-go { font-weight: 700; }
+
+/* ---------- 하단 메뉴 주변: 네모난 흐림 상자 없애고, 위로 갈수록 자연스럽게 옅어지는 흐림 ---------- */
+.topbar { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+.topbar::after { content: ""; position: fixed; left: 0; right: 0; bottom: 0; z-index: 0; pointer-events: none;
+  height: calc(150px + env(safe-area-inset-bottom));
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,.35) 35%, #000 75%);
+  mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,.35) 35%, #000 75%); }
+.topbar::before { height: calc(150px + env(safe-area-inset-bottom)) !important;
+  background: linear-gradient(to bottom,
+    color-mix(in srgb, var(--bg) 0%, transparent) 0%,
+    color-mix(in srgb, var(--bg) 18%, transparent) 25%,
+    color-mix(in srgb, var(--bg) 50%, transparent) 50%,
+    color-mix(in srgb, var(--bg) 82%, transparent) 72%,
+    var(--bg) 92%) !important; }
+body.shorts-mode .topbar::after { display: none; }
+
+/* ---------- 미디어 탭: 종류 선택 표시가 미끄러지듯 이동 ---------- */
+.type-seg { position: relative; }
+.type-seg button { position: relative; z-index: 1; background: transparent !important; }
+.type-seg button.on { color: var(--bg); }
+.type-ind { position: absolute; left: 3px; top: 3px; bottom: 3px; border-radius: 19px; background: var(--text);
+  transition: transform .32s var(--ease); z-index: 0; }
+
+/* 목록만 바뀔 때: 밀어 넘긴 방향에서 들어오거나 살며시 바뀜 */
+.mcontent-wrap { position: relative; }
+.mcontent.in-left { animation: inLeft .3s var(--ease) both; }
+.mcontent.in-right { animation: inRight .3s var(--ease) both; }
+.mcontent.in-fade { animation: fadeIn .25s ease both; }
+.mcontent.leaving { opacity: .35; transition: opacity .15s ease; }
+@keyframes inLeft { from { opacity: 0; transform: translateX(36px); } to { opacity: 1; transform: none; } }
+@keyframes inRight { from { opacity: 0; transform: translateX(-36px); } to { opacity: 1; transform: none; } }
+.fchips[hidden] { display: none !important; }
+.fchips:empty { display: none; }
+body { overflow-x: hidden; }
+
+/* 다른 화면으로 밀어 넘길 때 (만화 탭 등) */
+#app.slide-l > * { animation: inLeft .3s var(--ease) both; }
+#app.slide-r > * { animation: inRight .3s var(--ease) both; }
