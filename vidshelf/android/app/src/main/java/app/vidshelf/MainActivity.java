@@ -141,6 +141,8 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
         s.setSupportMultipleWindows(false);   // target=_blank 링크도 앱 안에서 열기
+        web.addJavascriptInterface(new ThemeBridge(), "VidShelfApp");   // 테마: 시스템 다크 모드 알림, 상태 표시줄 색
+        if (!systemDark()) web.setBackgroundColor(LIGHT_BG);
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
@@ -262,6 +264,51 @@ public class MainActivity extends Activity {
             String m = msg;
             ui.post(() -> Toast.makeText(this, m, Toast.LENGTH_LONG).show());
         }).start();
+    }
+
+    // ------------------------------------------------------------------ 테마 (라이트 / 다크)
+    private static final int LIGHT_BG = 0xFFF4F3EF, DARK_BG = 0xFF121316;
+
+    private boolean systemDark() {
+        return (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    /** 웹 화면이 부르는 함수들 (앱 안 화면에서만 쓰임). */
+    private class ThemeBridge {
+        @android.webkit.JavascriptInterface
+        public boolean isSystemDark() { return systemDark(); }
+
+        @android.webkit.JavascriptInterface
+        public void setDark(boolean dark) { ui.post(() -> applyBars(dark)); }
+    }
+
+    /** 상태 표시줄·내비게이션 막대 색과 아이콘 밝기를 테마에 맞춤. */
+    @SuppressWarnings("deprecation")
+    private void applyBars(boolean dark) {
+        int bg = dark ? DARK_BG : LIGHT_BG;
+        getWindow().setStatusBarColor(bg);
+        getWindow().setNavigationBarColor(bg);
+        if (web != null) web.setBackgroundColor(bg);
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                c.setSystemBarsAppearance(dark ? 0 : mask, mask);
+            }
+        } else {
+            View d = getWindow().getDecorView();
+            int f = d.getSystemUiVisibility();
+            int light = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            d.setSystemUiVisibility(dark ? f & ~light : f | light);
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration c) {
+        super.onConfigurationChanged(c);
+        // 휴대폰 다크 모드를 바꾸면 ‘시스템 설정’ 테마도 바로 따라감
+        if (web != null) web.evaluateJavascript("window.onSystemTheme && window.onSystemTheme()", null);
     }
 
     // ------------------------------------------------------------------ e-hentai 로그인 (앱 안 브라우저)

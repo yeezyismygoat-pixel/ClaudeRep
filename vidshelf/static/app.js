@@ -74,9 +74,30 @@ function parseHash() {
   const [path, qs] = raw.split("?");
   return { path, params: new URLSearchParams(qs || "") };
 }
+const TAB_GROUP = { photos: "library", tags: "library", performers: "library", settings: "library", library: "library" };
 function setTab(name) {
-  document.querySelectorAll(".tabs a").forEach((a) => a.classList.toggle("on", a.dataset.tab === name));
+  const t = TAB_GROUP[name] || name;   // 사진·출연자·태그·설정은 ‘보관함’ 탭 안에 있음
+  document.querySelectorAll(".tabs a").forEach((a) => a.classList.toggle("on", a.dataset.tab === t));
 }
+
+// ---------------------------------------------------------------- 테마 (시스템 / 라이트 / 다크)
+function themePref() { try { return localStorage.getItem("vs-theme") || "system"; } catch (e) { return "system"; } }
+function systemDark() {
+  try { return window.VidShelfApp ? VidShelfApp.isSystemDark() : matchMedia("(prefers-color-scheme: dark)").matches; }
+  catch (e) { return false; }
+}
+function applyTheme() {
+  const pref = themePref();
+  const dark = pref === "dark" || (pref === "system" && systemDark());
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = dark ? "#121316" : "#F4F3EF";
+  try { if (window.VidShelfApp) VidShelfApp.setDark(dark); } catch (e) {}   // 앱의 상태 표시줄 색도 맞춤
+}
+function setThemePref(p) { try { localStorage.setItem("vs-theme", p); } catch (e) {} applyTheme(); }
+window.onSystemTheme = () => applyTheme();   // 앱이 시스템 다크 모드 변경을 알려 줌
+try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme); } catch (e) {}
+applyTheme();
 
 // ---------------------------------------------------------------- job status bar
 let lastPending = -1;
@@ -129,6 +150,7 @@ async function route() {
     if (path === "/mega") return await renderMega(params);
     if (path === "/photos") return await renderPhotos(params);
     if (path === "/shorts") return await renderShorts(params);
+    if (path === "/library") return await renderLibraryHub();
     if (path === "/duplicates") return await renderDuplicates();
     if (path === "/hidden") return await renderHidden();
     if (path === "/comics") return await renderComics(params);
@@ -613,21 +635,31 @@ async function renderVideo(id, params) {
   };
 
   function readView() {
-    const meta = [v.duration ? fmtDur(v.duration) : "", resLabel(v.width, v.height), v.size ? fmtSize(v.size) : "",
-      v.play_count ? `${v.play_count}회 재생` : "", v.source === "mega" ? "MEGA" : ""].filter(Boolean).join(" · ");
-    const people = v.performers.map((p) => h("a", { class: "chip", href: `#/performer?id=${p.id}` }, p.name));
-    const tags = v.tags.map((t) => h("a", { class: "chip", href: `#/?tag=${t.id}` }, "# " + t.name));
+    const stat = (big, small) => h("div", {}, h("b", {}, big), h("span", {}, small));
+    const people = v.performers.map((p) => h("div", { class: "vperson" },
+      h("span", { class: "av", "aria-hidden": "true" }, p.name.slice(0, 1)),
+      h("span", { class: "nm" }, p.name),
+      h("a", { class: "pf", href: `#/performer?id=${p.id}` }, "프로필")));
+    const tags = v.tags.map((t) => h("a", { class: "chip", href: `#/?tag=${t.id}` }, "#" + t.name));
     return [
-      h("div", { class: "vhead" },
-        h("h1", { class: "vtitle" }, v.title),
-        h("button", { class: "btn sm", onclick: () => setEditing(true) }, "✎ 수정")),
-      h("div", { class: "vmeta" }, v.rating ? h("span", { class: "stars-mini" }, "★".repeat(v.rating)) : null, h("span", {}, meta)),
-      h("div", { class: "actions" }, favBtn(), dlBtn(),
-        h("button", { class: "btn sm", onclick: () => addMarker(null) }, "🔖 지금 위치 북마크")),
-      people.length || tags.length ? h("div", { class: "chips vchips" }, ...people, ...tags) : null,
+      h("div", { class: "vcard" },
+        h("div", { class: "vhead" },
+          h("h1", { class: "vtitle" }, v.title),
+          h("button", { class: "favround" + (v.favorite ? " on" : ""), "aria-label": v.favorite ? "즐겨찾기 해제" : "즐겨찾기", onclick: () => save({ favorite: !v.favorite }) }, v.favorite ? "♥" : "♡")),
+        h("div", { class: "vstats" },
+          stat(v.duration ? fmtDur(v.duration) : "-", "길이"),
+          stat(resLabel(v.width, v.height) || "-", "화질"),
+          stat(v.rating ? "★" + v.rating : "-", "별점"),
+          stat(`${v.play_count || 0}회`, "재생")),
+        ...people,
+        h("div", { class: "chips" }, ...tags,
+          h("button", { class: "chip dashed", onclick: () => setEditing(true) }, "✎ 수정"))),
+      h("div", { class: "actions", style: "margin-top:12px" }, dlBtn(),
+        h("button", { class: "btn sm", onclick: () => addMarker(null) }, "🔖 지금 위치 북마크"),
+        v.source === "mega" ? h("span", { class: "meta" }, "MEGA · " + fmtSize(v.size)) : h("span", { class: "meta" }, fmtSize(v.size))),
       v.details ? h("p", { class: "vmemo" }, v.details) : null,
       v.markers.length ? h("div", { class: "vmarks" }, v.markers.map((m) =>
-        h("button", { class: "chip", onclick: () => seekTo(m.seconds) }, h("b", {}, fmtDur(m.seconds)), m.title ? " " + m.title : ""))) : null,
+        h("button", { onclick: () => seekTo(m.seconds) }, h("b", {}, fmtDur(m.seconds)), h("span", {}, m.title || "북마크")))) : null,
       frames ? h("div", { class: "panel", style: "margin-top:14px" }, h("h3", {}, "장면"), frames) : null,
     ];
   }
@@ -794,6 +826,7 @@ async function renderSettings() {
   const pw = h("input", { type: "password", placeholder: st.password_set ? "새 비밀번호 (비우면 해제)" : "비밀번호", autocomplete: "new-password" });
 
   $app.replaceChildren(h("div", { class: "settings" },
+    themePanel(),
     h("div", { class: "panel" }, h("h3", {}, "라이브러리"),
       h("div", { class: "stats" },
         h("div", { class: "stat" }, h("b", {}, (c.total || 0).toLocaleString()), h("span", {}, "영상")),
@@ -1019,7 +1052,7 @@ function megaPanel(links, st) {
   };
   const addBtn = h("button", { class: "btn primary", onclick: (e) => add(e.currentTarget) }, "추가");
   return h("div", { class: "panel" }, h("h3", {}, "MEGA 폴더 링크"),
-    h("p", { class: "meta" }, "MEGA 앱이나 웹에서 폴더 → 공유 → 링크 복사로 만든 링크를 붙여넣으세요. 링크에는 열쇠(# 뒤)가 포함되어야 합니다. 영상은 라이브러리에, 모든 파일은 MEGA 탭에 나옵니다."),
+    h("p", { class: "meta" }, "MEGA 앱이나 웹에서 폴더 → 공유 → 링크 복사로 만든 링크를 붙여넣으세요. 링크에는 열쇠(# 뒤)가 포함되어야 합니다. 영상은 라이브러리에, 모든 파일은 ‘MEGA 파일 보기’에 나옵니다."),
     h("ul", { class: "pathlist" }, links.length ? links.map((l) => h("li", {},
       h("span", { class: "p" }, "☁ " + l.name, h("div", { class: "meta" }, `파일 ${l.files}개 · 영상 ${l.videos}개`),
         l.error ? h("div", { class: "warn" }, l.error) : null),
@@ -1207,6 +1240,49 @@ async function renderShorts(params) {
   await load();
 }
 
+// ---------------------------------------------------------------- 보관함 (사진·출연자·태그·설정 모음)
+const LIB_ICON = {
+  photos: '<rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="9" cy="9" r="1.8"/><path d="M21 15.5l-5-5L4.5 21"/>',
+  people: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5"/>',
+  tags: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.4"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+};
+function libIcon(name) {
+  const span = document.createElement("span");
+  span.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${LIB_ICON[name]}</svg>`;
+  return span.firstChild;
+}
+async function renderLibraryHub() {
+  setTab("library");
+  if (!Object.keys(serverCaps).length) serverCaps = await api("settings").catch(() => ({}));
+  const tile = (href, icon, title, sub) => h("a", { class: "lib-tile", href }, libIcon(icon), h("div", {}, h("b", {}, title), h("br"), h("span", {}, sub)));
+  const photoSub = h("span", {}, "…"), peopleSub = h("span", {}, "…"), tagSub = h("span", {}, "…");
+  $app.replaceChildren(h("div", {},
+    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "사진 · 출연자 · 태그 · 설정"), h("h1", {}, "보관함"))),
+    h("div", { class: "lib-grid" },
+      serverCaps.photos ? h("a", { class: "lib-tile", href: "#/photos" }, libIcon("photos"), h("div", {}, h("b", {}, "사진"), h("br"), photoSub)) : null,
+      h("a", { class: "lib-tile", href: "#/performers" }, libIcon("people"), h("div", {}, h("b", {}, "출연자"), h("br"), peopleSub)),
+      h("a", { class: "lib-tile", href: "#/tags" }, libIcon("tags"), h("div", {}, h("b", {}, "태그"), h("br"), tagSub)),
+      tile("#/settings", "settings", "설정", "폴더 · MEGA · 백업 · 화면")),
+    h("div", { class: "lib-list" },
+      serverCaps.mega_supported ? h("a", { href: "#/mega" }, "☁ MEGA 파일", h("span", {}, "›")) : null,
+      serverCaps.duplicates ? h("a", { href: "#/duplicates" }, "중복 영상 찾기", h("span", {}, "›")) : null,
+      serverCaps.hidden_count !== undefined ? h("a", { href: "#/hidden" }, "숨긴 영상", h("span", {}, `${serverCaps.hidden_count}개 ›`)) : null,
+      h("a", { href: "#/?fav=1" }, "즐겨찾기 영상", h("span", {}, "›")))));
+  if (serverCaps.photos) api("photos?per=1").then((d) => (photoSub.textContent = `${d.total.toLocaleString()}장`)).catch(() => {});
+  api("performers").then((l) => (peopleSub.textContent = `${l.length}명`)).catch(() => {});
+  api("tags").then((l) => (tagSub.textContent = `${l.length}개`)).catch(() => {});
+}
+
+function themePanel() {
+  const seg = h("div", { class: "theme-seg", role: "group", "aria-label": "화면 테마" });
+  const draw = () => seg.replaceChildren(...[["system", "시스템 설정"], ["light", "라이트"], ["dark", "다크"]].map(([v, l]) =>
+    h("button", { class: themePref() === v ? "on" : "", "aria-pressed": themePref() === v ? "true" : "false", onclick: () => { setThemePref(v); draw(); } }, l)));
+  draw();
+  return h("div", { class: "panel" }, h("h3", {}, "화면"), seg,
+    h("p", { class: "meta" }, "‘시스템 설정’을 고르면 휴대폰의 다크 모드를 켜고 끌 때 함께 바뀝니다. 이 설정은 기기마다 따로 저장됩니다."));
+}
+
 // ---------------------------------------------------------------- 홈
 /** 가로로 넘기는 한 줄: 제목, ‘모두 보기’, 내용. 내용을 불러오기 전에는 자리만 잡아 둠. */
 function shelf(title, moreHref, kind) {
@@ -1223,23 +1299,21 @@ function shelf(title, moreHref, kind) {
 async function renderHome() {
   setTab("home");
   if (!Object.keys(serverCaps).length) serverCaps = await api("settings").catch(() => ({}));   // 앱을 막 열었을 때
-  const stats = h("div", { class: "home-stats" });
+  const stats = h("div", { class: "meta" });
   const resume = shelf("이어 보기", "#/?sort=played", "vids");
   const recent = shelf("최근 추가된 영상", "#/?sort=added", "vids");
   const favs = shelf("즐겨찾기 영상", "#/?fav=1", "vids");
   const comics = shelf("이어 읽는 만화", "#/comics", "comics");
   const photos = shelf("최근 사진", "#/photos", "photos");
   const people = shelf("출연자", "#/performers", "people");
-  $app.replaceChildren(h("div", { class: "home" }, stats,
+  $app.replaceChildren(h("div", { class: "home" },
+    h("div", { class: "home-head" }, h("div", {}, stats, h("h1", {}, "내 서재")),
+      h("a", { class: "btn", href: "#/?q=", "aria-label": "검색" }, "검색")),
     resume.sec, recent.sec, comics.sec, favs.sec, photos.sec, people.sec));
 
-  const statItem = (href, n, label) => h("a", { class: "stat", href }, h("b", {}, n), h("span", {}, label));
   const counts = { videos: null, photos: null, people: null };
-  const drawStats = () => stats.replaceChildren(...[
-    statItem("#/", counts.videos == null ? "…" : counts.videos.toLocaleString(), "영상"),
-    serverCaps.photos ? statItem("#/photos", counts.photos == null ? "…" : counts.photos.toLocaleString(), "사진") : null,
-    statItem("#/performers", counts.people == null ? "…" : counts.people.toLocaleString(), "출연자"),
-    serverCaps.eh ? statItem("#/comics", "보기", "만화") : null].filter(Boolean));
+  const n = (x) => (x == null ? "…" : x.toLocaleString());
+  const drawStats = () => (stats.textContent = [`영상 ${n(counts.videos)}`, serverCaps.photos ? `사진 ${n(counts.photos)}` : "", `출연자 ${n(counts.people)}`].filter(Boolean).join(" · "));
   drawStats();
 
   const small = (v) => videoCard(v);
@@ -1701,6 +1775,5 @@ route();
 pollStatus();
 api("settings").then((st) => {
   serverCaps = st;
-  if (st.photos) document.getElementById("tab-photos").hidden = false;
   if (st.eh) document.getElementById("tab-comics").hidden = false;
 }).catch(() => {});
