@@ -686,3 +686,16 @@ body.shorts-mode #app { position: fixed; inset: 0; z-index: 1; }
 .media-bar .fchips { margin: 8px 0 0; }
 @media (max-width: 380px) { .media-bar .filter-btn { font-size: 0; gap: 0; padding: 0 11px; } .media-bar .filter-btn .fbadge { font-size: 12px; margin-left: 4px; } }
 @media (max-width: 480px) { .media-bar .type-seg button span { display: none; } }
+
+/* ---------- 이미지 벽: 위아래 간격도 옆 간격과 똑같이 ---------- */
+.wall { gap: 4px !important; }
+.wall .tile { position: relative; }
+.wall .tile-img { border-radius: 10px; }
+.wall .tile-cap { display: none; }
+.wall .tile-cap.has { display: block; position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 8px 5px; color: #fff; font-size: 11px;
+  background: linear-gradient(transparent, rgba(0,0,0,.55)); border-radius: 0 0 10px 10px; pointer-events: none; }
+
+/* ---------- 하단 메뉴도 반투명하게 ---------- */
+.topbar .tabs { background: color-mix(in srgb, var(--nav-bg) 76%, transparent) !important;
+  backdrop-filter: blur(16px) saturate(1.4); -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  border-color: color-mix(in srgb, var(--nav-border) 70%, transparent) !important; }

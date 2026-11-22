@@ -1757,7 +1757,7 @@ async function renderShorts(params) {
   const feed = h("div", { class: "shorts" });
   $app.replaceChildren(feed);
   const items = [];   // { v, el, video, bar }
-  let page = 1, total = Infinity, loading = false, active = -1;
+  let page = 1, total = Infinity, loading = false, active = -1, lastActive = 0;
 
   function makeItem(v) {
     const video = h("video", { playsinline: true, loop: true, preload: "none", poster: v.thumbs ? thumbUrl(v.id, 0, v.thumbs) : null });
@@ -1799,7 +1799,9 @@ async function renderShorts(params) {
   function activate(i) {
     if (i === active) return;
     active = i;
-    document.body.classList.toggle("nav-hidden", i > 0);   // 첫 영상을 넘기면 하단 메뉴를 숨김
+    // 아래로 넘기면 하단 메뉴를 숨기고, 위로 올리면 다시 보여 줌 (첫 영상에서는 항상 보임)
+    document.body.classList.toggle("nav-hidden", i > 0 && i > lastActive);
+    lastActive = i;
     items.forEach((it, k) => {
       setSrc(it, Math.abs(k - i) <= 1);   // 지금 영상과 앞뒤 하나만 받아 둠
       if (k !== i) it.video.pause();

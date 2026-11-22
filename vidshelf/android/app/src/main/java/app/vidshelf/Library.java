@@ -951,7 +951,7 @@ public class Library implements HttpServer.Handler {
         String sort = r.param("sort") == null ? "taken" : r.param("sort");
         boolean asc = "asc".equals(r.param("order"));
         if ("random".equals(sort)) {
-            Collections.shuffle(list, new Random(parseInt(r.param("seed"), 7)));
+            Collections.shuffle(list, shuffleRandom(r.param("seed")));
         } else {
             Comparator<Video> cmp;
             switch (sort) {
@@ -999,7 +999,7 @@ public class Library implements HttpServer.Handler {
         String sort = r.param("sort") == null ? "added" : r.param("sort");
         boolean asc = "asc".equals(r.param("order"));
         if ("random".equals(sort)) {
-            Collections.shuffle(list, new Random(parseInt(r.param("seed"), 7)));
+            Collections.shuffle(list, shuffleRandom(r.param("seed")));
         } else {
             Comparator<Video> cmp;
             switch (sort) {
@@ -1264,7 +1264,7 @@ public class Library implements HttpServer.Handler {
         String sort = r.param("sort") == null ? "added" : r.param("sort");
         boolean asc = "asc".equals(r.param("order"));
         if ("random".equals(sort)) {
-            Collections.shuffle(list, new Random(parseInt(r.param("seed"), 7)));
+            Collections.shuffle(list, shuffleRandom(r.param("seed")));
         } else {
             Comparator<Video> cmp;
             switch (sort) {
@@ -2195,6 +2195,14 @@ public class Library implements HttpServer.Handler {
     }
 
     private static String nz(String s) { return s == null ? "" : s; }
+
+    /** 무작위 순서용. 비슷한 숫자(예: 연속된 시각)를 넣어도 완전히 다른 순서가 나오도록 섞어서 씀 */
+    private static Random shuffleRandom(String seed) {
+        long z = parseLong(seed, 7) + 0x9E3779B97F4A7C15L;   // SplitMix64
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return new Random(z ^ (z >>> 31));
+    }
 
     private static int parseInt(String s, int d) {
         try { return Integer.parseInt(s.trim()); } catch (Exception e) { return d; }
