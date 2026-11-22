@@ -53,6 +53,17 @@ public class MainActivity extends Activity {
     private int loadedPort = -1;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable watcher = this::watchServer;
+    private static final int REQ_FILE = 7;
+    private android.webkit.ValueCallback<Uri[]> fileCallback;
+
+    @Override
+    protected void onActivityResult(int req, int result, android.content.Intent data) {
+        super.onActivityResult(req, result, data);
+        if (req != REQ_FILE || fileCallback == null) return;
+        Uri u = result == RESULT_OK && data != null ? data.getData() : null;
+        fileCallback.onReceiveValue(u == null ? null : new Uri[]{u});
+        fileCallback = null;
+    }
 
     @Override
     protected void onCreate(Bundle b) {
@@ -154,6 +165,24 @@ public class MainActivity extends Activity {
             @Override
             public void onHideCustomView() {
                 exitFullscreen();
+            }
+
+            @Override
+            public boolean onShowFileChooser(WebView view, android.webkit.ValueCallback<Uri[]> callback, FileChooserParams params) {
+                // 백업 파일 고르기 (<input type=file>)
+                if (fileCallback != null) fileCallback.onReceiveValue(null);
+                fileCallback = callback;
+                try {
+                    android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_GET_CONTENT);
+                    i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+                    i.setType("*/*");
+                    startActivityForResult(i, REQ_FILE);
+                } catch (Exception e) {
+                    fileCallback = null;
+                    callback.onReceiveValue(null);
+                    Toast.makeText(MainActivity.this, "파일 선택 화면을 열 수 없습니다", Toast.LENGTH_LONG).show();
+                }
+                return true;
             }
         });
         web.setDownloadListener((url, userAgent, contentDisposition, mimetype, length) ->
@@ -268,6 +297,18 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 checkEhCookies();
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest req, android.webkit.WebResourceError err) {
+                if (!req.isForMainFrame()) return;
+                // 국내 차단으로 연결이 끊기면 안내 화면을 보여 줌
+                String html = "<html><body style='background:#0f1115;color:#e9e7e3;font:16px sans-serif;padding:24px;line-height:1.6'>"
+                        + "<h2>e-hentai 에 접속하지 못했습니다</h2>"
+                        + "<p>국내에서는 e-hentai 가 차단되어 있어 연결이 끊깁니다 (" + android.text.Html.escapeHtml(String.valueOf(err.getDescription())) + ").</p>"
+                        + "<p><b>보안 폴더 안에</b> VPN 앱(예: 1.1.1.1)을 설치해 켠 뒤 다시 시도하세요. 일반 공간에서 켠 VPN 은 보안 폴더 앱에 적용되지 않습니다.</p>"
+                        + "<p><a style='color:#e8a33d' href='https://forums.e-hentai.org/index.php?act=Login&amp;CODE=00'>다시 시도</a></p></body></html>";
+                view.loadDataWithBaseURL("https://forums.e-hentai.org/", html, "text/html", "utf-8", null);
             }
         });
         ehBox.addView(ehWeb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));

@@ -101,15 +101,46 @@ public class Library implements HttpServer.Handler {
         this.ctx = ctx;
         storeFile = new File(ctx.getFilesDir(), "library.json");
         thumbDir = new File(ctx.getCacheDir(), "thumbs");
-        eh = new EHentai(new File(ctx.getCacheDir(), "eh"));
+        eh = new EHentai(new File(ctx.getCacheDir(), "eh"), new File(ctx.getFilesDir(), "eh-saved"), new File(ctx.getCacheDir(), "eh-thumbs"));
         load();
-        eh.memberId = settings().optString("eh_member_id", "");
-        eh.passHash = settings().optString("eh_pass_hash", "");
+        loadEhLogin();
         JSONArray links = settings().optJSONArray("mega_links");
         for (int i = 0; links != null && i < links.length(); i++) {
             try { megaLinks.add(Mega.parse(links.optString(i))); } catch (Exception ignored) {}
         }
         new Thread(this::refreshMega).start();
+        // MEGA 목록 자동 새로고침: 15분마다 확인해서 정한 시간이 지났으면 새로 받음
+        bg.scheduleWithFixedDelay(() -> {
+            try {
+                int hours = megaRefreshHours();
+                if (hours > 0 && !megaLinks.isEmpty() && System.currentTimeMillis() - lastMegaRefresh > hours * 3600_000L)
+                    new Thread(this::refreshMega).start();
+            } catch (Exception ignored) {}
+        }, 15, 15, java.util.concurrent.TimeUnit.MINUTES);
+        new Thread(this::ehSaveLoop).start();   // 저장하다 만 만화 이어 받기
+    }
+
+    private final java.util.concurrent.ScheduledExecutorService bg = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+    private volatile long lastMegaRefresh = 0;
+
+    private synchronized int megaRefreshHours() { return settings().optInt("mega_refresh_hours", 6); }
+
+    /** 로그인 쿠키 불러오기. 예전 버전이 평문으로 저장한 값은 암호화해서 다시 저장. */
+    private synchronized void loadEhLogin() {
+        JSONObject st = settings();
+        eh.memberId = st.optString("eh_member_id", "");
+        String plain = st.optString("eh_pass_hash", "");
+        if (!plain.isEmpty()) {
+            String sealed = SecretBox.seal(plain);
+            if (sealed != null) {
+                try { st.put("eh_pass_hash_enc", sealed); } catch (JSONException ignored) {}
+                st.remove("eh_pass_hash");
+                save();
+            }
+            eh.passHash = plain;
+        } else {
+            eh.passHash = SecretBox.open(st.optString("eh_pass_hash_enc", ""));
+        }
     }
 
     // ------------------------------------------------------------------ MEGA
@@ -117,6 +148,7 @@ public class Library implements HttpServer.Handler {
     public void refreshMega() {
         List<Mega.Link> links;
         synchronized (this) { links = new ArrayList<>(megaLinks); }
+        lastMegaRefresh = System.currentTimeMillis();
         for (Mega.Link l : links) Mega.load(l);
         scan();
         autoPerformers();
@@ -209,10 +241,74 @@ public class Library implements HttpServer.Handler {
 
     private synchronized void ehSaveLogin(String id, String hash) throws JSONException {
         settings().put("eh_member_id", id);
-        settings().put("eh_pass_hash", hash);
+        String sealed = SecretBox.seal(hash);
+        if (sealed != null) { settings().put("eh_pass_hash_enc", sealed); settings().remove("eh_pass_hash"); }
+        else settings().put("eh_pass_hash", hash);   // 키 저장소를 못 쓰는 기기
+        if (hash.isEmpty()) { settings().remove("eh_pass_hash_enc"); settings().remove("eh_pass_hash"); }
         eh.memberId = id;
         eh.passHash = hash;
         save();
+    }
+
+    // ------------------------------------------------------------------ 기기에 저장한 만화
+    private volatile String ehSaveStatus = "";
+    private final java.util.concurrent.atomic.AtomicBoolean ehSaving = new java.util.concurrent.atomic.AtomicBoolean();
+
+    private synchronized JSONObject ehSaved() throws JSONException {
+        JSONObject o = store.optJSONObject("eh_saved");
+        if (o == null) { o = new JSONObject(); store.put("eh_saved", o); }
+        return o;
+    }
+
+    /** 저장 목록에서 다 받지 못한 만화를 하나씩 받습니다. */
+    private void ehSaveLoop() {
+        if (!ehSaving.compareAndSet(false, true)) return;
+        try {
+            while (true) {
+                long gid = -1;
+                String token = null, title = "", thumb = "";
+                int pages = 0;
+                synchronized (this) {
+                    JSONObject saved = ehSaved();
+                    Iterator<String> it = saved.keys();
+                    while (it.hasNext()) {
+                        String k = it.next();
+                        JSONObject g = saved.optJSONObject(k);
+                        if (g == null || g.optBoolean("done", false) || g.optBoolean("paused", false)) continue;
+                        gid = Long.parseLong(k); token = g.optString("token"); title = g.optString("title");
+                        thumb = g.optString("thumb"); pages = g.optInt("pages");
+                        break;
+                    }
+                }
+                if (gid < 0) break;
+                eh.saveCover(gid, thumb);
+                String error = null;
+                for (int n = 1; n <= pages; n++) {
+                    synchronized (this) { if (ehSaved().optJSONObject(String.valueOf(gid)) == null) break; }   // 저장 취소됨
+                    ehSaveStatus = "만화 저장 중… " + title + " " + n + "/" + pages;
+                    try {
+                        eh.savePage(gid, token, n);
+                    } catch (IOException e) {
+                        error = e.getMessage();
+                        break;
+                    }
+                }
+                synchronized (this) {
+                    JSONObject g = ehSaved().optJSONObject(String.valueOf(gid));
+                    if (g != null) {
+                        try {
+                            if (error == null) { g.put("done", true); g.remove("error"); }
+                            else { g.put("paused", true); g.put("error", error); }   // 오류가 나면 멈추고, 다시 시도를 누르면 이어 받음
+                        } catch (JSONException ignored) {}
+                        save();
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        } finally {
+            ehSaveStatus = "";
+            ehSaving.set(false);
+        }
     }
 
     /** 앱 안 로그인 화면에서 읽은 쿠키를 저장합니다. */
@@ -270,6 +366,71 @@ public class Library implements HttpServer.Handler {
         if (action.equals("logout") && m.equals("POST")) {
             ehSaveLogin("", "");
             res.json(200, "{\"ok\":true}");
+            return;
+        }
+        if (action.equals("saved")) {
+            JSONArray items = new JSONArray();
+            synchronized (this) {
+                JSONObject saved = ehSaved(), prog = ehProgress();
+                List<String> keys = new ArrayList<>();
+                Iterator<String> it = saved.keys();
+                while (it.hasNext()) keys.add(it.next());
+                keys.sort((a, b2) -> Long.compare(saved.optJSONObject(b2).optLong("at"), saved.optJSONObject(a).optLong("at")));
+                for (String k : keys) {
+                    JSONObject g = saved.optJSONObject(k), pr = prog.optJSONObject(k);
+                    long gid = Long.parseLong(k);
+                    items.put(new JSONObject().put("gid", gid).put("token", g.optString("token")).put("title", g.optString("title"))
+                            .put("title_jpn", "").put("category", g.optString("category")).put("pages", g.optInt("pages"))
+                            .put("thumb", eh.savedCover(gid).length() > 0 ? "/eh/cover/" + gid : g.optString("thumb"))
+                            .put("saved_pages", eh.savedCount(gid)).put("done", g.optBoolean("done", false))
+                            .put("error", g.optString("error", "")).put("read_page", pr == null ? 0 : pr.optInt("page")));
+                }
+            }
+            res.json(200, new JSONObject().put("items", items).toString());
+            return;
+        }
+        if (action.equals("save") && m.equals("POST")) {
+            JSONObject b = body(r);
+            long gid = b.optLong("gid", -1);
+            if (gid < 0 || !b.optString("token").matches("[0-9a-f]{10}")) { res.error(400, "잘못된 갤러리"); return; }
+            synchronized (this) {
+                JSONObject g = ehSaved().optJSONObject(String.valueOf(gid));
+                if (g == null) {
+                    g = new JSONObject().put("at", System.currentTimeMillis() / 1000);
+                    ehSaved().put(String.valueOf(gid), g);
+                }
+                for (String k : new String[]{"token", "title", "thumb", "category"}) if (b.has(k)) g.put(k, b.optString(k));
+                g.put("pages", b.optInt("pages", g.optInt("pages")));
+                g.remove("paused");
+                g.remove("error");
+                g.put("done", false);
+                save();
+            }
+            new Thread(this::ehSaveLoop).start();
+            res.json(200, "{\"ok\":true}");
+            return;
+        }
+        if (action.equals("unsave") && m.equals("POST")) {
+            long gid = body(r).optLong("gid", -1);
+            synchronized (this) { ehSaved().remove(String.valueOf(gid)); save(); }
+            eh.deleteSaved(gid);
+            res.json(200, "{\"ok\":true}");
+            return;
+        }
+        if (action.equals("favstate") || (action.equals("fav") && m.equals("POST"))) {
+            long gid = parseLong(r.param("gid"), -1);
+            String t = nz(r.param("t"));
+            JSONObject b = action.equals("fav") ? body(r) : null;
+            if (b != null) { gid = b.optLong("gid", -1); t = b.optString("t"); }
+            if (gid < 0 || !t.matches("[0-9a-f]{10}")) { res.error(400, "잘못된 갤러리"); return; }
+            try {
+                if (b != null) eh.setFavorite(gid, t, b.optInt("favcat", -1));
+                res.json(200, eh.favoriteState(gid, t).put("logged_in", true).toString());
+            } catch (EHentai.NotLoggedIn e) {
+                res.json(200, new JSONObject().put("logged_in", false).put("favcat", -1).toString());
+            } catch (IOException e) {
+                res.error(502, e.getMessage());
+            }
             return;
         }
         if (action.equals("recent")) {   // 최근 읽은 만화 (네트워크 없이, 저장해 둔 정보로)
@@ -342,6 +503,90 @@ public class Library implements HttpServer.Handler {
             return;
         }
         res.error(404, "unknown endpoint");
+    }
+
+    // ------------------------------------------------------------------ 숨긴 영상
+    private synchronized JSONArray hiddenVideos() throws JSONException {
+        if (lastScan == 0) scan();
+        JSONArray out = new JSONArray();
+        for (Video v : all) {
+            if (!meta(v).optBoolean("hidden", false)) continue;
+            out.put(summary(v).put("filename", v.name).put("folder", v.relPath).put("source", v.node != null ? "mega" : "local"));
+        }
+        return out;
+    }
+
+    // ------------------------------------------------------------------ 중복 영상: 하나만 남기고 정보 합치기
+    /** others 의 태그·출연자·별점·즐겨찾기·재생 기록·북마크·메모를 keep 에 합치고 others 는 숨김. */
+    private synchronized void mergeInto(Video keep, List<Video> others) throws JSONException {
+        JSONObject k = meta(keep);
+        for (Video o : others) {
+            if (o == keep) continue;
+            JSONObject m = meta(o);
+            for (String f : new String[]{"tags", "performers"}) {
+                Set<Long> ids = new java.util.LinkedHashSet<>();
+                for (JSONArray a : new JSONArray[]{k.optJSONArray(f), m.optJSONArray(f)})
+                    for (int i = 0; a != null && i < a.length(); i++) ids.add(a.optLong(i));
+                k.put(f, new JSONArray(ids));
+            }
+            k.put("rating", Math.max(k.optInt("rating", 0), m.optInt("rating", 0)));
+            if (m.optBoolean("favorite", false)) k.put("favorite", true);
+            k.put("play_count", k.optInt("play_count", 0) + m.optInt("play_count", 0));
+            if (m.optLong("last_played", 0) > k.optLong("last_played", 0)) k.put("last_played", m.optLong("last_played"));
+            if (k.optDouble("resume_pos", 0) <= 0 && m.optDouble("resume_pos", 0) > 0) k.put("resume_pos", m.optDouble("resume_pos"));
+            String d1 = k.optString("details", "").trim(), d2 = m.optString("details", "").trim();
+            if (!d2.isEmpty() && !d1.contains(d2)) k.put("details", d1.isEmpty() ? d2 : d1 + "\n" + d2);
+            JSONArray mk = k.optJSONArray("markers"), om = m.optJSONArray("markers");
+            if (om != null && om.length() > 0) {
+                List<JSONObject> l = new ArrayList<>();
+                Set<Long> secs = new HashSet<>();
+                for (JSONArray a : new JSONArray[]{mk, om})
+                    for (int i = 0; a != null && i < a.length(); i++) {
+                        JSONObject x = a.optJSONObject(i);
+                        if (x != null && secs.add(Math.round(x.optDouble("seconds")))) l.add(x);
+                    }
+                l.sort(Comparator.comparingDouble(o2 -> o2.optDouble("seconds")));
+                k.put("markers", new JSONArray(l));
+            }
+            m.put("hidden", true);
+        }
+        save();
+    }
+
+    // ------------------------------------------------------------------ 백업 / 복원
+    private static final String[] BACKUP_KEYS = {"videos", "tags", "performers", "performer_info", "eh_progress", "eh_saved", "seq"};
+    private static final String[] BACKUP_SETTINGS = {"library_paths", "mega_links", "mega_thumbs", "mega_refresh_hours"};
+
+    /** 태그·별점·출연자 등 사용자 정보. 비밀번호와 로그인 쿠키는 넣지 않음. */
+    private synchronized JSONObject backupJson() throws JSONException {
+        JSONObject o = new JSONObject().put("app", "vidshelf").put("backup_version", 1).put("exported_at", System.currentTimeMillis() / 1000);
+        for (String k : BACKUP_KEYS) if (store.has(k)) o.put(k, store.get(k));
+        JSONObject st = new JSONObject();
+        for (String k : BACKUP_SETTINGS) if (settings().has(k)) st.put(k, settings().get(k));
+        return o.put("settings", st);
+    }
+
+    /** 백업을 불러와 지금 정보를 바꿉니다. 돌려주는 값: 불러온 영상 정보 수. */
+    private synchronized int restore(JSONObject b) throws JSONException {
+        if (!"vidshelf".equals(b.optString("app")) || !b.has("videos")) throw new JSONException("VidShelf 백업 파일이 아닙니다");
+        for (String k : BACKUP_KEYS) if (b.has(k)) store.put(k, b.get(k));
+        if (!store.has("tags")) store.put("tags", new JSONObject());
+        if (!store.has("performers")) store.put("performers", new JSONObject());
+        long maxId = store.optLong("seq", 1);   // 새로 만들 번호가 기존 번호와 겹치지 않게
+        for (String f : new String[]{"tags", "performers"}) {
+            Iterator<String> it = store.optJSONObject(f).keys();
+            while (it.hasNext()) maxId = Math.max(maxId, Long.parseLong(it.next()) + 1);
+        }
+        store.put("seq", maxId);
+        JSONObject st = b.optJSONObject("settings");
+        if (st != null) for (String k : BACKUP_SETTINGS) if (st.has(k)) settings().put(k, st.get(k));
+        megaLinks.clear();
+        JSONArray links = settings().optJSONArray("mega_links");
+        for (int i = 0; links != null && i < links.length(); i++) {
+            try { megaLinks.add(Mega.parse(links.optString(i))); } catch (Exception ignored) {}
+        }
+        writeNow();
+        return store.optJSONObject("videos").length();
     }
 
     /** 파일 크기가 똑같은 영상 묶음 (기기와 MEGA, 여러 폴더에 같은 영상이 있을 때). */
@@ -590,7 +835,17 @@ public class Library implements HttpServer.Handler {
         save();
     }
 
+    private boolean savePending = false;
+
+    /** 저장을 잠시 모아서 한 번에 씀 (재생 위치처럼 자주 바뀌는 값 때문에 파일 전체를 계속 쓰지 않도록). */
     private synchronized void save() {
+        if (savePending) return;
+        savePending = true;
+        bg.schedule(this::writeNow, 1500, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    private synchronized void writeNow() {
+        savePending = false;
         try {
             File tmp = new File(storeFile.getPath() + ".tmp");
             try (FileOutputStream o = new FileOutputStream(tmp)) {
@@ -805,26 +1060,26 @@ public class Library implements HttpServer.Handler {
         JSONObject m = meta(v);
         int[] wh = dims(v, m);
         return new JSONObject().put("id", v.id).put("title", title(v)).put("width", wh[0]).put("height", wh[1])
-                .put("size", v.size).put("favorite", m.optBoolean("favorite", false) ? 1 : 0)
+                .put("size", v.size).put("favorite", m.optBoolean("favorite", false) ? 1 : 0).put("rating", m.optInt("rating", 0))
                 .put("performers", performerNames(m)).put("added_at", v.dateAdded).put("taken", v.taken)
                 .put("source", v.node != null ? "mega" : "local");
     }
 
     private synchronized JSONObject photoDetail(Video v) throws JSONException {
         return photoSummary(v).put("filename", v.name).put("folder", v.relPath)
-                .put("performer_refs", entityRefs(meta(v), "performers"));
+                .put("performer_refs", entityRefs(meta(v), "performers")).put("tags", entityRefs(meta(v), "tags"));
     }
 
     private synchronized JSONObject listPhotos(HttpServer.Request r) throws JSONException {
         String q = nz(r.param("q")).trim().toLowerCase(Locale.ROOT);
         String[] words = q.isEmpty() ? new String[0] : q.split("\\s+");
-        Set<Long> perfFilter = longs(r.params("performer"));
+        Set<Long> perfFilter = longs(r.params("performer")), tagFilter = longs(r.params("tag"));
         boolean fav = "1".equals(r.param("fav"));
         List<Video> list = new ArrayList<>();
         for (Video v : visiblePhotos()) {
             JSONObject m = meta(v);
             if (fav && !m.optBoolean("favorite", false)) continue;
-            if (!containsAll(m.optJSONArray("performers"), perfFilter)) continue;
+            if (!containsAll(m.optJSONArray("performers"), perfFilter) || !containsAll(m.optJSONArray("tags"), tagFilter)) continue;
             if (words.length > 0) {
                 String hay = (title(v) + " " + v.relPath + v.name + " " + performerNames(m).join(" ")).toLowerCase(Locale.ROOT);
                 boolean ok = true;
@@ -843,6 +1098,7 @@ public class Library implements HttpServer.Handler {
                 case "title": cmp = Comparator.comparing(v -> title(v).toLowerCase(Locale.ROOT)); break;
                 case "size": cmp = Comparator.comparingLong(v -> v.size); break;
                 case "added": cmp = Comparator.comparingLong(v -> v.dateAdded); break;
+                case "rating": cmp = Comparator.comparingInt(v -> meta(v).optInt("rating", 0)); break;
                 default: cmp = Comparator.comparingLong(v -> v.taken);
             }
             cmp = cmp.thenComparingLong(v -> v.id);
@@ -1216,8 +1472,15 @@ public class Library implements HttpServer.Handler {
                 .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
                 .put("mega_supported", true).put("mega", megaJson())
                 .put("server", serverJson()).put("performer_info", true).put("photos", true)
-                .put("duplicates", true).put("eh", true).put("mega_thumbs", megaThumbsOn())
+                .put("duplicates", true).put("eh", true).put("backup", true).put("mega_refresh_hours", megaRefreshHours())
+                .put("mega_last_refresh", lastMegaRefresh / 1000).put("hidden_count", hiddenCount()).put("mega_thumbs", megaThumbsOn())
                 .put("mega_thumb_missing", megaThumbMissing()[0]).put("mega_thumb_failed", megaThumbMissing()[1]);
+    }
+
+    private synchronized int hiddenCount() {
+        int n = 0;
+        for (Video v : all) if (meta(v).optBoolean("hidden", false)) n++;
+        return n;
     }
 
     /** {썸네일 없는 MEGA 영상 수, 그중 만들기에 실패한 수} */
@@ -1295,6 +1558,25 @@ public class Library implements HttpServer.Handler {
             }
             if (n == null || n.folder) { res.error(404, "not found"); return; }
             megaStream(l, n, mimeFor(ext(n.name)), r, res, "1".equals(r.param("dl")));
+            return;
+        }
+        if (path.equals("/eh/thumb") || path.startsWith("/eh/cover/")) {
+            if (!authed(r)) { res.error(401, "login required"); return; }
+            byte[] img;
+            try {
+                if (path.startsWith("/eh/cover/")) {
+                    File f = eh.savedCover(parseLong(path.substring(10), -1));
+                    if (f.length() == 0) { res.error(404, "not found"); return; }
+                    img = readAll(new FileInputStream(f));
+                } else {
+                    img = eh.thumb(nz(r.param("u")));
+                }
+            } catch (IOException e) {
+                res.error(502, e.getMessage() == null ? "표지를 받지 못했습니다" : e.getMessage());
+                return;
+            }
+            res.header("Cache-Control", "max-age=604800");
+            res.send(200, EHentai.imageType(img), img);
             return;
         }
         if (path.startsWith("/eh/page/")) {   // /eh/page/{gid}/{token}/{n}
@@ -1414,6 +1696,12 @@ public class Library implements HttpServer.Handler {
                         return;
                     }
                 }
+                if (action.equals("unhide") && m.equals("POST")) {
+                    meta.remove("hidden");
+                    save();
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
                 if (action.equals("play") && m.equals("POST")) {
                     meta.put("play_count", meta.optInt("play_count", 0) + 1);
                     meta.put("last_played", System.currentTimeMillis() / 1000);
@@ -1492,7 +1780,9 @@ public class Library implements HttpServer.Handler {
                 if (m.equals("PATCH")) {
                     JSONObject b = body(r), meta = meta(v);
                     if (b.has("favorite")) meta.put("favorite", b.optBoolean("favorite"));
+                    if (b.has("rating")) meta.put("rating", Math.max(0, Math.min(5, b.optInt("rating"))));
                     if (b.has("performers")) setLinks(meta, "performers", b.optJSONArray("performers"));
+                    if (b.has("tags")) setLinks(meta, "tags", b.optJSONArray("tags"));
                     save();
                     res.json(200, photoDetail(v).toString());
                     return;
@@ -1628,6 +1918,9 @@ public class Library implements HttpServer.Handler {
                     }
                     save();
                 }
+                if (b.has("mega_refresh_hours")) {
+                    synchronized (this) { settings().put("mega_refresh_hours", Math.max(0, Math.min(168, b.optInt("mega_refresh_hours")))); save(); }
+                }
                 if (b.has("mega_thumbs")) {
                     synchronized (this) { settings().put("mega_thumbs", b.optBoolean("mega_thumbs")); save(); }
                     if (b.optBoolean("mega_thumbs")) { genPausedUntil = 0; megaThumbsSoon(); }
@@ -1648,6 +1941,40 @@ public class Library implements HttpServer.Handler {
         }
         if (p0.equals("eh")) { ehApi(r, res, parts.length > 1 ? parts[1] : "", m); return; }
         if (p0.equals("duplicates") && m.equals("GET")) { res.json(200, duplicates().toString()); return; }
+        if (p0.equals("duplicates") && parts.length == 2 && parts[1].equals("keep") && m.equals("POST")) {
+            JSONObject b = body(r);
+            synchronized (this) {
+                if (lastScan == 0) scan();
+                Video keep = byId.get(b.optLong("keep", -1));
+                JSONArray oa = b.optJSONArray("others");
+                List<Video> others = new ArrayList<>();
+                for (int i = 0; oa != null && i < oa.length(); i++) { Video o = byId.get(oa.optLong(i)); if (o != null) others.add(o); }
+                if (keep == null || others.isEmpty()) { res.error(400, "영상을 찾지 못했습니다"); return; }
+                mergeInto(keep, others);
+            }
+            res.json(200, "{\"ok\":true}");
+            return;
+        }
+        if (p0.equals("hidden") && m.equals("GET")) { res.json(200, hiddenVideos().toString()); return; }
+        if (p0.equals("backup") && m.equals("GET")) {
+            String day = new java.text.SimpleDateFormat("yyyyMMdd-HHmm", Locale.ROOT).format(new java.util.Date());
+            res.header("Content-Disposition", "attachment; filename=\"vidshelf-backup-" + day + ".json\"");
+            res.send(200, "application/json; charset=utf-8", backupJson().toString().getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        if (p0.equals("restore") && m.equals("POST")) {
+            int n;
+            try {
+                n = restore(new JSONObject(r.bodyText()));
+            } catch (JSONException e) {
+                res.error(400, e.getMessage() != null && e.getMessage().startsWith("VidShelf") ? e.getMessage() : "백업 파일을 읽지 못했습니다");
+                return;
+            }
+            new Thread(this::refreshMega).start();
+            new Thread(this::ehSaveLoop).start();
+            res.json(200, new JSONObject().put("videos", n).toString());
+            return;
+        }
         if (p0.equals("browse")) { res.json(200, browse(r.param("path")).toString()); return; }
         if (p0.equals("scan") && m.equals("POST")) {
             scan();
@@ -1667,8 +1994,11 @@ public class Library implements HttpServer.Handler {
                 }
                 counts = new JSONObject().put("total", vis.size()).put("bytes", bytes).put("seconds", secs).put("missing", 0).put("favorites", favs);
             }
-            res.json(200, new JSONObject().put("scanning", !lookupStatus.isEmpty()).put("scan_found", 0).put("scan_new", 0)
-                    .put("scan_current", lookupStatus)
+            String job = !lookupStatus.isEmpty() ? lookupStatus : ehSaveStatus;
+            res.json(200, new JSONObject().put("scanning", !job.isEmpty()).put("scan_found", 0).put("scan_new", 0)
+                    .put("scan_current", job)
+                    .put("mega_quota_hit", Mega.quotaHitAt > 0 && System.currentTimeMillis() - Mega.quotaHitAt < 6 * 3600_000L ? Mega.quotaHitAt / 1000 : 0)
+                    .put("mega_quota_until", Mega.quotaUntil > System.currentTimeMillis() ? Mega.quotaUntil / 1000 : 0)
                     .put("thumb_pending", genPending).put("thumb_current", genCurrent).put("last_scan", lastScan / 1000)
                     .put("counts", counts).toString());
             return;

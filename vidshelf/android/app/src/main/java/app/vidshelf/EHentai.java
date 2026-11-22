@@ -41,8 +41,21 @@ class EHentai {
         NotLoggedIn() { super("e-hentai 로그인이 필요합니다"); }
     }
 
-    private final File cacheDir;
+    private final File cacheDir, savedDir, thumbDir;
     volatile String memberId = "", passHash = "";
+
+    static final String BLOCKED = "e-hentai 접속이 막혔습니다 (국내 차단). 보안 폴더 안에서 VPN 앱을 켠 뒤 다시 시도하세요.";
+
+    /** 연결 오류를 알기 쉬운 문구로 바꿈. 차단으로 보이는 오류는 VPN 안내. */
+    static IOException explain(String host, IOException e) {
+        if (e instanceof NotLoggedIn) return e;
+        String m = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        String low = (m + " " + e.getClass().getSimpleName()).toLowerCase();
+        if (low.contains("reset") || low.contains("ssl") || low.contains("handshake") || low.contains("closed by peer")
+                || low.contains("unexpected end of stream") || low.contains("refused") || low.contains("unknownhost") || low.contains("unable to resolve"))
+            return new IOException(BLOCKED + " (" + host + ": " + m + ")");
+        return new IOException(host + " 연결 실패: " + m);
+    }
 
     /** 갤러리별 페이지 토큰 (페이지 번호 → /s/ 토큰) */
     private static class Gallery {
@@ -54,7 +67,11 @@ class EHentai {
         protected boolean removeEldestEntry(Map.Entry<Long, Gallery> e) { return size() > 50; }
     };
 
-    EHentai(File cacheDir) { this.cacheDir = cacheDir; }
+    EHentai(File cacheDir, File savedDir, File thumbDir) {
+        this.cacheDir = cacheDir;
+        this.savedDir = savedDir;
+        this.thumbDir = thumbDir;
+    }
 
     boolean loggedIn() { return !memberId.isEmpty() && !passHash.isEmpty(); }
 
@@ -76,15 +93,15 @@ class EHentai {
 
     private String get(String url) throws IOException {
         HttpURLConnection c = open(url);
-        int code;
         try {
-            code = c.getResponseCode();
+            int code = c.getResponseCode();
+            if (code >= 400) throw new IOException("e-hentai 응답 오류 (HTTP " + code + ")");
+            try (InputStream in = c.getInputStream()) {
+                return new String(Library.readAll(in), StandardCharsets.UTF_8);
+            }
         } catch (IOException e) {
-            throw new IOException(new URL(url).getHost() + " 연결 실패: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
-        }
-        if (code >= 400) throw new IOException("e-hentai 응답 오류 (HTTP " + code + ")");
-        try (InputStream in = c.getInputStream()) {
-            return new String(Library.readAll(in), StandardCharsets.UTF_8);
+            if (e.getMessage() != null && e.getMessage().startsWith("e-hentai 응답 오류")) throw e;
+            throw explain(new URL(url).getHost(), e);
         }
     }
 
@@ -94,8 +111,13 @@ class EHentai {
         c.setRequestMethod("POST");
         c.setRequestProperty("Content-Type", type);
         if (keep != null) { c.setInstanceFollowRedirects(false); keep[0] = c; }
-        try (OutputStream o = c.getOutputStream()) { o.write(body); }
-        int code = c.getResponseCode();
+        int code;
+        try {
+            try (OutputStream o = c.getOutputStream()) { o.write(body); }
+            code = c.getResponseCode();
+        } catch (IOException e) {
+            throw explain(new URL(url).getHost(), e);
+        }
         InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
         if (in == null) return "";
         try (InputStream i = in) { return new String(Library.readAll(i), StandardCharsets.UTF_8); }
@@ -301,8 +323,8 @@ class EHentai {
         try {
             return downloadOnce(url);
         } catch (IOException e) {
-            String why = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            throw new IOException("이미지 서버(" + host + ") 연결 실패: " + why);
+            if (e.getMessage() != null && e.getMessage().startsWith("HTTP ")) throw new IOException("이미지 서버(" + host + ") 응답 오류: " + e.getMessage());
+            throw explain("이미지 서버 " + host, e);
         }
     }
 
@@ -329,6 +351,8 @@ class EHentai {
 
     /** n 번째 페이지(1부터) 이미지. 받은 이미지는 기기에 보관해 다시 받지 않음. */
     byte[] page(long gid, String token, int n) throws IOException {
+        File sf = savedFile(gid, n);
+        if (sf.length() > 0) return Library.readAll(new java.io.FileInputStream(sf));
         File f = pageFile(gid, n);
         if (f.length() > 0) {
             f.setLastModified(System.currentTimeMillis());
@@ -353,6 +377,94 @@ class EHentai {
         tmp.renameTo(f);
         pruneSoon();
         return data;
+    }
+
+    // ------------------------------------------------------------------ 기기에 저장한 만화
+    File savedFile(long gid, int n) { return new File(new File(savedDir, String.valueOf(gid)), n + ".img"); }
+    File savedCover(long gid) { return new File(new File(savedDir, String.valueOf(gid)), "cover.img"); }
+
+    /** 저장한 쪽 수 */
+    int savedCount(long gid) {
+        File[] fs = new File(savedDir, String.valueOf(gid)).listFiles();
+        int n = 0;
+        if (fs != null) for (File f : fs) if (f.getName().endsWith(".img") && !f.getName().startsWith("cover") && f.length() > 0) n++;
+        return n;
+    }
+
+    /** 한 쪽을 저장 (이미 보관한 이미지가 있으면 그것을 씀). */
+    void savePage(long gid, String token, int n) throws IOException {
+        File sf = savedFile(gid, n);
+        if (sf.length() > 0) return;
+        byte[] data = page(gid, token, n);
+        writeFile(sf, data);
+    }
+
+    void saveCover(long gid, String thumbUrl) {
+        File cf = savedCover(gid);
+        if (cf.length() > 0 || thumbUrl == null || thumbUrl.isEmpty()) return;
+        try { writeFile(cf, thumb(thumbUrl)); } catch (IOException ignored) {}
+    }
+
+    void deleteSaved(long gid) {
+        File d = new File(savedDir, String.valueOf(gid));
+        File[] fs = d.listFiles();
+        if (fs != null) for (File f : fs) f.delete();
+        d.delete();
+    }
+
+    private static void writeFile(File f, byte[] data) throws IOException {
+        f.getParentFile().mkdirs();
+        File tmp = new File(f.getPath() + ".tmp");
+        try (FileOutputStream o = new FileOutputStream(tmp)) { o.write(data); }
+        if (!tmp.renameTo(f)) throw new IOException("저장 실패");
+    }
+
+    // ------------------------------------------------------------------ 표지 (앱을 거쳐 받고 보관)
+    static boolean thumbHostOk(String url) {
+        try {
+            String h = new URL(url).getHost().toLowerCase();
+            return h.equals("ehgt.org") || h.endsWith(".ehgt.org") || h.endsWith("e-hentai.org") || h.endsWith(".hath.network");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    byte[] thumb(String url) throws IOException {
+        if (!thumbHostOk(url)) throw new IOException("허용되지 않은 주소");
+        File f = new File(thumbDir, Integer.toHexString(url.hashCode()) + "-" + url.length() + ".img");
+        if (f.length() > 0) return Library.readAll(new java.io.FileInputStream(f));
+        byte[] data = download(url);
+        try { writeFile(f, data); } catch (IOException ignored) {}
+        return data;
+    }
+
+    // ------------------------------------------------------------------ 즐겨찾기 추가·해제
+    private static final Pattern FAV_BOX = Pattern.compile("id=\"fav\">\\s*<div([^>]*)>");
+    private static final Pattern FAV_Y = Pattern.compile("background-position:\\s*0(?:px)?\\s+-(\\d+)px");
+    private static final Pattern FAV_TITLE = Pattern.compile("title=\"([^\"]*)\"");
+
+    /** 이 갤러리가 내 즐겨찾기 어느 폴더에 있는지. {"favcat": -1(없음)~9, "name": 폴더 이름} */
+    JSONObject favoriteState(long gid, String token) throws IOException, JSONException {
+        if (!loggedIn()) throw new NotLoggedIn();
+        String html = get(BASE + "/g/" + gid + "/" + token + "/?p=0");
+        Matcher box = FAV_BOX.matcher(html);
+        if (box.find()) {
+            String attrs = box.group(1);
+            Matcher y = FAV_Y.matcher(attrs), t = FAV_TITLE.matcher(attrs);
+            int cat = y.find() ? Math.max(0, Math.min(9, Math.round((Integer.parseInt(y.group(1)) - 2) / 19f))) : 0;
+            return new JSONObject().put("favcat", cat).put("name", t.find() ? unescape(t.group(1)) : "Favorites " + cat);
+        }
+        return new JSONObject().put("favcat", -1).put("name", "");
+    }
+
+    /** favcat 0~9 면 그 폴더로 추가(또는 옮김), -1 이면 즐겨찾기에서 뺌. */
+    void setFavorite(long gid, String token, int favcat) throws IOException {
+        if (!loggedIn()) throw new NotLoggedIn();
+        String form = "favcat=" + (favcat < 0 ? "favdel" : String.valueOf(favcat)) + "&favnote=&update=1"
+                + (favcat < 0 ? "&apply=Apply+Changes" : "&apply=Add+to+Favorites");
+        String html = post(BASE + "/gallerypopups.php?gid=" + gid + "&t=" + token + "&act=addfav",
+                "application/x-www-form-urlencoded", form.getBytes(StandardCharsets.UTF_8), null);
+        if (html.contains("This page requires you to log on")) throw new NotLoggedIn();
     }
 
     static String imageType(byte[] d) {

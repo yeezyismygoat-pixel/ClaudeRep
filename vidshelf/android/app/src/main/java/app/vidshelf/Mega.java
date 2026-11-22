@@ -33,6 +33,8 @@ import javax.crypto.spec.SecretKeySpec;
 public class Mega {
 
     private static final String API = "https://g.api.mega.co.nz/cs";
+    /** 전송량 한도에 걸린 시각과 풀리는 시각 (모르면 0). 정상적으로 받으면 0 으로 돌아감. */
+    static volatile long quotaHitAt = 0, quotaUntil = 0;
     private static final AtomicLong seq = new AtomicLong(System.currentTimeMillis() % 1_000_000);
 
     public static class Node {
@@ -253,7 +255,16 @@ public class Mega {
         c.setConnectTimeout(20000);
         c.setReadTimeout(60000);
         int code = c.getResponseCode();
-        if (code == 509) throw new IOException(errorText(-17));
+        if (code == 509) {
+            // 한도가 풀릴 때까지 남은 시간(초)을 알려 주는 경우가 있음
+            long left = 0;
+            try { left = Long.parseLong(c.getHeaderField("X-MEGA-Time-Left").trim()); } catch (Exception ignored) {}
+            quotaHitAt = System.currentTimeMillis();
+            quotaUntil = left > 0 ? quotaHitAt + left * 1000 : 0;
+            throw new IOException(errorText(-17));
+        }
+        quotaHitAt = 0;
+        quotaUntil = 0;
         if (code >= 400) {
             synchronized (link) { link.dlCache.remove(n.handle); }
             throw new IOException("MEGA 다운로드 실패 (HTTP " + code + ")");

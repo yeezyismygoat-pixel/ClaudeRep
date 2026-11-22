@@ -85,7 +85,9 @@ async function pollStatus() {
     const s = await api("status");
     const bar = document.getElementById("jobbar");
     const busy = s.scanning || s.thumb_pending > 0;
-    bar.hidden = !busy;
+    const quota = megaQuotaText(s);
+    bar.hidden = !busy && !quota;
+    if (!busy && quota) bar.replaceChildren(h("span", { class: "warn" }, "⚠ " + quota));
     if (busy) {
       const txt = s.scanning
         ? (s.scan_found || s.scan_new ? `스캔 중… ${s.scan_found}개 발견, 새 영상 ${s.scan_new}개 · ${s.scan_current || ""}` : (s.scan_current || "작업 중…"))
@@ -124,6 +126,7 @@ async function route() {
     if (path === "/mega") return await renderMega(params);
     if (path === "/photos") return await renderPhotos(params);
     if (path === "/duplicates") return await renderDuplicates();
+    if (path === "/hidden") return await renderHidden();
     if (path === "/comics") return await renderComics(params);
     if (path === "/comic") return await renderComic(+params.get("gid"), params.get("t") || "", params);
     location.hash = "#/";
@@ -263,7 +266,7 @@ function videoTile(v) {
 }
 
 // ---------------------------------------------------------------- 사진
-const PHOTO_SORTS = [["taken", "촬영 날짜"], ["added", "추가한 날짜"], ["title", "이름"], ["size", "파일 크기"], ["random", "무작위"]];
+const PHOTO_SORTS = [["taken", "촬영 날짜"], ["added", "추가한 날짜"], ["title", "이름"], ["size", "파일 크기"], ["rating", "별점"], ["random", "무작위"]];
 
 async function renderPhotos(params) {
   setTab("photos");
@@ -278,6 +281,10 @@ async function renderPhotos(params) {
   for (const id of params.getAll("performer")) {
     const e = await api(`performers/${id}`).catch(() => ({ name: "#" + id }));
     chips.push(h("span", { class: "chip on" }, e.name, h("button", { title: "필터 해제", onclick: () => update({ performer: null }) }, "×")));
+  }
+  for (const id of params.getAll("tag")) {
+    const e = await api(`tags/${id}`).catch(() => ({ name: "" + id }));
+    chips.push(h("span", { class: "chip on" }, "# " + e.name, h("button", { title: "필터 해제", onclick: () => update({ tag: null }) }, "×")));
   }
   let t;
   const search = h("input", { type: "search", class: "search", placeholder: "이름, 출연자, 폴더 검색", value: params.get("q") || "",
@@ -348,7 +355,8 @@ function icon(name) {
 /** 사진 크게 보기: 세로 화면에서는 가로를 꽉 채우고, 아래로 내리면 사진 정보. 좌우로 밀어 넘기기. */
 async function openViewer(items, start) {
   let i = start, closed = false, cur = null, editing = false;
-  const allPerformers = await api("performers").catch(() => []);
+  const [allPerformers, allTags] = await Promise.all([api("performers").catch(() => []), api("tags").catch(() => [])]);
+  const tagInput = h("input", { type: "text", list: "dl-viewer-tag", placeholder: "태그 추가 (Enter)" });
   const img = h("img", { alt: "" });
   const counter = h("span", { class: "count" });
   const favBtn = h("button", { class: "vbtn", "aria-label": "즐겨찾기" }, icon("heart"));
@@ -363,14 +371,14 @@ async function openViewer(items, start) {
   };
   const onPop = () => close();
   const onKey = (e) => {
-    if (document.activeElement === input) return;
+    if (document.activeElement === input || document.activeElement === tagInput) return;
     if (e.key === "ArrowLeft") show(i - 1);
     else if (e.key === "ArrowRight") show(i + 1);
     else if (e.key === "Escape") history.back();
   };
   async function save(patch) {
     cur = await api(`photos/${cur.id}`, { method: "PATCH", body: patch });
-    items[i].favorite = cur.favorite; items[i].performers = cur.performers;
+    items[i].favorite = cur.favorite; items[i].performers = cur.performers; items[i].rating = cur.rating;
     draw();
   }
   function draw() {
@@ -382,16 +390,27 @@ async function openViewer(items, start) {
       h("h2", {}, cur.filename || cur.title),
       h("dl", {}, ...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])),
       h("div", { class: "row", style: "justify-content:space-between" },
-        h("span", { class: "meta" }, "출연자"),
+        h("div", { class: "stars" + (editing ? "" : " ro") }, ...[1, 2, 3, 4, 5].map((n) =>
+          editing ? h("button", { class: n <= (cur.rating || 0) ? "on" : "", title: `${n}점`, onclick: () => save({ rating: cur.rating === n ? 0 : n }) }, "★")
+            : n <= (cur.rating || 0) ? h("span", { class: "on" }, "★") : null)),
         h("button", { class: "btn sm" + (editing ? " primary" : ""), onclick: () => { editing = !editing; draw(); } }, editing ? "완료" : "✎ 수정")),
+      h("span", { class: "meta" }, "출연자"),
       h("div", { class: "chips" }, ...(cur.performer_refs.length ? cur.performer_refs.map((p) => editing
         ? h("span", { class: "chip" }, p.name,
             h("button", { "aria-label": `${p.name} 제거`, onclick: () => save({ performers: cur.performer_refs.filter((x) => x.id !== p.id).map((x) => x.name) }) }, "×"))
         : h("button", { class: "chip", onclick: () => { close(); location.hash = `#/performer?id=${p.id}`; } }, p.name))
         : [h("span", { class: "meta" }, editing ? "출연자 없음 — 아래에 이름을 입력하세요" : "출연자 없음")])),
       ...(editing ? [input] : []),
+      h("span", { class: "meta" }, "태그"),
+      h("div", { class: "chips" }, ...((cur.tags || []).length ? cur.tags.map((t) => editing
+        ? h("span", { class: "chip" }, "# " + t.name,
+            h("button", { "aria-label": `${t.name} 제거`, onclick: () => save({ tags: cur.tags.filter((x) => x.id !== t.id).map((x) => x.name) }) }, "×"))
+        : h("button", { class: "chip", onclick: () => { close(); location.hash = `#/photos?tag=${t.id}`; } }, "# " + t.name))
+        : [h("span", { class: "meta" }, "태그 없음")])),
+      ...(editing ? [tagInput] : []),
       h("div", { class: "vnav" }, prevBtn, nextBtn),
-      h("datalist", { id: "dl-viewer-perf" }, allPerformers.map((p) => h("option", { value: p.name }))));
+      h("datalist", { id: "dl-viewer-perf" }, allPerformers.map((p) => h("option", { value: p.name }))),
+      h("datalist", { id: "dl-viewer-tag" }, allTags.map((t) => h("option", { value: t.name }))));
     prevBtn.disabled = i === 0; nextBtn.disabled = i === items.length - 1;
   }
   async function show(n) {
@@ -406,6 +425,11 @@ async function openViewer(items, start) {
     if (i === n) { cur = d; draw(); }
   }
   favBtn.onclick = () => cur && save({ favorite: !cur.favorite });
+  tagInput.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !tagInput.value.trim()) return;
+    const names = (cur.tags || []).map((x) => x.name).concat(tagInput.value.split(",").map((x) => x.trim()).filter(Boolean));
+    tagInput.value = ""; save({ tags: names });
+  });
   input.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" || !input.value.trim()) return;
     const names = cur.performer_refs.map((x) => x.name).concat(input.value.split(",").map((x) => x.trim()).filter(Boolean));
@@ -538,7 +562,9 @@ async function renderVideo(id, params) {
     if (!counted) { counted = true; api(`videos/${v.id}/play`, { method: "POST" }).catch(() => {}); }
   });
   video.addEventListener("error", () => {
-    if (mode === "direct" && video.error && !canTranscode) {
+    if (mode === "direct" && video.error && v.source === "mega") {
+      api("status").then((st) => toast(megaQuotaText(st) || "재생하지 못했습니다. 지원하지 않는 형식이거나 MEGA 연결 문제입니다.")).catch(() => {});
+    } else if (mode === "direct" && video.error && !canTranscode) {
       toast("이 영상 형식은 브라우저에서 재생할 수 없습니다");
     } else if (mode === "direct" && video.error) {
       toast("이 형식은 바로 재생할 수 없어 호환 모드로 전환합니다");
@@ -685,7 +711,7 @@ function entityCover(e, fallback) {
 async function renderEntities(ep, label, filterKey) {
   setTab(ep);
   const items = await api(ep);
-  let filter = "";
+  let filter = "", editing = false;
   const grid = h("div", { class: "egrid" });
   const draw = () => {
     const list = items.filter((e) => e.name.toLowerCase().includes(filter.toLowerCase()));
@@ -700,10 +726,19 @@ async function renderEntities(ep, label, filterKey) {
           e.group !== undefined ? h("div", { class: "body meta", style: "padding-top:0;display:block" },
             [e.group, e.birthdate ? `${e.birthdate} (${age(e.birthdate)}세)` : "", e.height ? `${e.height}cm` : ""].filter(Boolean).join(" · ") || "정보 없음") : null);
       }
-      return h("div", { class: "ecard" },
-        h("a", { href: `#/?${filterKey}=${e.id}` }, h("div", { class: "thumb" }, entityCover(e, "#"))),
+      // 태그: 누르면 그 태그 영상 목록. 이름 변경·삭제는 ‘수정’을 눌렀을 때만
+      const href = `#/?${filterKey}=${e.id}`;
+      if (!editing) return h("a", { class: "ecard", href },
+        h("div", { class: "thumb" }, entityCover(e, "#")),
         h("div", { class: "body" },
-          h("a", { class: "name", href: `#/?${filterKey}=${e.id}`, title: e.name }, e.name),
+          h("span", { class: "name", title: e.name }, "# " + e.name),
+          h("span", { class: "meta" }, e.photo_count ? `${e.count} · 사진 ${e.photo_count}` : `${e.count}`)),
+        e.photo_count ? h("div", { class: "body", style: "padding-top:0" },
+          h("button", { class: "btn sm", onclick: (ev) => { ev.preventDefault(); location.hash = `#/photos?tag=${e.id}`; } }, "사진 보기")) : null);
+      return h("div", { class: "ecard" },
+        h("div", { class: "thumb" }, entityCover(e, "#")),
+        h("div", { class: "body" },
+          h("span", { class: "name", title: e.name }, "# " + e.name),
           h("span", { class: "meta" }, `${e.count}`)),
         h("div", { class: "body", style: "padding-top:0" },
           h("button", { class: "btn sm", onclick: async () => {
@@ -717,6 +752,7 @@ async function renderEntities(ep, label, filterKey) {
           } }, "삭제")));
     }));
   };
+  const editBtn = filterKey === "tag" && items.length ? h("button", { class: "btn" + (editing ? " primary" : ""), onclick: () => { editing = !editing; editBtn.className = "btn" + (editing ? " primary" : ""); editBtn.textContent = editing ? "완료" : "✎ 수정"; draw(); } }, editing ? "완료" : "✎ 수정") : null;
   const autoBtn = ep === "performers" && items.some((e) => e.group !== undefined) || ep === "performers" && serverCaps.performer_info
     ? h("button", { class: "btn", onclick: async (ev) => {
         ev.currentTarget.disabled = true;
@@ -727,7 +763,7 @@ async function renderEntities(ep, label, filterKey) {
   $app.replaceChildren(
     h("div", { class: "toolbar" },
       h("input", { type: "search", class: "search", placeholder: `${label} 검색`, oninput: (e) => { filter = e.target.value; draw(); } }),
-      autoBtn,
+      autoBtn, editBtn,
       h("span", { class: "meta" }, `${items.length}개`)),
     items.length ? grid : h("div", { class: "empty" }, `${label}이(가) 없습니다. 영상 화면에서 ${label}을(를) 추가해 보세요.`));
   draw();
@@ -770,6 +806,7 @@ async function renderSettings() {
       h("div", { class: "taginput" }, manual, h("button", { class: "btn", onclick: () => manual.value.trim() && savePaths(paths.concat([manual.value.trim()])) }, "추가")),
       suggestions ? h("div", { style: "margin-top:12px" }, suggestions) : null,
       status.last_scan ? h("p", { class: "meta" }, `마지막 스캔: ${fmtDate(status.last_scan)}`) : null),
+    megaQuotaText(status) ? h("div", { class: "panel warn", style: "font-size:14px" }, megaQuotaText(status)) : null,
     st.mega_supported ? megaPanel(st.mega || [], st) : null,
     h("div", { class: "panel" }, h("h3", {}, "정리"),
       h("p", { class: "meta" }, `찾을 수 없는 파일: ${c.missing || 0}개 (옮겨졌거나 삭제된 파일)`),
@@ -778,7 +815,11 @@ async function renderSettings() {
       } }, "찾을 수 없는 파일 목록에서 지우기"),
       st.duplicates ? h("div", { style: "margin-top:14px" },
         h("p", { class: "meta" }, "같은 영상이 이 기기와 MEGA 에 함께 있거나, 여러 폴더에 들어 있는 경우를 찾습니다."),
-        h("a", { class: "btn", href: "#/duplicates" }, "중복 영상 찾기")) : null),
+        h("a", { class: "btn", href: "#/duplicates" }, "중복 영상 찾기")) : null,
+      st.hidden_count !== undefined ? h("div", { style: "margin-top:14px" },
+        h("p", { class: "meta" }, `숨긴 영상: ${st.hidden_count}개 (라이브러리에서 제거했거나 중복이라 숨긴 영상)`),
+        h("a", { class: "btn", href: "#/hidden" }, "숨긴 영상 보기")) : null),
+    st.backup ? backupPanel() : null,
     h("div", { class: "panel" }, h("h3", {}, "비밀번호 (같은 Wi-Fi에서 접속할 때 권장)"),
       h("div", { class: "taginput" }, pw, h("button", { class: "btn", onclick: async () => {
         await api("settings", { method: "PUT", body: { password: pw.value } });
@@ -987,9 +1028,30 @@ function megaPanel(links, st) {
     h("div", { class: "taginput" }, input, addBtn),
     msg,
     links.length && st.mega_thumbs !== undefined ? megaThumbToggle(st) : null,
+    links.length && st.mega_refresh_hours !== undefined ? megaRefreshSelect(st) : null,
     links.length ? h("button", { class: "btn sm", style: "margin-top:8px", onclick: async (e) => {
       e.currentTarget.disabled = true; await api("mega/refresh", { method: "POST" }); toast("MEGA 목록을 새로 받았습니다"); renderSettings();
     } }, "MEGA 목록 새로고침") : null);
+}
+
+function megaRefreshSelect(st) {
+  const sel = h("select", { "aria-label": "MEGA 자동 새로고침 간격", onchange: async () => {
+    await api("settings", { method: "PUT", body: { mega_refresh_hours: +sel.value } }); toast("저장했습니다");
+  } }, [[0, "끄기"], [1, "1시간마다"], [3, "3시간마다"], [6, "6시간마다"], [12, "12시간마다"], [24, "하루마다"]].map(([v, l]) =>
+    h("option", { value: v, selected: v === st.mega_refresh_hours }, l)));
+  return h("div", { class: "row", style: "margin-top:12px" }, h("span", {}, "목록 자동 새로고침"), sel,
+    st.mega_last_refresh ? h("span", { class: "meta" }, `마지막: ${fmtDate(st.mega_last_refresh)}`) : null);
+}
+
+/** MEGA 전송량 한도 안내 문구 (한도에 걸리지 않았으면 null) */
+function megaQuotaText(s) {
+  if (!s || !s.mega_quota_hit) return null;
+  if (s.mega_quota_until) {
+    const min = Math.max(1, Math.round((s.mega_quota_until * 1000 - Date.now()) / 60000));
+    const at = new Date(s.mega_quota_until * 1000).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
+    return `MEGA 전송량 한도에 걸렸습니다. 약 ${min >= 60 ? Math.floor(min / 60) + "시간 " + (min % 60) + "분" : min + "분"} 뒤(${at}쯤) 풀립니다.`;
+  }
+  return `MEGA 전송량 한도에 걸렸습니다 (${new Date(s.mega_quota_hit * 1000).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" })}). 보통 몇 시간 안에 풀립니다.`;
 }
 
 function megaThumbToggle(st) {
@@ -1145,24 +1207,30 @@ function ehLoginForm(inApp) {
     h("details", { class: "panel" }, h("summary", {}, inApp ? "다른 방법: 쿠키 값 직접 입력 (PC 필요)" : "쿠키로 로그인 (로봇 확인 때문에 위 로그인이 안 될 때)"), ...cookieForm));
 }
 
-function comicCard(g) {
-  const img = h("img", { src: g.thumb, loading: "lazy", alt: "", referrerpolicy: "no-referrer" });
+/** 표지 주소: 앱을 거쳐 받아서 보관 (차단·오프라인 대비) */
+const comicThumb = (u) => !u ? "" : u.startsWith("/") ? u : `/eh/thumb?u=${encodeURIComponent(u)}`;
+
+function comicCard(g, extra) {
+  const img = h("img", { src: comicThumb(g.thumb), loading: "lazy", alt: "" });
   img.onerror = () => (img.hidden = true);
   const read = g.read_page > 0 ? Math.min(100, (g.read_page / Math.max(1, g.pages)) * 100) : 0;
   return h("a", { class: "ccard", href: `#/comic?gid=${g.gid}&t=${g.token}` },
     h("div", { class: "cthumb" }, img, h("span", { class: "badge dur" }, `${g.pages}p`),
       read ? h("div", { class: "progress", style: `width:${read}%` }) : null),
     h("div", { class: "title", title: g.title }, g.title_jpn || g.title),
-    h("div", { class: "sub" }, h("span", {}, g.category), g.read_page ? h("span", {}, `${g.read_page}쪽까지 읽음`) : null));
+    h("div", { class: "sub" }, g.category ? h("span", {}, g.category) : null, g.read_page ? h("span", {}, `${g.read_page}쪽까지 읽음`) : null),
+    extra || null);
 }
 
 async function renderComics(params) {
   setTab("comics");
-  const tab = params.get("tab") === "fav" ? "fav" : "ko";
+  const tab = ["fav", "saved"].includes(params.get("tab")) ? params.get("tab") : "ko";
   const st = await api("eh/status");
   const tabs = h("div", { class: "seg comic-tabs", role: "tablist" },
-    h("a", { class: tab === "ko" ? "on" : "", href: "#/comics" }, "한국어 만화"),
-    h("a", { class: tab === "fav" ? "on" : "", href: "#/comics?tab=fav" }, "♥ 즐겨찾기"));
+    h("a", { class: tab === "ko" ? "on" : "", href: "#/comics" }, "한국어"),
+    h("a", { class: tab === "fav" ? "on" : "", href: "#/comics?tab=fav" }, "♥ 즐겨찾기"),
+    h("a", { class: tab === "saved" ? "on" : "", href: "#/comics?tab=saved" }, "💾 저장"));
+  if (tab === "saved") return renderSavedComics(tabs);
   if (tab === "fav" && !st.logged_in) { $app.replaceChildren(h("div", {}, tabs, ehLoginForm(st.in_app))); return; }
 
   const favcat = params.get("favcat") || "all", q = params.get("q") || "";
@@ -1220,11 +1288,33 @@ async function renderComics(params) {
   await load();
 }
 
+async function renderSavedComics(tabs) {
+  const d = await api("eh/saved");
+  const grid = h("div", { class: "cgrid" });
+  for (const g of d.items) {
+    const status = g.done ? h("div", { class: "meta" }, `저장됨 · ${g.pages}쪽`)
+      : g.error ? h("div", { class: "warn" }, `멈춤 ${g.saved_pages}/${g.pages}: ${g.error}`)
+      : h("div", { class: "meta" }, `받는 중 ${g.saved_pages}/${g.pages}`);
+    const btns = h("div", { class: "row", style: "margin-top:4px;gap:4px" },
+      !g.done ? h("button", { class: "btn sm", onclick: async (e) => { e.preventDefault(); await api("eh/save", { method: "POST", body: g }); toast("이어서 받습니다"); route(); } }, "이어 받기") : null,
+      h("button", { class: "btn sm danger", onclick: async (e) => {
+        e.preventDefault();
+        if (!confirm(`‘${g.title}’ 저장본을 지울까요?`)) return;
+        await api("eh/unsave", { method: "POST", body: { gid: g.gid } }); route();
+      } }, "삭제"));
+    grid.append(h("div", {}, comicCard(g, status), btns));
+  }
+  $app.replaceChildren(h("div", {},
+    h("div", { class: "toolbar" }, tabs),
+    h("p", { class: "meta" }, "기기에 저장한 만화는 인터넷 없이 볼 수 있습니다. 만화 정보 화면의 ‘기기에 저장’으로 추가하세요."),
+    d.items.length ? grid : h("div", { class: "empty" }, "저장한 만화가 없습니다.")));
+}
+
 async function renderComic(gid, token, params) {
   setTab("comics");
   const g = await api(`eh/gallery?gid=${gid}&t=${token}`);
   if (g.logged_in === false) { location.hash = "#/comics"; return; }
-  const cover = h("img", { src: g.thumb, alt: "", referrerpolicy: "no-referrer" });
+  const cover = h("img", { src: comicThumb(g.thumb), alt: "" });
   const groups = {};
   for (const tag of g.tags) {
     const [ns, name] = tag.includes(":") ? tag.split(/:(.*)/s) : ["misc", tag];
@@ -1234,6 +1324,37 @@ async function renderComic(gid, token, params) {
   const tagRows = Object.entries(groups).flatMap(([ns, names]) => [h("dt", {}, NS[ns] || ns),
     h("dd", {}, h("div", { class: "chips" }, names.map((n) => h("a", { class: "chip", href: `#/comics?q=${encodeURIComponent(`${ns}:"${n}$"`)}` }, n))))]);
   const startAt = Math.min(Math.max(1, g.read_page || 1), g.pages);
+  // 즐겨찾기 (로그인했을 때만)
+  const favBox = h("div", { class: "row" });
+  const drawFav = (f) => {
+    if (!f || f.logged_in === false) { favBox.replaceChildren(); return; }
+    const sel = h("select", { "aria-label": "즐겨찾기 폴더" }, Array.from({ length: 10 }, (_, i) => h("option", { value: i, selected: i === Math.max(0, f.favcat) }, `폴더 ${i}`)));
+    const setFav = async (cat, btn) => {
+      btn.disabled = true;
+      try { drawFav(await api("eh/fav", { method: "POST", body: { gid: g.gid, t: g.token, favcat: cat } })); toast(cat < 0 ? "즐겨찾기에서 뺐습니다" : "즐겨찾기에 넣었습니다"); }
+      catch (e) { toast(e.message); btn.disabled = false; }
+    };
+    favBox.replaceChildren(...(f.favcat >= 0
+      ? [h("span", { class: "chip on" }, `♥ ${f.name || "즐겨찾기"}`), sel,
+         h("button", { class: "btn sm", onclick: (e) => setFav(+sel.value, e.currentTarget) }, "폴더 옮기기"),
+         h("button", { class: "btn sm danger", onclick: (e) => setFav(-1, e.currentTarget) }, "즐겨찾기 해제")]
+      : [sel, h("button", { class: "btn sm", onclick: (e) => setFav(+sel.value, e.currentTarget) }, "♡ 즐겨찾기 추가")]));
+  };
+  api(`eh/favstate?gid=${g.gid}&t=${g.token}`).then(drawFav).catch(() => {});
+  // 기기에 저장
+  const saveBox = h("div", { class: "row" });
+  const drawSave = async () => {
+    const d = await api("eh/saved").catch(() => ({ items: [] }));
+    const s = d.items.find((x) => x.gid === g.gid);
+    saveBox.replaceChildren(s
+      ? h("a", { class: "chip", href: "#/comics?tab=saved" }, s.done ? `💾 저장됨` : s.error ? `💾 멈춤 ${s.saved_pages}/${s.pages}` : `💾 받는 중 ${s.saved_pages}/${s.pages}`)
+      : h("button", { class: "btn sm", onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          await api("eh/save", { method: "POST", body: { gid: g.gid, token: g.token, title: g.title_jpn || g.title, thumb: g.thumb, pages: g.pages, category: g.category } });
+          toast("기기에 저장을 시작했습니다. 위쪽 막대에 진행 상황이 나옵니다."); drawSave();
+        } }, "💾 기기에 저장"));
+  };
+  drawSave();
   $app.replaceChildren(h("div", { class: "comic" },
     h("div", { class: "panel comic-head" },
       h("div", { class: "comic-cover", onclick: () => openReader(g, 1) }, cover),
@@ -1243,74 +1364,162 @@ async function renderComic(gid, token, params) {
         h("p", { class: "meta", style: "margin:6px 0 10px" }, [g.category, `${g.pages}쪽`, g.rating ? `★ ${g.rating}` : "", g.posted ? new Date(g.posted * 1000).toLocaleDateString("ko-KR") : ""].filter(Boolean).join(" · ")),
         h("div", { class: "row" },
           g.read_page > 1 ? h("button", { class: "btn primary", onclick: () => openReader(g, startAt) }, `이어 읽기 (${startAt}쪽)`) : null,
-          h("button", { class: "btn" + (g.read_page > 1 ? "" : " primary"), onclick: () => openReader(g, 1) }, "처음부터 읽기")))),
+          h("button", { class: "btn" + (g.read_page > 1 ? "" : " primary"), onclick: () => openReader(g, 1) }, "처음부터 읽기")),
+        h("div", { class: "row", style: "margin-top:8px" }, favBox, saveBox))),
     tagRows.length ? h("div", { class: "panel" }, h("h3", {}, "태그"), h("dl", { class: "info", style: "gap:8px 12px;align-items:start" }, ...tagRows)) : null,
     h("p", { class: "meta" }, h("a", { href: `https://e-hentai.org/g/${g.gid}/${g.token}/`, target: "_blank", rel: "noopener", style: "text-decoration:underline" }, "e-hentai 에서 열기"))));
   if (params.get("read")) openReader(g, +params.get("read") || startAt);
 }
 
-/** 만화 보기: 세로로 이어서 스크롤, 화면에 가까운 페이지만 받음. 읽은 위치를 기억. */
+/** 만화 보기: 세로 스크롤 또는 한 장씩 넘기기. 화면 근처 페이지만 받고, 읽은 위치를 기억. */
 function openReader(g, start) {
   let closed = false, current = start, saveTimer;
+  let mode = (() => { try { return localStorage.getItem("vs-reader-mode") || "scroll"; } catch (e) { return "scroll"; } })();
   const counter = h("span", { class: "count" });
-  const pages = [];
-  const list = h("div", { class: "rpages" });
-  const drawCounter = () => (counter.textContent = `${current} / ${g.pages}`);
+  const pageUrl = (n) => `/eh/page/${g.gid}/${g.token}/${n}`;
   const progressBody = () => ({ gid: g.gid, page: current, token: g.token, title: g.title_jpn || g.title, thumb: g.thumb, pages: g.pages });
+  const drawCounter = () => (counter.textContent = `${current} / ${g.pages}`);
   const saveProgress = () => {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => api("eh/progress", { method: "POST", body: progressBody() }).catch(() => {}), 800);
   };
+  const setCurrent = (n) => { current = n; drawCounter(); saveProgress(); };
+
+  /** 실패한 페이지: 이유를 서버에 다시 물어서 표시 */
+  const failView = (n, src, retry) => {
+    const why = h("p", { class: "rerr" });
+    fetch(src).then((r) => r.json().then((d) => d.error, () => (r.ok ? "이미지를 표시하지 못했습니다" : `HTTP ${r.status}`)))
+      .then((t) => (why.textContent = t || "")).catch(() => (why.textContent = "앱 서버에 연결하지 못했습니다"));
+    return h("div", { class: "rfail" }, h("button", { class: "btn", onclick: (e) => { e.stopPropagation(); retry(); } }, `${n}쪽 불러오기 실패 · 다시 시도`), why);
+  };
+
+  // ---- 세로 스크롤
+  const pages = [];
+  const list = h("div", { class: "rpages" });
   const load = (i) => {
     const pg = pages[i];
     if (!pg || pg.dataset.state) return;
     pg.dataset.state = "loading";
     const img = h("img", { alt: `${i + 1}쪽`, decoding: "async" });
-    img.onload = () => { pg.dataset.state = "done"; pg.classList.add("loaded"); pg.style.aspectRatio = ""; };
-    img.onerror = async () => {
-      pg.dataset.state = "failed";
-      const why = h("p", { class: "rerr" });
-      pg.replaceChildren(h("div", { class: "rfail" },
-        h("button", { class: "btn", onclick: () => { pg.dataset.state = ""; pg.replaceChildren(h("span", { class: "meta" }, `${i + 1}`)); load(i); } }, `${i + 1}쪽 불러오기 실패 · 다시 시도`), why));
-      try {   // 실패한 이유를 서버에 다시 물어서 표시
-        const r = await fetch(img.src);
-        const d = await r.json().catch(() => ({}));
-        why.textContent = d.error || (r.ok ? "이미지를 표시하지 못했습니다" : `HTTP ${r.status}`);
-      } catch (e) { why.textContent = "앱 서버에 연결하지 못했습니다"; }
-    };
-    img.src = `/eh/page/${g.gid}/${g.token}/${i + 1}`;
+    img.onload = () => { pg.dataset.state = "done"; pg.classList.add("loaded"); };
+    img.onerror = () => { pg.dataset.state = "failed"; pg.replaceChildren(failView(i + 1, img.src, () => { pg.dataset.state = ""; pg.replaceChildren(h("span", { class: "meta" }, `${i + 1}`)); load(i); })); };
+    img.src = pageUrl(i + 1);
     pg.replaceChildren(img);
   };
   for (let i = 0; i < g.pages; i++) {
     const pg = h("div", { class: "rpage", "data-n": i + 1 }, h("span", { class: "meta" }, `${i + 1}`));
     pages.push(pg); list.append(pg);
   }
-  // 화면 근처(앞뒤로 화면 3개 높이) 페이지만 받기
-  const near = new IntersectionObserver((ents) => ents.forEach((e) => e.isIntersecting && load(+e.target.dataset.n - 1)), { root: null, rootMargin: "300% 0px" });
-  // 화면 가운데에 있는 페이지 = 지금 읽는 쪽
-  const mid = new IntersectionObserver((ents) => ents.forEach((e) => {
-    if (!e.isIntersecting) return;
-    current = +e.target.dataset.n; drawCounter(); saveProgress();
-  }), { rootMargin: "-50% 0px -50% 0px" });
+  const near = new IntersectionObserver((ents) => ents.forEach((e) => e.isIntersecting && load(+e.target.dataset.n - 1)), { rootMargin: "300% 0px" });
+  const mid = new IntersectionObserver((ents) => ents.forEach((e) => { if (e.isIntersecting && mode === "scroll") setCurrent(+e.target.dataset.n); }), { rootMargin: "-50% 0px -50% 0px" });
+  const end = h("div", { class: "rend" }, h("p", {}, "마지막 쪽입니다"), h("button", { class: "btn", onclick: () => history.back() }, "닫기"));
+  const scrollView = h("div", {}, list, end);
+
+  // ---- 한 장씩
+  const single = h("div", { class: "rsingle" });
+  const showSingle = (n) => {
+    if (n < 1) return;
+    if (n > g.pages) { toast("마지막 쪽입니다"); return; }
+    setCurrent(n);
+    const img = h("img", { alt: `${n}쪽`, src: pageUrl(n) });
+    img.onerror = () => single.replaceChildren(failView(n, img.src, () => showSingle(n)));
+    single.replaceChildren(img);
+    for (const k of [n + 1, n + 2]) if (k <= g.pages) new Image().src = pageUrl(k);   // 다음 쪽 미리 받기
+  };
+  let sx = null, sy = null;
+  single.addEventListener("touchstart", (e) => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+  single.addEventListener("touchend", (e) => {
+    if (sx == null) return;
+    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy; sx = null;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { e.preventDefault(); showSingle(dx < 0 ? current + 1 : current - 1); }
+  });
+  single.addEventListener("click", (e) => {   // 왼쪽 1/3: 이전, 오른쪽 1/3: 다음, 가운데: 막대 숨기기
+    const x = e.clientX / window.innerWidth;
+    if (x < 0.33) showSingle(current - 1); else if (x > 0.67) showSingle(current + 1); else bar.classList.toggle("hide");
+  });
+
+  const modeBtn = h("button", { class: "vbtn rmode", "aria-label": "보기 방식" });
+  const applyMode = () => {
+    modeBtn.textContent = mode === "scroll" ? "한 장" : "스크롤";
+    el.classList.toggle("paged", mode === "page");
+    if (mode === "page") { scrollView.hidden = true; single.hidden = false; showSingle(current); }
+    else { single.hidden = true; scrollView.hidden = false; requestAnimationFrame(() => pages[current - 1] && pages[current - 1].scrollIntoView()); }
+  };
+  modeBtn.onclick = () => { mode = mode === "scroll" ? "page" : "scroll"; try { localStorage.setItem("vs-reader-mode", mode); } catch (e) {} applyMode(); };
+
   const close = () => {
     if (closed) return;
     closed = true; near.disconnect(); mid.disconnect(); el.remove(); document.body.style.overflow = "";
-    window.removeEventListener("popstate", onPop);
+    window.removeEventListener("popstate", onPop); document.removeEventListener("keydown", onKey);
     api("eh/progress", { method: "POST", body: progressBody() }).catch(() => {}).then(() => route());
   };
   const onPop = () => close();
-  const bar = h("div", { class: "vtop" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, icon("close")), counter, h("span", { style: "width:40px" }));
-  const el = h("div", { class: "viewer reader", role: "dialog", "aria-modal": "true" }, bar, list,
-    h("div", { class: "rend" }, h("p", {}, "마지막 쪽입니다"), h("button", { class: "btn", onclick: () => history.back() }, "닫기")));
-  // 화면을 누르면 위쪽 막대 숨기기/보이기
+  const onKey = (e) => {
+    if (mode !== "page") return;
+    if (e.key === "ArrowRight") showSingle(current + 1); else if (e.key === "ArrowLeft") showSingle(current - 1);
+  };
+  const bar = h("div", { class: "vtop" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, icon("close")), counter, modeBtn);
+  const el = h("div", { class: "viewer reader", role: "dialog", "aria-modal": "true" }, bar, scrollView, single);
   list.addEventListener("click", (e) => { if (e.target.tagName === "IMG") bar.classList.toggle("hide"); });
   document.body.append(el);
   document.body.style.overflow = "hidden";
   history.pushState({ viewer: true }, "");
   window.addEventListener("popstate", onPop);
+  document.addEventListener("keydown", onKey);
   pages.forEach((p) => { near.observe(p); mid.observe(p); });
   drawCounter();
-  requestAnimationFrame(() => { if (start > 1) pages[start - 1].scrollIntoView(); });
+  applyMode();
+}
+
+// ---------------------------------------------------------------- 백업 / 복원
+function backupPanel() {
+  const file = h("input", { type: "file", accept: ".json,application/json", hidden: true });
+  const msg = h("p", { class: "meta" });
+  file.addEventListener("change", async () => {
+    const f = file.files[0];
+    if (!f) return;
+    if (!confirm(`‘${f.name}’ 백업으로 지금 정보를 바꿀까요?\n지금 있는 태그·별점·출연자·만화 읽은 위치는 백업 내용으로 바뀝니다.`)) { file.value = ""; return; }
+    msg.textContent = "불러오는 중…";
+    try {
+      const text = await f.text();
+      const r = await fetch("/api/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: text });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      msg.textContent = `복원했습니다. 영상 정보 ${d.videos}개. MEGA 목록은 잠시 뒤 다시 받습니다.`;
+      toast("백업을 불러왔습니다");
+    } catch (e) { msg.textContent = "복원 실패: " + e.message; }
+    file.value = "";
+  });
+  return h("div", { class: "panel" }, h("h3", {}, "백업 / 복원"),
+    h("p", { class: "meta" }, "태그·별점·즐겨찾기·출연자 정보·북마크·메모·만화 읽은 위치·MEGA 링크를 파일 하나로 저장합니다. 앱을 지웠다 다시 설치할 때 이 파일로 되살릴 수 있습니다. (비밀번호와 e-hentai 로그인은 넣지 않습니다)"),
+    h("p", { class: "warn" }, "백업 파일에는 MEGA 링크(열쇠 포함)가 들어 있으니 다른 사람에게 보내지 마세요."),
+    h("div", { class: "row" },
+      h("a", { class: "btn primary", href: "/api/backup", download: "vidshelf-backup.json" }, "백업 파일 저장 (Download 폴더)"),
+      h("button", { class: "btn", onclick: () => file.click() }, "백업에서 복원")),
+    file, msg);
+}
+
+// ---------------------------------------------------------------- 숨긴 영상
+async function renderHidden() {
+  setTab("settings");
+  const items = await api("hidden");
+  $app.replaceChildren(h("div", { class: "settings" },
+    h("div", { class: "row", style: "justify-content:space-between;margin-bottom:12px" },
+      h("h2", { style: "margin:0;font-size:20px" }, `숨긴 영상 ${items.length}개`),
+      h("a", { class: "btn sm", href: "#/settings" }, "설정으로")),
+    items.length ? h("div", { class: "dup-items" }, items.map((v) => {
+      const img = h("img", { loading: "lazy", alt: "", src: v.thumbs > 0 ? thumbUrl(v.id, 0, v.thumbs) : null, hidden: !(v.thumbs > 0) });
+      img.onerror = () => (img.hidden = true);
+      return h("div", { class: "dup-item" },
+        h("div", { class: "thumb" }, img, h("div", { class: "noimg" }, "▶")),
+        h("div", { class: "dup-body" },
+          h("div", { class: "dup-name" }, v.filename),
+          h("div", { class: "meta" }, (v.source === "mega" ? "☁ MEGA · " : "📱 이 기기 · ") + (v.folder || "") + " · " + fmtSize(v.size)),
+          h("div", { class: "row", style: "margin-top:6px" }, h("button", { class: "btn sm", onclick: async (ev) => {
+            await api(`videos/${v.id}/unhide`, { method: "POST" });
+            ev.target.closest(".dup-item").classList.add("gone"); ev.target.replaceWith(h("span", { class: "meta" }, "다시 보입니다"));
+          } }, "다시 보이기"))));
+    })) : h("div", { class: "empty" }, "숨긴 영상이 없습니다.")));
 }
 
 // ---------------------------------------------------------------- 중복 영상
@@ -1331,6 +1540,15 @@ async function renderDuplicates() {
         ev.target.closest(".dup-item").classList.add("gone");
         ev.target.replaceWith(h("span", { class: "meta" }, "숨김"));
       } }, "목록에서 숨기기");
+      const keepBtn = h("button", { class: "btn sm primary", onclick: async (ev) => {
+        const others = g.items.filter((x) => x.id !== v.id);
+        if (!confirm(`이 영상만 남기고 나머지 ${others.length}개는 숨길까요?\n숨기는 영상의 태그·출연자·별점·북마크·재생 기록은 이 영상으로 합쳐집니다.`)) return;
+        await api("duplicates/keep", { method: "POST", body: { keep: v.id, others: others.map((x) => x.id) } });
+        const box = ev.target.closest(".panel");
+        box.querySelectorAll(".dup-item").forEach((el) => el !== ev.target.closest(".dup-item") && el.classList.add("gone"));
+        box.querySelectorAll("button").forEach((b) => (b.disabled = true));
+        toast("하나만 남기고 정보를 합쳤습니다");
+      } }, "이것만 남기기");
       return h("div", { class: "dup-item" },
         h("a", { class: "thumb", href: `#/v/${v.id}` }, img, h("div", { class: "noimg" }, "▶"),
           v.duration ? h("span", { class: "badge dur" }, fmtDur(v.duration)) : null),
@@ -1338,14 +1556,14 @@ async function renderDuplicates() {
           h("a", { class: "dup-name", href: `#/v/${v.id}` }, v.filename),
           h("div", { class: "meta" }, (v.source === "mega" ? "☁ MEGA · " : "📱 이 기기 · ") + (v.folder || "")),
           h("div", { class: "meta" }, [v.rating ? "★".repeat(v.rating) : "", v.play_count ? `${v.play_count}회 재생` : "", v.performers && v.performers.length ? v.performers.join(", ") : ""].filter(Boolean).join(" · ")),
-          h("div", { class: "row", style: "margin-top:6px" }, hideBtn)));
+          h("div", { class: "row", style: "margin-top:6px" }, keepBtn, hideBtn)));
     })));
   $app.replaceChildren(h("div", { class: "settings" },
     h("div", { class: "row", style: "justify-content:space-between;margin-bottom:12px" },
       h("h2", { style: "margin:0;font-size:20px" }, "중복 영상"),
       h("a", { class: "btn sm", href: "#/settings" }, "설정으로")),
     groups.length
-      ? h("p", { class: "meta" }, `${groups.length}묶음 · 중복으로 차지하는 크기 약 ${fmtSize(wasted)}. 파일 크기가 똑같으면 같은 영상으로 봅니다. 하나만 남기려면 나머지를 ‘목록에서 숨기기’ 하세요.`)
+      ? h("p", { class: "meta" }, `${groups.length}묶음 · 중복으로 차지하는 크기 약 ${fmtSize(wasted)}. 파일 크기가 똑같으면 같은 영상으로 봅니다. 남길 영상에서 ‘이것만 남기기’를 누르면 나머지는 숨기고 태그·출연자 등 정보는 합쳐집니다. 숨긴 영상은 설정 → 숨긴 영상에서 되돌릴 수 있습니다.`)
       : h("div", { class: "empty" }, "중복 영상이 없습니다."),
     ...groups.map(groupEl)));
 }

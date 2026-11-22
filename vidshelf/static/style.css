@@ -282,3 +282,11 @@ details.panel summary { cursor: pointer; color: var(--muted); font-size: 14px; }
 .vinfo-box .panel { margin-top: 12px; }
 .comic-tabs a { background: var(--panel); padding: 8px 14px; color: var(--muted); font-size: 14px; }
 .comic-tabs a.on { background: var(--panel2); color: var(--text); font-weight: 600; }
+.viewer .stars button { color: #444b58; }
+.viewer .stars button.on, .stars.ro span.on { color: var(--accent); }
+.stars.ro { font-size: 18px; min-height: 24px; }
+.reader .rmode { width: auto; padding: 0 12px; border-radius: 999px; font-size: 13px; }
+.rsingle { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #000; user-select: none; }
+.rsingle img { max-width: 100%; max-height: 100vh; display: block; -webkit-user-drag: none; }
+.reader.paged { overflow: hidden; }
+.comic-tabs a { padding: 8px 11px; }
