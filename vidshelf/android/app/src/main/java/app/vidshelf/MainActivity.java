@@ -418,8 +418,6 @@ public class MainActivity extends Activity {
     private void showPermissionScreen() {
         LinearLayout box = column();
         box.addView(text("VidShelf", 26, TEXT, true));
-        boolean secure = ServerService.userId() != 0;
-        box.addView(text(secure ? "🔒 보안 폴더에서 실행 중 — 보안 폴더의 영상만 보입니다." : "⚠ 일반 공간에서 실행 중 — 일반 공간의 영상이 보입니다.", 15, secure ? ACCENT : 0xFFEF6A62, false));
         box.addView(text("영상과 사진 목록을 만들려면 접근 권한이 필요합니다. 권한 창에서 ‘모두 허용’을 고르세요.", 15, MUTED, false));
         box.addView(button("영상 접근 허용", v -> askPermissions()));
         show(box);
