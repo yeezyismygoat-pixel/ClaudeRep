@@ -893,3 +893,14 @@ body:not(.selecting) .media-bar-row { animation: fadeIn .25s ease; }
   100% { opacity: 0; transform: rotate(var(--tilt)) translateY(-70px) scale(.7); }
 }
 .short.gone { transition: opacity .25s ease, transform .25s ease; opacity: 0; transform: scale(.94); }
+
+/* 창을 끌어내려 닫을 때는 손가락을 따라 내려감 */
+.sheet.out.dragged { animation: none !important; }
+.sheet-grip, .sheet-head { touch-action: none; }
+.sheet-grip { position: relative; }
+.sheet-grip::before { content: ""; position: absolute; inset: -14px -140px -10px; }   /* 잡기 쉬운 넓은 영역 */
+
+/* 저장된 필터 */
+.saved-filters .chip.saved small { margin-left: 6px; opacity: .6; font-size: .8em; }
+.saved-filters .chip.add { border-style: dashed; color: var(--accent); }
+.saved-filters { -webkit-user-select: none; user-select: none; }

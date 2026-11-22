@@ -1298,6 +1298,8 @@ public class Library implements HttpServer.Handler {
             if (maxDur > 0) {
                 double d = v.node != null ? m.optDouble("duration", 0) : v.duration;
                 if (d <= 0 || d > maxDur) continue;
+                // 숏폼: 화면에서 바로 재생할 수 없는 형식은 뺌 (재생에 실패한 적이 있는 영상 포함)
+                if (m.optBoolean("no_web", false) || !DIRECT_EXTS.contains(ext(v.name))) continue;
             }
             if (!containsAll(m.optJSONArray("tags"), tagFilter) || !containsAll(m.optJSONArray("performers"), perfFilter)) continue;
             if (words.length > 0) {
@@ -1706,6 +1708,12 @@ public class Library implements HttpServer.Handler {
                     res.json(200, "{\"ok\":true}");
                     return;
                 }
+                if (action.equals("unplayable") && m.equals("POST")) {   // 화면에서 바로 재생할 수 없는 형식 → 숏폼에서 뺌
+                    meta.put("no_web", true);
+                    save();
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
                 if (action.equals("play") && m.equals("POST")) {
                     meta.put("play_count", meta.optInt("play_count", 0) + 1);
                     meta.put("last_played", System.currentTimeMillis() / 1000);
@@ -2028,6 +2036,41 @@ public class Library implements HttpServer.Handler {
             } catch (JSONException e) {
                 res.error(400, e.getMessage());
             }
+            return;
+        }
+        if (p0.equals("saved_filters")) {   // 저장된 필터: 이름 + 종류(전체/동영상/사진) + 조건
+            JSONArray list;
+            synchronized (this) {
+                list = store.optJSONArray("saved_filters");
+                if (list == null) { list = new JSONArray(); store.put("saved_filters", list); }
+                if (m.equals("POST")) {
+                    JSONObject b = body(r);
+                    String name = b.optString("name", "").trim();
+                    if (name.isEmpty()) { res.error(400, "이름을 입력하세요"); return; }
+                    if (name.length() > 40) name = name.substring(0, 40);
+                    JSONArray out = new JSONArray();
+                    for (int i = 0; i < list.length(); i++) {   // 같은 이름은 덮어씀
+                        JSONObject o = list.optJSONObject(i);
+                        if (o != null && !o.optString("name").equals(name)) out.put(o);
+                    }
+                    out.put(new JSONObject().put("id", System.currentTimeMillis()).put("name", name)
+                            .put("type", b.optString("type", "all")).put("params", b.optString("params", "")));
+                    store.put("saved_filters", out);
+                    list = out;
+                    save();
+                } else if (m.equals("DELETE") && parts.length == 2) {
+                    long id = parseLong(parts[1], -1);
+                    JSONArray out = new JSONArray();
+                    for (int i = 0; i < list.length(); i++) {
+                        JSONObject o = list.optJSONObject(i);
+                        if (o != null && o.optLong("id") != id) out.put(o);
+                    }
+                    store.put("saved_filters", out);
+                    list = out;
+                    save();
+                }
+            }
+            res.json(200, list.toString());
             return;
         }
         if (p0.equals("hidden") && m.equals("GET")) { res.json(200, hiddenVideos().toString()); return; }

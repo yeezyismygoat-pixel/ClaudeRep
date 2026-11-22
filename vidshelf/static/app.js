@@ -203,6 +203,42 @@ window.onNativePlayerClosed = (id, pos) => {
   if (window.__nativeClosed) window.__nativeClosed(id, pos);
 };
 
+/** 창 윗부분(손잡이·제목)을 잡고 아래로 끌어내리면 닫힘 */
+function dragToClose(sheet, shade, close) {
+  let sy = null, dy = 0, t0 = 0;
+  const handle = (t) => t.closest(".sheet-grip, .sheet-head") && !t.closest("button, input, a");
+  sheet.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1 || !handle(e.target)) { sy = null; return; }
+    sy = e.touches[0].clientY; dy = 0; t0 = Date.now();
+    sheet.style.animation = "none";   // 올라오는 효과가 남아 있으면 손가락을 따라오지 않음
+    sheet.style.transition = "none";
+  }, { passive: true });
+  sheet.addEventListener("touchmove", (e) => {
+    if (sy == null) return;
+    e.preventDefault();
+    dy = Math.max(0, e.touches[0].clientY - sy);
+    sheet.style.transform = `translateY(${dy}px)`;
+    shade.style.opacity = String(Math.max(0, 1 - dy / (sheet.offsetHeight || 1)));
+  }, { passive: false });
+  const end = () => {
+    if (sy == null) return;
+    sy = null;
+    const v = dy / Math.max(1, Date.now() - t0);
+    sheet.style.transition = "transform .22s cubic-bezier(.3,.7,.3,1)";
+    if (dy > Math.min(140, sheet.offsetHeight * 0.3) || (v > 0.6 && dy > 30)) {
+      sheet.classList.add("dragged");
+      sheet.style.transform = "translateY(100%)";
+      shade.style.transition = "opacity .22s ease"; shade.style.opacity = "0";
+      close();
+    } else {
+      sheet.style.transform = "";
+      shade.style.opacity = "";
+    }
+  };
+  sheet.addEventListener("touchend", end);
+  sheet.addEventListener("touchcancel", end);
+}
+
 /** 아래에서 올라오는 창 (뒤로 가기로 닫힘). 돌려주는 close() 로 닫음 */
 function openSheet(title, body, foot) {
   const sheet = h("section", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title },
@@ -221,6 +257,7 @@ function openSheet(title, body, foot) {
     if (after) setTimeout(after, 0);
   };
   function close(then) { if (closed) return; after = then || null; history.back(); }
+  dragToClose(sheet, shade, () => close());
   document.body.append(shade, sheet);
   document.body.style.overflow = "hidden";
   history.pushState({ sheet: true }, "");
@@ -1018,11 +1055,56 @@ async function renderMedia(params0, type0) {
       return h("div", { class: "sheet-row" }, h("span", {}, label), sw);
     };
 
+    // 저장된 필터: 지금 고른 조건에 이름을 붙여 두고, 누르면 바로 적용 (길게 누르면 삭제)
+    const savedBox = h("div", { class: "chips saved-filters" });
+    const nameIn = h("input", { type: "text", placeholder: "필터 이름 (예: 민지 즐겨찾기)", maxlength: "40", "aria-label": "필터 이름" });
+    const saveRow = h("div", { class: "taginput", hidden: true }, nameIn,
+      h("button", { class: "btn primary", onclick: async () => {
+        const name = nameIn.value.trim();
+        if (!name) { nameIn.focus(); return; }
+        try {
+          savedFilters = await api("saved_filters", { method: "POST", body: { name, type, params: toParams().toString() } });
+          nameIn.value = ""; saveRow.hidden = true; drawSaved();
+          toast(`‘${name}’ 필터를 저장했습니다`);
+        } catch (e) { toast(e.message); }
+      } }, "저장"));
+    nameIn.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); saveRow.querySelector("button").click(); } };
+    let savedFilters = [];
+    const TYPE_LABEL = { all: "전체", video: "동영상", photo: "사진" };
+    function drawSaved() {
+      const chips = savedFilters.map((f) => {
+        const chip = h("button", { class: "chip saved", title: "누르면 적용 · 길게 누르면 삭제" },
+          h("span", {}, f.name), f.type && f.type !== "all" ? h("small", {}, TYPE_LABEL[f.type] || "") : null);
+        let timer = null, long = false;
+        chip.addEventListener("touchstart", () => { long = false; timer = setTimeout(async () => {
+          long = true;
+          try { navigator.vibrate && navigator.vibrate(18); } catch (e) {}
+          if (!confirm(`‘${f.name}’ 필터를 삭제할까요?`)) return;
+          savedFilters = await api(`saved_filters/${f.id}`, { method: "DELETE" }).catch(() => savedFilters);
+          drawSaved();
+        }, 550); }, { passive: true });
+        const stop = () => clearTimeout(timer);
+        chip.addEventListener("touchend", stop); chip.addEventListener("touchmove", stop);
+        chip.addEventListener("contextmenu", (e) => e.preventDefault());
+        chip.onclick = () => {
+          if (long) return;
+          pendingType = TYPES.includes(f.type) ? f.type : "all";
+          close(new URLSearchParams(f.params || ""));
+        };
+        return chip;
+      });
+      savedBox.replaceChildren(...chips,
+        h("button", { class: "chip add", onclick: () => { saveRow.hidden = !saveRow.hidden; if (!saveRow.hidden) nameIn.focus(); } }, "＋ 지금 조건 저장"));
+    }
+    api("saved_filters").then((l) => { savedFilters = l; drawSaved(); }).catch(() => {});
+    drawSaved();
+
     const sheet = h("section", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": "필터" },
       h("div", { class: "sheet-grip", "aria-hidden": "true" }),
       h("div", { class: "sheet-head" }, h("h2", {}, "필터"), h("button", { class: "round-btn", "aria-label": "닫기", onclick: () => close(false) }, icon("close"))),
       h("div", { class: "sheet-body" },
         h("label", { class: "sheet-search" }, h("span", { "aria-hidden": "true" }, "⌕"), search),
+        h("div", { class: "sheet-sec" }, h("h3", {}, "저장된 필터"), savedBox, saveRow),
         people.length ? h("div", { class: "sheet-sec" }, h("div", { class: "sheet-sec-head" }, h("h3", {}, "출연자"), peopleMore), peopleBox) : null,
         tagList.length ? h("div", { class: "sheet-sec" }, h("h3", {}, "태그"), tagBox) : null,
         h("div", { class: "sheet-sec" }, h("h3", {}, "정렬"), sortBox),
@@ -1037,10 +1119,10 @@ async function renderMedia(params0, type0) {
         } }, "초기화"),
         resultBtn));
     const shade = h("div", { class: "sheet-shade", onclick: () => close(false) });
-    let closed = false, pending = null;
-    function close(apply) {   // 닫기는 ‘뒤로’로 처리하고, 적용할 필터는 닫힌 뒤에 반영
+    let closed = false, pending = null, pendingType = null;
+    function close(apply) {   // 닫기는 ‘뒤로’로 처리하고, 적용할 필터는 닫힌 뒤에 반영 (apply 가 조건이면 그 조건으로)
       if (closed) return;
-      pending = apply ? toParams() : null;
+      pending = apply instanceof URLSearchParams ? apply : apply ? toParams() : null;
       history.back();
     }
     const onPop = () => {
@@ -1049,9 +1131,10 @@ async function renderMedia(params0, type0) {
       window.removeEventListener("popstate", onPop);
       sheet.classList.add("out"); shade.classList.add("out");
       setTimeout(() => { sheet.remove(); shade.remove(); document.body.style.overflow = ""; }, 220);
-      if (pending) setTimeout(() => update({ p: pending, anim: "fade" }), 0);
+      if (pending) setTimeout(() => update({ p: pending, t: pendingType || undefined, anim: "fade" }), 0);
     };
     drawPeople(); drawTags(); drawSort(); refreshCount();
+    dragToClose(sheet, shade, () => close(false));
     document.body.append(shade, sheet);
     document.body.style.overflow = "hidden";
     history.pushState({ sheet: true }, "");   // 휴대폰 뒤로 가기로 닫힘
@@ -2280,8 +2363,15 @@ async function renderShorts(params) {
           hasNativePlayer() ? h("button", { class: "btn primary", onclick: (e) => { e.stopPropagation(); playNative(v, 0); } }, "▶ 앱 플레이어로 재생") : null);
         errBox.hidden = false;
       };
-      if (v.source === "mega" || v.source === "icloud") api("status").then((st) => show(megaQuotaText(st) || "이 영상은 여기서 바로 재생할 수 없는 형식입니다.")).catch(() => show("재생하지 못했습니다."));
-      else show("이 영상은 여기서 바로 재생할 수 없는 형식입니다.");
+      const unplayable = () => {   // 형식 문제: 기억해 두고 숏폼에서 빼고 다음 영상으로
+        api(`videos/${v.id}/unplayable`, { method: "POST" }).catch(() => {});
+        toast("재생할 수 없는 형식이라 숏폼에서 뺐습니다");
+        removeItem();
+      };
+      const formatErr = video.error.code === 3 || video.error.code === 4;   // 3: 디코딩 실패, 4: 지원하지 않는 형식
+      if (v.source === "mega" || v.source === "icloud") api("status").then((st) => { const q = megaQuotaText(st); if (q) show(q); else if (formatErr) unplayable(); else show("재생하지 못했습니다. 연결을 확인하세요."); }).catch(() => show("재생하지 못했습니다."));
+      else if (formatErr) unplayable();
+      else show("재생하지 못했습니다.");
     });
     // 하트(즐겨찾기)와 삭제
     const HEART = '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>';
