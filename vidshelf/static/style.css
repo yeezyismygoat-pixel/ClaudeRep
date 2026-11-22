@@ -3,7 +3,7 @@
   --bg: #F4F3EF; --panel: #FFFFFF; --panel2: #ECEAE4; --line: #E1DED6; --line2: #C9C6BD;
   --text: #16161A; --muted: #5E5D66; --accent: #2F5BEA; --accent-ink: #FFFFFF;
   --danger: #C92A2A; --fav: #D6336C; --radius: 14px;
-  --nav-bg: #16161A; --nav-icon: #B4B3BA; --nav-on-bg: #FFFFFF; --nav-on: #16161A;
+  --nav-bg: #FFFFFF; --nav-icon: #7A7982; --nav-on-bg: #16161A; --nav-on: #FFFFFF; --nav-border: #E6E4DE;
   --toast: #16161A; --shadow: 0 10px 30px rgba(22,22,26,.16); --star-off: #CFCCC4;
   color-scheme: light;
 }
@@ -12,7 +12,7 @@
   --bg: #121316; --panel: #1B1C20; --panel2: #24262B; --line: #2E3036; --line2: #43464E;
   --text: #EEEDEA; --muted: #A3A2A9; --accent: #7C9CFF; --accent-ink: #0B1430;
   --danger: #FF7B7B; --fav: #FF6B9A; --radius: 14px;
-  --nav-bg: #26282E; --nav-icon: #8D8C94; --nav-on-bg: #EEEDEA; --nav-on: #16161A;
+  --nav-bg: #26282E; --nav-icon: #8D8C94; --nav-on-bg: #EEEDEA; --nav-on: #16161A; --nav-border: #33353C;
   --toast: #2E3036; --shadow: 0 10px 30px rgba(0,0,0,.45); --star-off: #4A4D55;
   color-scheme: dark;
 }
@@ -495,3 +495,6 @@ body, .panel, .topbar .tabs, .vcard, .lib-tile, .lib-list { transition: backgrou
 body::before { content: ""; position: fixed; left: 0; right: 0; top: 0; height: 18px; z-index: 30; pointer-events: none;
   background: linear-gradient(to bottom, var(--bg), color-mix(in srgb, var(--bg) 0%, transparent)); }
 body.shorts-mode::before, body.shorts-mode .topbar::before { display: none; }
+
+/* 하단 메뉴 아일랜드 테두리 (라이트: 흰 바탕) */
+.topbar .tabs { border: 1px solid var(--nav-border); }
