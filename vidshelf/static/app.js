@@ -1029,6 +1029,7 @@ function megaPanel(links, st) {
         await api(`mega/${l.index}`, { method: "DELETE" }); renderSettings();
       } }, "제거")))
       : h("li", { class: "meta" }, "연결된 MEGA 폴더가 없습니다.")),
+    links.length ? h("a", { class: "btn", href: "#/mega", style: "margin-top:4px;display:inline-block" }, "☁ MEGA 파일 보기") : null,
     h("div", { class: "taginput" }, input, addBtn),
     msg,
     links.length && st.mega_thumbs !== undefined ? megaThumbToggle(st) : null,
@@ -1075,7 +1076,7 @@ function megaThumbToggle(st) {
 }
 
 async function renderMega(params) {
-  setTab("mega");
+  setTab("settings");   // MEGA 파일 보기는 설정 안에 있음
   const links = await api("mega");
   if (!links.length) {
     $app.replaceChildren(h("div", { class: "empty" }, h("p", {}, "연결된 MEGA 폴더가 없습니다."),
@@ -1110,6 +1111,7 @@ async function renderMega(params) {
     }
   }
   $app.replaceChildren(h("div", {},
+    h("a", { class: "btn sm", href: "#/settings", style: "margin-bottom:12px;display:inline-block" }, "‹ 설정"),
     linkChips, crumbs,
     data.error ? h("div", { class: "panel warn" }, data.error) : null,
     folders.length ? h("div", { class: "chips", style: "margin-bottom:14px" }, folders) : null,
@@ -1699,7 +1701,6 @@ route();
 pollStatus();
 api("settings").then((st) => {
   serverCaps = st;
-  if (st.mega_supported) document.getElementById("tab-mega").hidden = false;
   if (st.photos) document.getElementById("tab-photos").hidden = false;
   if (st.eh) document.getElementById("tab-comics").hidden = false;
 }).catch(() => {});
