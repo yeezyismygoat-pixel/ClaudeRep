@@ -74,6 +74,8 @@ public class Library implements HttpServer.Handler {
         double duration;
         int width, height;
         Uri uri;
+        Mega.Link link;      // MEGA 영상이면 설정됨
+        Mega.Node node;
     }
 
     private final Context ctx;
@@ -83,12 +85,113 @@ public class Library implements HttpServer.Handler {
     private final Map<Long, Video> byId = new HashMap<>();
     private long lastScan = 0;
     private final Semaphore frameLock = new Semaphore(2);
+    private final List<Mega.Link> megaLinks = new ArrayList<>();
+    private static final Set<String> MEGA_VIDEO_EXTS = new HashSet<>(java.util.Arrays.asList(
+            "mp4", "m4v", "mov", "mkv", "webm", "3gp", "ogv", "avi", "wmv", "flv", "ts", "mpg", "mpeg"));
 
     private Library(Context ctx) {
         this.ctx = ctx;
         storeFile = new File(ctx.getFilesDir(), "library.json");
         thumbDir = new File(ctx.getCacheDir(), "thumbs");
         load();
+        JSONArray links = settings().optJSONArray("mega_links");
+        for (int i = 0; links != null && i < links.length(); i++) {
+            try { megaLinks.add(Mega.parse(links.optString(i))); } catch (Exception ignored) {}
+        }
+        new Thread(this::refreshMega).start();
+    }
+
+    // ------------------------------------------------------------------ MEGA
+    /** 모든 MEGA 링크의 파일 목록을 다시 받습니다 (네트워크 작업, 잠금 밖에서 실행). */
+    public void refreshMega() {
+        List<Mega.Link> links;
+        synchronized (this) { links = new ArrayList<>(megaLinks); }
+        for (Mega.Link l : links) Mega.load(l);
+        scan();
+    }
+
+    private synchronized void saveMegaLinks() {
+        JSONArray a = new JSONArray();
+        for (Mega.Link l : megaLinks) a.put(l.url);
+        try { settings().put("mega_links", a); } catch (JSONException ignored) {}
+        save();
+    }
+
+    private synchronized JSONArray megaJson() throws JSONException {
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < megaLinks.size(); i++) {
+            Mega.Link l = megaLinks.get(i);
+            int files = 0, vids = 0;
+            for (Mega.Node n : l.nodes) if (!n.folder) { files++; if (MEGA_VIDEO_EXTS.contains(ext(n.name))) vids++; }
+            out.put(new JSONObject().put("index", i).put("name", l.name).put("handle", l.handle)
+                    .put("files", files).put("videos", vids).put("loaded", l.loadedAt > 0)
+                    .put("error", l.error == null ? JSONObject.NULL : l.error));
+        }
+        return out;
+    }
+
+    private synchronized JSONObject megaBrowse(int index, String folder) throws JSONException {
+        if (index < 0 || index >= megaLinks.size()) return null;
+        Mega.Link l = megaLinks.get(index);
+        Map<String, Mega.Node> by = l.byHandle;
+        Mega.Node cur = folder == null || folder.isEmpty() ? null : by.get(folder);
+        if (cur == null) {
+            cur = by.get(l.handle);
+            if (cur == null) for (Mega.Node n : l.nodes) if (n.folder && !by.containsKey(n.parent)) { cur = n; break; }
+        }
+        JSONObject o = new JSONObject().put("link", new JSONObject().put("index", index).put("name", l.name))
+                .put("error", l.error == null ? JSONObject.NULL : l.error);
+        if (cur == null) return o.put("folders", new JSONArray()).put("files", new JSONArray()).put("crumbs", new JSONArray());
+        List<JSONObject> crumbs = new ArrayList<>();
+        Mega.Node c = cur;
+        int guard = 0;
+        while (c != null && guard++ < 64) {
+            crumbs.add(0, new JSONObject().put("handle", c.handle).put("name", c.name));
+            c = by.get(c.parent);
+        }
+        List<Mega.Node> folders = new ArrayList<>(), files = new ArrayList<>();
+        for (Mega.Node n : l.nodes) if (cur.handle.equals(n.parent)) (n.folder ? folders : files).add(n);
+        Comparator<Mega.Node> byName = Comparator.comparing(n -> n.name.toLowerCase(Locale.ROOT));
+        folders.sort(byName);
+        files.sort(byName);
+        JSONArray fo = new JSONArray(), fi = new JSONArray();
+        for (Mega.Node n : folders) fo.put(new JSONObject().put("handle", n.handle).put("name", n.name));
+        for (Mega.Node n : files) {
+            String e = ext(n.name);
+            String kind = MEGA_VIDEO_EXTS.contains(e) ? "video" : mimeFor(e).startsWith("image/") ? "image" : mimeFor(e).startsWith("audio/") ? "audio" : "file";
+            fi.put(new JSONObject().put("handle", n.handle).put("name", n.name).put("size", n.size).put("kind", kind)
+                    .put("id", kind.equals("video") ? n.id : JSONObject.NULL).put("thumb", n.thumbHandle != null)
+                    .put("url", "/mega-file/" + index + "/" + n.handle));
+        }
+        return o.put("folder", new JSONObject().put("handle", cur.handle).put("name", cur.name))
+                .put("crumbs", new JSONArray(crumbs)).put("folders", fo).put("files", fi);
+    }
+
+    static String ext(String name) {
+        int d = name.lastIndexOf('.');
+        return d >= 0 ? name.substring(d + 1).toLowerCase(Locale.ROOT) : "";
+    }
+
+    static String mimeFor(String ext) {
+        switch (ext) {
+            case "mp4": case "m4v": case "mov": case "3gp": return "video/mp4";
+            case "mkv": case "webm": return "video/webm";
+            case "ogv": return "video/ogg";
+            case "avi": return "video/x-msvideo";
+            case "jpg": case "jpeg": return "image/jpeg";
+            case "png": return "image/png";
+            case "gif": return "image/gif";
+            case "webp": return "image/webp";
+            case "heic": return "image/heic";
+            case "mp3": return "audio/mpeg";
+            case "m4a": case "aac": return "audio/mp4";
+            case "ogg": case "opus": return "audio/ogg";
+            case "wav": return "audio/wav";
+            case "flac": return "audio/flac";
+            case "pdf": return "application/pdf";
+            case "txt": case "srt": case "vtt": case "md": return "text/plain; charset=utf-8";
+            default: return "application/octet-stream";
+        }
     }
 
     // ------------------------------------------------------------------ store
@@ -212,6 +315,25 @@ public class Library implements HttpServer.Handler {
         } catch (SecurityException e) {
             // 권한 없음 — 빈 목록
         }
+        for (Mega.Link l : megaLinks) {
+            List<Mega.Node> nodes;
+            synchronized (l) { nodes = new ArrayList<>(l.nodes); }
+            for (Mega.Node n : nodes) {
+                if (n.folder || !MEGA_VIDEO_EXTS.contains(ext(n.name))) continue;
+                Video v = new Video();
+                v.id = n.id;
+                v.name = n.name;
+                v.relPath = "MEGA/" + n.path;
+                v.size = n.size;
+                v.dateAdded = n.ts;
+                v.dateModified = n.ts;
+                v.mime = mimeFor(ext(n.name));
+                v.key = "mega:" + n.handle;
+                v.link = l;
+                v.node = n;
+                list.add(v);
+            }
+        }
         all = list;
         byId.clear();
         for (Video v : list) byId.put(v.id, v);
@@ -223,6 +345,10 @@ public class Library implements HttpServer.Handler {
         List<String> paths = libraryPaths();
         List<Video> out = new ArrayList<>();
         for (Video v : all) {
+            if (v.node != null) {   // MEGA 영상은 폴더 설정과 관계없이 표시
+                if (!meta(v).optBoolean("hidden", false)) out.add(v);
+                continue;
+            }
             boolean in = false;
             for (String p : paths) if (v.relPath.startsWith(p)) { in = true; break; }
             if (!in) continue;
@@ -247,14 +373,14 @@ public class Library implements HttpServer.Handler {
         JSONObject o = new JSONObject();
         o.put("id", v.id);
         o.put("title", title(v));
-        o.put("duration", v.duration);
+        o.put("duration", v.node != null ? m.optDouble("duration", 0) : v.duration);
         o.put("width", v.width);
         o.put("height", v.height);
         o.put("size", v.size);
         o.put("rating", m.optInt("rating", 0));
         o.put("favorite", m.optBoolean("favorite", false) ? 1 : 0);
         o.put("play_count", m.optInt("play_count", 0));
-        o.put("thumbs", N_FRAMES);
+        o.put("thumbs", v.node != null ? (v.node.thumbHandle != null ? 1 : 0) : N_FRAMES);
         o.put("missing", 0);
         o.put("resume_pos", m.optDouble("resume_pos", 0));
         o.put("added_at", v.dateAdded);
@@ -293,6 +419,7 @@ public class Library implements HttpServer.Handler {
         o.put("direct_play", DIRECT_EXTS.contains(ext));
         o.put("can_transcode", false);
         o.put("can_delete", false);
+        o.put("source", v.node != null ? "mega" : "local");
         return o;
     }
 
@@ -484,7 +611,8 @@ public class Library implements HttpServer.Handler {
         return new JSONObject().put("library_paths", lp).put("suggestions", new JSONArray(top))
                 .put("password_set", passwordSet()).put("data_dir", "앱 내부 저장소")
                 .put("ffmpeg", false).put("ffprobe", false).put("platform", "android")
-                .put("example_path", "DCIM/Camera/").put("lan", lanEnabled());
+                .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
+                .put("mega_supported", true).put("mega", megaJson());
     }
 
     // ------------------------------------------------------------------ auth
@@ -531,6 +659,20 @@ public class Library implements HttpServer.Handler {
             api(r, res, path.substring(5));
             return;
         }
+        if (path.startsWith("/mega-file/")) {
+            if (!authed(r)) { res.error(401, "login required"); return; }
+            String[] p = path.split("/");
+            Mega.Link l;
+            Mega.Node n;
+            synchronized (this) {
+                int i = parseInt(p.length > 2 ? p[2] : "", -1);
+                l = i >= 0 && i < megaLinks.size() ? megaLinks.get(i) : null;
+                n = l == null || p.length < 4 ? null : l.byHandle.get(p[3]);
+            }
+            if (n == null || n.folder) { res.error(404, "not found"); return; }
+            megaStream(l, n, mimeFor(ext(n.name)), r, res, "1".equals(r.param("dl")));
+            return;
+        }
         if (path.startsWith("/media/") || path.startsWith("/thumbs/") || path.startsWith("/transcode/")) {
             if (!authed(r)) { res.error(401, "login required"); return; }
             String[] p = path.split("/");
@@ -541,7 +683,9 @@ public class Library implements HttpServer.Handler {
                 v = byId.get(parseLong(p.length > 2 ? p[2] : "", -1));
             }
             if (v == null) { res.error(404, "not found"); return; }
-            if (path.startsWith("/media/")) media(v, r, res);
+            if (path.startsWith("/media/") && v.node != null) megaStream(v.link, v.node, v.mime, r, res, false);
+            else if (path.startsWith("/media/")) media(v, r, res);
+            else if (v.node != null) megaThumb(v, parseInt(p.length > 3 ? p[3].replace(".jpg", "") : "0", 0), r, res);
             else thumb(v, parseInt(p.length > 3 ? p[3].replace(".jpg", "") : "0", 0), r, res);
             return;
         }
@@ -625,7 +769,9 @@ public class Library implements HttpServer.Handler {
                     return;
                 }
                 if (action.equals("progress") && m.equals("POST")) {
-                    meta.put("resume_pos", body(r).optDouble("pos", 0));
+                    JSONObject pb = body(r);
+                    meta.put("resume_pos", pb.optDouble("pos", 0));
+                    if (pb.optDouble("duration", 0) > 0) meta.put("duration", pb.optDouble("duration"));
                     save();
                     res.json(200, "{\"ok\":true}");
                     return;
@@ -711,6 +857,46 @@ public class Library implements HttpServer.Handler {
             }
         }
 
+        if (p0.equals("mega")) {
+            if (parts.length == 1 && m.equals("GET")) { res.json(200, megaJson().toString()); return; }
+            if (parts.length == 1 && m.equals("POST")) {
+                Mega.Link l;
+                try {
+                    l = Mega.parse(body(r).optString("url"));
+                } catch (IllegalArgumentException e) {
+                    res.error(400, e.getMessage());
+                    return;
+                }
+                synchronized (this) {
+                    for (Mega.Link x : megaLinks) if (x.handle.equals(l.handle)) { res.error(400, "이미 추가된 폴더입니다"); return; }
+                }
+                Mega.load(l);   // 네트워크 — 잠금 밖
+                if (l.error != null && l.nodes.isEmpty()) { res.error(400, l.error); return; }
+                synchronized (this) { megaLinks.add(l); }
+                saveMegaLinks();
+                scan();
+                res.json(200, megaJson().toString());
+                return;
+            }
+            if (parts.length == 2 && parts[1].equals("refresh") && m.equals("POST")) {
+                refreshMega();
+                res.json(200, megaJson().toString());
+                return;
+            }
+            int idx = parts.length > 1 ? parseInt(parts[1], -1) : -1;
+            if (parts.length == 2 && m.equals("DELETE")) {
+                synchronized (this) { if (idx >= 0 && idx < megaLinks.size()) megaLinks.remove(idx); }
+                saveMegaLinks();
+                scan();
+                res.json(200, megaJson().toString());
+                return;
+            }
+            if (parts.length == 3 && parts[2].equals("browse")) {
+                JSONObject b = megaBrowse(idx, r.param("folder"));
+                if (b == null) res.error(404, "not found"); else res.json(200, b.toString());
+                return;
+            }
+        }
         if (p0.equals("settings")) {
             if (m.equals("PUT")) {
                 JSONObject b = body(r);
@@ -830,6 +1016,65 @@ public class Library implements HttpServer.Handler {
                 }
             }
         }
+    }
+
+    private void megaStream(Mega.Link l, Mega.Node n, String mime, HttpServer.Request r, HttpServer.Response res, boolean download) throws IOException {
+        long size = n.size, start = 0, end = size - 1;
+        int status = 200;
+        String range = r.header("range");
+        if (range != null) {
+            Matcher mt = RANGE.matcher(range);
+            if (mt.find()) {
+                if (!mt.group(1).isEmpty()) {
+                    start = Long.parseLong(mt.group(1));
+                    if (!mt.group(2).isEmpty()) end = Math.min(Long.parseLong(mt.group(2)), size - 1);
+                } else if (!mt.group(2).isEmpty()) start = Math.max(0, size - Long.parseLong(mt.group(2)));
+                if (start >= size) {
+                    res.header("Content-Range", "bytes */" + size);
+                    res.start(416, 0);
+                    return;
+                }
+                status = 206;
+            }
+        }
+        if (mime.contains("matroska")) mime = "video/webm";
+        if (size == 0) { res.header("Content-Type", mime); res.start(200, 0); return; }
+        InputStream in;
+        try {
+            in = Mega.open(l, n, start, end);
+        } catch (IOException e) {
+            res.error(502, e.getMessage() == null ? "MEGA 연결 실패" : e.getMessage());
+            return;
+        }
+        try (InputStream src = in) {
+            long len = end - start + 1;
+            res.header("Content-Type", mime).header("Accept-Ranges", "bytes");
+            if (status == 206) res.header("Content-Range", "bytes " + start + "-" + end + "/" + size);
+            if (download) res.header("Content-Disposition", "attachment; filename*=UTF-8''" + java.net.URLEncoder.encode(n.name, "UTF-8").replace("+", "%20"));
+            OutputStream out = res.start(status, len);
+            if (r.method.equals("HEAD")) return;
+            byte[] buf = new byte[128 * 1024];
+            long remaining = len;
+            while (remaining > 0) {
+                int k = src.read(buf, 0, (int) Math.min(buf.length, remaining));
+                if (k < 0) break;
+                out.write(buf, 0, k);
+                remaining -= k;
+            }
+        }
+    }
+
+    private void megaThumb(Video v, int n, HttpServer.Request r, HttpServer.Response res) throws IOException {
+        if (n != 0 || v.node.thumbHandle == null) { res.error(404, "no frame"); return; }
+        File f = new File(new File(thumbDir, "mega"), v.node.handle + ".jpg");
+        if (!f.exists() || f.length() == 0) {
+            byte[] jpg = Mega.thumbnail(v.link, v.node);
+            if (jpg == null) { res.error(404, "no thumbnail"); return; }
+            f.getParentFile().mkdirs();
+            try (FileOutputStream o = new FileOutputStream(f)) { o.write(jpg); }
+        }
+        res.header("Cache-Control", "max-age=86400");
+        res.send(200, "image/jpeg", readAll(new FileInputStream(f)));
     }
 
     // ------------------------------------------------------------------ thumbnails

@@ -108,6 +108,7 @@ async function route() {
     if (path === "/tags") return await renderEntities("tags", "태그", "tag");
     if (path === "/performers") return await renderEntities("performers", "출연자", "performer");
     if (path === "/settings") return await renderSettings();
+    if (path === "/mega") return await renderMega(params);
     location.hash = "#/";
   } catch (e) {
     if (e.message !== "login required") $app.replaceChildren(h("div", { class: "empty" }, "오류: " + e.message));
@@ -214,7 +215,7 @@ function videoCard(v) {
   const thumb = h("div", { class: "thumb" }, img, noimg,
     resLabel(v.width, v.height) ? h("span", { class: "badge res" }, resLabel(v.width, v.height)) : null,
     v.favorite ? h("span", { class: "badge fav" }, "♥") : null,
-    h("span", { class: "badge dur" }, fmtDur(v.duration)),
+    v.duration ? h("span", { class: "badge dur" }, fmtDur(v.duration)) : null,
     v.resume_pos > 5 && v.duration ? h("div", { class: "progress", style: `width:${Math.min(100, (v.resume_pos / v.duration) * 100)}%` }) : null,
     scrub);
 
@@ -292,6 +293,13 @@ async function renderVideo(id, params) {
   video.addEventListener("timeupdate", () => {
     if (mode === "transcode" && document.activeElement !== seek) {
       seek.value = Math.floor(currentTime()); seekLabel.textContent = `${fmtDur(currentTime())} / ${fmtDur(v.duration)}`;
+    }
+  });
+  video.addEventListener("loadedmetadata", () => {
+    // MEGA 영상처럼 길이를 모르는 경우 재생하면서 알게 된 길이를 저장
+    if (!v.duration && mode === "direct" && isFinite(video.duration) && video.duration > 0) {
+      v.duration = video.duration; seek.max = Math.floor(v.duration);
+      api(`videos/${v.id}/progress`, { method: "POST", body: { pos: 0, duration: v.duration } }).catch(() => {});
     }
   });
   video.addEventListener("play", () => {
@@ -471,7 +479,7 @@ async function renderSettings() {
 
   const suggestions = st.suggestions.length ? h("div", {}, h("p", { class: "meta" }, "빠르게 추가:"),
     h("div", { class: "chips" }, st.suggestions.map((s) =>
-      h("button", { class: "chip", onclick: () => savePaths(paths.concat([s])) }, "+ " + s.split("/").slice(-1)[0])))) : null;
+      h("button", { class: "chip", onclick: () => savePaths(paths.concat([s])) }, "+ " + s.replace(/\/+$/, "").split("/").slice(-1)[0])))) : null;
 
   const manual = h("input", { type: "text", placeholder: "직접 입력: " + (st.example_path || "/storage/emulated/0/Movies") });
   const c = status.counts || {};
@@ -493,6 +501,7 @@ async function renderSettings() {
       h("div", { class: "taginput" }, manual, h("button", { class: "btn", onclick: () => manual.value.trim() && savePaths(paths.concat([manual.value.trim()])) }, "추가")),
       suggestions ? h("div", { style: "margin-top:12px" }, suggestions) : null,
       status.last_scan ? h("p", { class: "meta" }, `마지막 스캔: ${fmtDate(status.last_scan)}`) : null),
+    st.mega_supported ? megaPanel(st.mega || []) : null,
     h("div", { class: "panel" }, h("h3", {}, "정리"),
       h("p", { class: "meta" }, `찾을 수 없는 파일: ${c.missing || 0}개 (옮겨졌거나 삭제된 파일)`),
       h("button", { class: "btn", disabled: !c.missing, onclick: async () => {
@@ -510,6 +519,82 @@ async function renderSettings() {
         h("dt", {}, "데이터 폴더"), h("dd", {}, st.data_dir),
         h("dt", {}, "ffmpeg"), h("dd", {}, st.ffmpeg ? "사용 가능" : "없음 — pkg install ffmpeg"),
         h("dt", {}, "ffprobe"), h("dd", {}, st.ffprobe ? "사용 가능" : "없음 — pkg install ffmpeg")))));
+}
+
+// ---------------------------------------------------------------- MEGA
+function megaPanel(links) {
+  const input = h("input", { type: "text", placeholder: "https://mega.nz/folder/…#…", autocomplete: "off" });
+  const msg = h("p", { class: "meta" });
+  const add = async (btn) => {
+    const url = input.value.trim();
+    if (!url) return;
+    btn.disabled = true; msg.textContent = "MEGA 폴더를 불러오는 중…";
+    try {
+      await api("mega", { method: "POST", body: { url } });
+      toast("MEGA 폴더를 추가했습니다"); renderSettings();
+    } catch (e) { msg.textContent = e.message; btn.disabled = false; }
+  };
+  const addBtn = h("button", { class: "btn primary", onclick: (e) => add(e.currentTarget) }, "추가");
+  return h("div", { class: "panel" }, h("h3", {}, "MEGA 폴더 링크"),
+    h("p", { class: "meta" }, "MEGA 앱이나 웹에서 폴더 → 공유 → 링크 복사로 만든 링크를 붙여넣으세요. 링크에는 열쇠(# 뒤)가 포함되어야 합니다. 영상은 라이브러리에, 모든 파일은 MEGA 탭에 나옵니다."),
+    h("ul", { class: "pathlist" }, links.length ? links.map((l) => h("li", {},
+      h("span", { class: "p" }, "☁ " + l.name, h("div", { class: "meta" }, `파일 ${l.files}개 · 영상 ${l.videos}개`),
+        l.error ? h("div", { class: "warn" }, l.error) : null),
+      h("a", { class: "btn sm", href: `#/mega?link=${l.index}` }, "열기"),
+      h("button", { class: "btn sm danger", onclick: async () => {
+        if (!confirm(`‘${l.name}’ MEGA 폴더 연결을 끊을까요? (MEGA 의 파일은 그대로입니다)`)) return;
+        await api(`mega/${l.index}`, { method: "DELETE" }); renderSettings();
+      } }, "제거")))
+      : h("li", { class: "meta" }, "연결된 MEGA 폴더가 없습니다.")),
+    h("div", { class: "taginput" }, input, addBtn),
+    msg,
+    links.length ? h("button", { class: "btn sm", style: "margin-top:8px", onclick: async (e) => {
+      e.currentTarget.disabled = true; await api("mega/refresh", { method: "POST" }); toast("MEGA 목록을 새로 받았습니다"); renderSettings();
+    } }, "MEGA 목록 새로고침") : null);
+}
+
+async function renderMega(params) {
+  setTab("mega");
+  const links = await api("mega");
+  if (!links.length) {
+    $app.replaceChildren(h("div", { class: "empty" }, h("p", {}, "연결된 MEGA 폴더가 없습니다."),
+      h("a", { class: "btn primary", href: "#/settings" }, "설정에서 MEGA 링크 추가")));
+    return;
+  }
+  const idx = Math.min(links.length - 1, +(params.get("link") || 0));
+  const data = await api(`mega/${idx}/browse?folder=${encodeURIComponent(params.get("folder") || "")}`);
+  const go = (folder) => { location.hash = `#/mega?link=${idx}` + (folder ? `&folder=${folder}` : ""); };
+  const linkChips = links.length > 1 ? h("div", { class: "chips", style: "margin-bottom:10px" }, links.map((l) =>
+    h("a", { class: "chip" + (l.index === idx ? " on" : ""), href: `#/mega?link=${l.index}` }, "☁ " + l.name))) : null;
+  const crumbs = h("div", { class: "chips", style: "margin-bottom:12px" }, (data.crumbs || []).map((c, i, arr) =>
+    i === arr.length - 1 ? h("span", { class: "chip on" }, c.name) : h("button", { class: "chip", onclick: () => go(c.handle) }, c.name)));
+  const folders = (data.folders || []).map((f) => h("button", { class: "chip", onclick: () => go(f.handle) }, "📁 " + f.name));
+  const media = [], others = [];
+  for (const f of data.files || []) {
+    if (f.kind === "video") {
+      const img = h("img", { loading: "lazy", alt: "", hidden: !f.thumb, src: f.thumb ? `/thumbs/${f.id}/0.jpg?v=1` : null });
+      img.onerror = () => (img.hidden = true);
+      media.push(h("a", { class: "card", href: `#/v/${f.id}` },
+        h("div", { class: "thumb" }, img, h("div", { class: "noimg" }, "▶ 영상")),
+        h("div", { class: "title", title: f.name }, f.name), h("div", { class: "sub" }, h("span", {}, fmtSize(f.size)))));
+    } else if (f.kind === "image") {
+      media.push(h("a", { class: "card", href: f.url, target: "_blank", rel: "noopener" },
+        h("div", { class: "thumb" }, h("img", { loading: "lazy", alt: "", src: f.url, onerror: (e) => (e.target.hidden = true) })),
+        h("div", { class: "title", title: f.name }, f.name), h("div", { class: "sub" }, h("span", {}, fmtSize(f.size)))));
+    } else {
+      others.push(h("li", {},
+        h("span", { class: "p" }, (f.kind === "audio" ? "🎵 " : "📄 ") + f.name, h("div", { class: "meta" }, fmtSize(f.size))),
+        h("a", { class: "btn sm", href: f.url, target: "_blank", rel: "noopener" }, "열기"),
+        h("a", { class: "btn sm", href: f.url + "?dl=1" }, "받기")));
+    }
+  }
+  $app.replaceChildren(h("div", {},
+    linkChips, crumbs,
+    data.error ? h("div", { class: "panel warn" }, data.error) : null,
+    folders.length ? h("div", { class: "chips", style: "margin-bottom:14px" }, folders) : null,
+    media.length ? h("div", { class: "grid" }, media) : null,
+    others.length ? h("div", { class: "panel", style: "margin-top:14px" }, h("h3", {}, "기타 파일"), h("ul", { class: "pathlist" }, others)) : null,
+    !folders.length && !media.length && !others.length ? h("div", { class: "empty" }, "이 폴더는 비어 있습니다.") : null));
 }
 
 async function folderPicker(onPick) {
@@ -550,3 +635,4 @@ function renderLogin() {
 
 route();
 pollStatus();
+api("settings").then((st) => { if (st.mega_supported) document.getElementById("tab-mega").hidden = false; }).catch(() => {});
