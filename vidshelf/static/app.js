@@ -762,9 +762,14 @@ async function renderMedia(params0, type0) {
     const src = hdSrc(isPhoto ? `/photothumb/${it.id}.jpg` : it.thumbs > 0 ? thumbUrl(it.id, 0, it.thumbs) : null);
     const img = h("img", { loading: "lazy", alt: "", src, hidden: !src });
     if (!isPhoto && !(it.thumbs > 0)) img.dataset.retry = thumbUrl(it.id, 0, "x") + "&s=1080";
-    img.onload = () => (img.hidden = false);
+    img.onload = () => {
+      img.hidden = false;
+      if (!known && img.naturalWidth) img.parentElement.style.aspectRatio = img.naturalWidth / img.naturalHeight;
+    };
     img.onerror = () => (img.hidden = true);
-    const ratio = isPhoto && it.width && it.height ? Math.min(16 / 9, Math.max(4 / 5, it.width / it.height)) : 16 / 9;
+    // 원래 비율 그대로 (모르면 이미지를 받아 본 뒤 맞춤)
+    const known = it.width > 0 && it.height > 0;
+    const ratio = known ? it.width / it.height : 16 / 9;
     const pname = (it.performers || [])[0];
     const pf = pname ? performers.find((x) => x.name === pname) : null;
     const when = timeAgo(isPhoto ? it.taken || it.added_at : it.added_at);
