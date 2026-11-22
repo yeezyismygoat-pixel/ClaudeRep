@@ -20,8 +20,12 @@ button { cursor: pointer; }
 .logo { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px;
   background: var(--accent); color: var(--accent-ink); font-size: 12px; }
 .tabs { display: flex; gap: 2px; overflow-x: auto; }
-.tabs a { padding: 6px 10px; border-radius: 8px; color: var(--muted); white-space: nowrap; }
-.tabs a.on { color: var(--text); background: var(--panel2); }
+.tabs { margin-left: auto; }
+.tabs a { padding: 8px 10px; border-radius: 10px; color: #fff; opacity: .5; display: inline-grid; place-items: center; }
+.tabs a.on { opacity: 1; background: var(--panel2); }
+.tabs a:hover { opacity: .85; }
+.ico { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 440px) { .tabs a { padding: 8px 7px; } .brand .bname { display: none; } }
 .jobbar { width: 100%; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
 .jobbar .spin { width: 10px; height: 10px; border: 2px solid var(--accent); border-right-color: transparent;
   border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
@@ -165,17 +169,26 @@ dl.info dd { margin: 0; word-break: break-all; }
 .pcard .title { font-size: 12px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pcard .sub { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* photo viewer */
-.viewer { position: fixed; inset: 0; z-index: 70; background: #000; color: #fff; display: flex; flex-direction: column; touch-action: pan-y; }
-.viewer .vbar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); background: rgba(0,0,0,.6); }
-.viewer .vbar .vt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-.viewer .vbtn { background: rgba(255,255,255,.12); border: 0; color: #fff; border-radius: 8px; padding: 6px 11px; font-size: 15px; }
+/* photo viewer: 세로 화면에서는 가로를 꽉 채우고, 아래로 내리면 사진 정보 */
+.viewer { position: fixed; inset: 0; z-index: 70; background: #000; color: #fff; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.viewer .vtop { position: fixed; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); background: linear-gradient(rgba(0,0,0,.65), rgba(0,0,0,0)); }
+.viewer .vtop .count { flex: 1; text-align: center; font-size: 14px; color: #ddd; font-variant-numeric: tabular-nums; }
+.viewer .vbtn { background: rgba(0,0,0,.45); border: 0; color: #fff; border-radius: 999px; width: 40px; height: 40px; display: grid; place-items: center; padding: 0; }
+.viewer .vbtn .ico { width: 22px; height: 22px; }
 .viewer .vbtn.fav { color: var(--fav); }
-.viewer .stage { flex: 1; min-height: 0; display: grid; place-items: center; position: relative; }
-.viewer .stage img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; }
-.viewer .nav { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,.35); border: 0; color: #fff; font-size: 28px; width: 44px; height: 64px; border-radius: 8px; }
-.viewer .nav.prev { left: 8px; } .viewer .nav.next { right: 8px; }
-.viewer .vfoot { padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom)); background: rgba(0,0,0,.6); display: grid; gap: 8px; }
-.viewer .vfoot .chip { background: rgba(255,255,255,.12); border-color: transparent; color: #fff; }
-.viewer .vfoot input { background: rgba(255,255,255,.1); border-color: transparent; color: #fff; }
-.viewer .vmeta { font-size: 12px; color: #bbb; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer .vbtn.fav .ico { fill: currentColor; }
+.viewer .stage { min-height: 50vh; display: flex; align-items: center; justify-content: center; background: #000; }
+.viewer .stage img { display: block; width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+@media (min-aspect-ratio: 1/1) { .viewer .stage { min-height: 100vh; } .viewer .stage img { width: auto; max-width: 100%; max-height: 100vh; } }
+.viewer .vinfo { background: #101114; padding: 16px; padding-bottom: calc(28px + env(safe-area-inset-bottom)); display: grid; gap: 14px; }
+.viewer .vinfo h2 { margin: 0; font-size: 17px; word-break: break-all; }
+.viewer .vinfo dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 14px; }
+.viewer .vinfo dt { color: #9b978f; }
+.viewer .vinfo dd { margin: 0; word-break: break-all; }
+.viewer .vinfo .chip { background: #23262c; border-color: transparent; color: #fff; }
+.viewer .vinfo input { background: #1b1d22; border-color: #2e323a; color: #fff; }
+.viewer .vnav { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.viewer .vnav button { background: #23262c; border: 0; color: #fff; border-radius: 10px; padding: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.viewer .vnav button:disabled { opacity: .35; }
+.viewer .vnav .ico { width: 18px; height: 18px; }

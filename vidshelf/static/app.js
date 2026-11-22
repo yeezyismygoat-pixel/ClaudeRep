@@ -316,21 +316,33 @@ async function renderPhotos(params) {
   await load();
 }
 
-/** 사진 크게 보기: 좌우 넘기기, 즐겨찾기, 출연자 지정 */
+const ICON = {
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  heart: '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>',
+  prev: '<path d="M15 5l-7 7 7 7"/>',
+  next: '<path d="M9 5l7 7-7 7"/>',
+};
+function icon(name) {
+  const span = document.createElement("span");
+  span.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
+  return span.firstChild;
+}
+
+/** 사진 크게 보기: 세로 화면에서는 가로를 꽉 채우고, 아래로 내리면 사진 정보. 좌우로 밀어 넘기기. */
 async function openViewer(items, start) {
-  let i = start, closed = false;
+  let i = start, closed = false, cur = null;
   const allPerformers = await api("performers").catch(() => []);
   const img = h("img", { alt: "" });
-  const title = h("div", { class: "vt" });
-  const counter = h("span", { class: "meta", style: "color:#bbb" });
-  const favBtn = h("button", { class: "vbtn" });
-  const chips = h("div", { class: "chips" });
-  const metaLine = h("div", { class: "vmeta" });
+  const counter = h("span", { class: "count" });
+  const favBtn = h("button", { class: "vbtn", "aria-label": "즐겨찾기" }, icon("heart"));
+  const info = h("div", { class: "vinfo" });
   const input = h("input", { type: "text", list: "dl-viewer-perf", placeholder: "출연자 추가 (Enter)" });
-  let cur = null;
+  const prevBtn = h("button", { onclick: () => show(i - 1) }, icon("prev"), "이전");
+  const nextBtn = h("button", { onclick: () => show(i + 1) }, "다음", icon("next"));
   const close = () => {
     if (closed) return;
-    closed = true; el.remove(); document.removeEventListener("keydown", onKey); window.removeEventListener("popstate", onPop);
+    closed = true; el.remove(); document.body.style.overflow = "";
+    document.removeEventListener("keydown", onKey); window.removeEventListener("popstate", onPop);
   };
   const onPop = () => close();
   const onKey = (e) => {
@@ -345,45 +357,51 @@ async function openViewer(items, start) {
     draw();
   }
   function draw() {
-    favBtn.textContent = cur.favorite ? "♥" : "♡";
-    favBtn.className = "vbtn" + (cur.favorite ? " fav" : "");
-    chips.replaceChildren(...cur.performer_refs.map((p) => h("span", { class: "chip" }, p.name,
-      h("button", { "aria-label": `${p.name} 제거`, onclick: () => save({ performers: cur.performer_refs.filter((x) => x.id !== p.id).map((x) => x.name) }) }, "×"))));
-    metaLine.textContent = `${cur.folder}${cur.filename} · ${fmtSize(cur.size)}${cur.width ? ` · ${cur.width}×${cur.height}` : ""}`;
+    favBtn.classList.toggle("fav", !!cur.favorite);
+    const taken = cur.taken ? new Date(cur.taken * 1000).toLocaleString("ko-KR") : "-";
+    const rows = [["촬영", taken], ["해상도", cur.width ? `${cur.width} × ${cur.height}` : "-"], ["크기", fmtSize(cur.size)],
+      ["폴더", cur.folder || "-"], ["출처", cur.source === "mega" ? "MEGA" : "이 기기"]];
+    info.replaceChildren(
+      h("h2", {}, cur.filename || cur.title),
+      h("dl", {}, ...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])),
+      h("div", { class: "chips" }, ...(cur.performer_refs.length ? cur.performer_refs.map((p) => h("span", { class: "chip" }, p.name,
+        h("button", { "aria-label": `${p.name} 제거`, onclick: () => save({ performers: cur.performer_refs.filter((x) => x.id !== p.id).map((x) => x.name) }) }, "×")))
+        : [h("span", { class: "meta" }, "출연자 없음")])),
+      input,
+      h("div", { class: "vnav" }, prevBtn, nextBtn),
+      h("datalist", { id: "dl-viewer-perf" }, allPerformers.map((p) => h("option", { value: p.name }))));
+    prevBtn.disabled = i === 0; nextBtn.disabled = i === items.length - 1;
   }
   async function show(n) {
     if (n < 0 || n >= items.length) return;
     i = n;
     const p = items[i];
     img.src = `/photo/${p.id}`;
-    title.textContent = p.title;
     counter.textContent = `${i + 1} / ${items.length}`;
+    el.scrollTop = 0;
     if (items[i + 1]) new Image().src = `/photo/${items[i + 1].id}`;   // 다음 사진 미리 받기
-    cur = await api(`photos/${p.id}`);
-    if (i === n) draw();
+    const d = await api(`photos/${p.id}`);
+    if (i === n) { cur = d; draw(); }
   }
-  favBtn.onclick = () => save({ favorite: !cur.favorite });
+  favBtn.onclick = () => cur && save({ favorite: !cur.favorite });
   input.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" || !input.value.trim()) return;
     const names = cur.performer_refs.map((x) => x.name).concat(input.value.split(",").map((x) => x.trim()).filter(Boolean));
     input.value = ""; save({ performers: names });
   });
-  const stage = h("div", { class: "stage" }, img,
-    h("button", { class: "nav prev", "aria-label": "이전 사진", onclick: () => show(i - 1) }, "‹"),
-    h("button", { class: "nav next", "aria-label": "다음 사진", onclick: () => show(i + 1) }, "›"));
-  let sx = null;
-  stage.addEventListener("touchstart", (e) => { sx = e.touches[0].clientX; }, { passive: true });
+  const stage = h("div", { class: "stage" }, img);
+  let sx = null, sy = null;
+  stage.addEventListener("touchstart", (e) => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
   stage.addEventListener("touchend", (e) => {
     if (sx == null) return;
-    const dx = e.changedTouches[0].clientX - sx; sx = null;
-    if (Math.abs(dx) > 50) show(dx < 0 ? i + 1 : i - 1);
+    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy; sx = null;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) show(dx < 0 ? i + 1 : i - 1);   // 가로로 민 경우만 넘김
   });
   const el = h("div", { class: "viewer", role: "dialog", "aria-modal": "true" },
-    h("div", { class: "vbar" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, "✕"), title, counter, favBtn),
-    stage,
-    h("div", { class: "vfoot" }, chips, input, metaLine,
-      h("datalist", { id: "dl-viewer-perf" }, allPerformers.map((p) => h("option", { value: p.name })))));
+    h("div", { class: "vtop" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, icon("close")), counter, favBtn),
+    stage, info);
   document.body.append(el);
+  document.body.style.overflow = "hidden";
   history.pushState({ viewer: true }, "");   // 휴대폰 뒤로 가기로 닫히게
   window.addEventListener("popstate", onPop);
   document.addEventListener("keydown", onKey);
