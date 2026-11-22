@@ -272,11 +272,34 @@ public class Library implements HttpServer.Handler {
             res.json(200, "{\"ok\":true}");
             return;
         }
+        if (action.equals("recent")) {   // 최근 읽은 만화 (네트워크 없이, 저장해 둔 정보로)
+            List<JSONObject> list = new ArrayList<>();
+            synchronized (this) {
+                JSONObject prog = ehProgress();
+                Iterator<String> it = prog.keys();
+                while (it.hasNext()) {
+                    String gid = it.next();
+                    JSONObject pr = prog.optJSONObject(gid);
+                    if (pr == null || !pr.has("token")) continue;
+                    list.add(new JSONObject().put("gid", Long.parseLong(gid)).put("token", pr.optString("token"))
+                            .put("title", pr.optString("title")).put("title_jpn", "").put("thumb", pr.optString("thumb"))
+                            .put("pages", pr.optInt("pages")).put("read_page", pr.optInt("page")).put("category", "")
+                            .put("at", pr.optLong("at")));
+                }
+            }
+            list.sort((a, b2) -> Long.compare(b2.optLong("at"), a.optLong("at")));
+            JSONArray items = new JSONArray();
+            for (JSONObject o : list.subList(0, Math.min(20, list.size()))) items.put(o);
+            res.json(200, new JSONObject().put("items", items).toString());
+            return;
+        }
         if (action.equals("progress") && m.equals("POST")) {
             JSONObject b = body(r);
             synchronized (this) {
-                ehProgress().put(String.valueOf(b.optLong("gid")), new JSONObject().put("page", b.optInt("page", 1))
-                        .put("at", System.currentTimeMillis() / 1000));
+                JSONObject pr = new JSONObject().put("page", b.optInt("page", 1)).put("at", System.currentTimeMillis() / 1000);
+                for (String k : new String[]{"token", "title", "thumb"}) if (b.has(k)) pr.put(k, b.optString(k));
+                if (b.has("pages")) pr.put("pages", b.optInt("pages"));
+                ehProgress().put(String.valueOf(b.optLong("gid")), pr);
                 save();
             }
             res.json(200, "{\"ok\":true}");

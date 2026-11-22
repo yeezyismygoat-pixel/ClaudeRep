@@ -25,7 +25,8 @@ button { cursor: pointer; }
 .tabs a.on { opacity: 1; background: var(--panel2); }
 .tabs a:hover { opacity: .85; }
 .ico { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-@media (max-width: 440px) { .tabs a { padding: 8px 7px; } .brand .bname { display: none; } }
+@media (max-width: 440px) { .tabs a { padding: 8px 6px; } .brand .bname { display: none; } }
+@media (max-width: 420px) { .topbar { gap: 4px 8px; padding-left: 10px; padding-right: 10px; } .tabs { gap: 0; } .tabs a { padding: 7px 5px; } .tabs .ico { width: 22px; height: 22px; } }
 .jobbar { width: 100%; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
 .jobbar .spin { width: 10px; height: 10px; border: 2px solid var(--accent); border-right-color: transparent;
   border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
@@ -240,3 +241,27 @@ details.panel summary { cursor: pointer; color: var(--muted); font-size: 14px; }
 .rpage.loaded { aspect-ratio: auto; display: block; }
 .rpage img { display: block; width: 100%; height: auto; }
 .rend { padding: 40px 16px calc(60px + env(safe-area-inset-bottom)); text-align: center; color: #aaa; }
+
+/* 홈 */
+.home-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 8px; margin-bottom: 18px; }
+.home-stats .stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; }
+.home-stats .stat b { font-size: 20px; display: block; }
+.home-stats .stat span { color: var(--muted); font-size: 12px; }
+.shelf { margin-bottom: 22px; }
+.shelf-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.shelf-head h2 { margin: 0; font-size: 17px; }
+.shelf-head a { color: var(--accent); font-size: 13px; }
+.shelf-row { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x proximity; padding-bottom: 6px;
+  margin: 0 -16px; padding-left: 16px; padding-right: 16px; scroll-padding: 0 16px; scrollbar-width: none; }
+.shelf-row::-webkit-scrollbar { display: none; }
+.shelf-row > * { flex: none; scroll-snap-align: start; }
+.shelf-row:empty::before { content: ""; display: block; height: 120px; width: 100%; background: var(--panel); border-radius: var(--radius); opacity: .5; }
+.shelf-row.vids > * { width: 210px; }
+.shelf-row.comics > * { width: 116px; }
+.shelf-row.photos > * { width: 112px; }
+.shelf-row.photos .pcard .title, .shelf-row.photos .pcard .sub { display: none; }
+.shelf-row.people > * { width: 76px; }
+.person { display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 12px; text-align: center; }
+.person .pf-avatar { width: 68px; height: 68px; font-size: 26px; }
+.person span { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 560px) { .shelf-row { margin: 0 -12px; padding-left: 12px; padding-right: 12px; scroll-padding: 0 12px; } .shelf-row.vids > * { width: 175px; } }

@@ -114,6 +114,7 @@ async function route() {
   window.scrollTo(0, 0);
   try {
     let m;
+    if (path === "/home" || (path === "/" && !location.hash)) return await renderHome();
     if (path === "/" || path === "") return await renderLibrary(params);
     if ((m = path.match(/^\/v\/(\d+)$/))) return await renderVideo(+m[1], params);
     if (path === "/tags") return await renderEntities("tags", "태그", "tag");
@@ -1037,6 +1038,71 @@ async function renderMega(params) {
     !folders.length && !media.length && !others.length ? h("div", { class: "empty" }, "이 폴더는 비어 있습니다.") : null));
 }
 
+// ---------------------------------------------------------------- 홈
+/** 가로로 넘기는 한 줄: 제목, ‘모두 보기’, 내용. 내용을 불러오기 전에는 자리만 잡아 둠. */
+function shelf(title, moreHref, kind) {
+  const row = h("div", { class: "shelf-row " + kind });
+  const sec = h("section", { class: "shelf" },
+    h("div", { class: "shelf-head" }, h("h2", {}, title), moreHref ? h("a", { href: moreHref }, "모두 보기 ›") : null),
+    row);
+  return { sec, fill(items) {
+    if (!items.length) { sec.remove(); return; }
+    row.replaceChildren(...items);
+  } };
+}
+
+async function renderHome() {
+  setTab("home");
+  if (!Object.keys(serverCaps).length) serverCaps = await api("settings").catch(() => ({}));   // 앱을 막 열었을 때
+  const stats = h("div", { class: "home-stats" });
+  const resume = shelf("이어 보기", "#/?sort=played", "vids");
+  const recent = shelf("최근 추가된 영상", "#/?sort=added", "vids");
+  const favs = shelf("즐겨찾기 영상", "#/?fav=1", "vids");
+  const comics = shelf("이어 읽는 만화", "#/comics", "comics");
+  const photos = shelf("최근 사진", "#/photos", "photos");
+  const people = shelf("출연자", "#/performers", "people");
+  $app.replaceChildren(h("div", { class: "home" }, stats,
+    resume.sec, recent.sec, comics.sec, favs.sec, photos.sec, people.sec));
+
+  const statItem = (href, n, label) => h("a", { class: "stat", href }, h("b", {}, n), h("span", {}, label));
+  const counts = { videos: null, photos: null, people: null };
+  const drawStats = () => stats.replaceChildren(...[
+    statItem("#/", counts.videos == null ? "…" : counts.videos.toLocaleString(), "영상"),
+    serverCaps.photos ? statItem("#/photos", counts.photos == null ? "…" : counts.photos.toLocaleString(), "사진") : null,
+    statItem("#/performers", counts.people == null ? "…" : counts.people.toLocaleString(), "출연자"),
+    serverCaps.eh ? statItem("#/comics", "보기", "만화") : null].filter(Boolean));
+  drawStats();
+
+  const small = (v) => videoCard(v);
+  const jobs = [
+    api("videos?sort=played&order=desc&per=40").then((d) => {
+      counts.videos = d.total; drawStats();
+      resume.fill(d.items.filter((v) => v.resume_pos > 5 && v.duration && v.resume_pos < v.duration - 10).slice(0, 12).map(small));
+    }),
+    api("videos?sort=added&order=desc&per=15").then((d) => recent.fill(d.items.map(small))),
+    api("videos?fav=1&sort=random&seed=" + (Date.now() % 100000) + "&per=15").then((d) => favs.fill(d.items.map(small))),
+    api("performers").then((list) => {
+      counts.people = list.length; drawStats();
+      people.fill(list.filter((p) => p.count || p.photo_count).sort((a, b) => (b.count + b.photo_count) - (a.count + a.photo_count)).slice(0, 20)
+        .map((p) => h("a", { class: "person", href: `#/performer?id=${p.id}` },
+          h("div", { class: "pf-avatar" }, entityCover(p, "👤")), h("span", {}, p.name))));
+    }),
+  ];
+  if (serverCaps.photos) jobs.push(api("photos?sort=taken&order=desc&per=24").then((d) => {
+    counts.photos = d.total; drawStats();
+    photos.fill(d.items.map((p, i) => photoCell(p, "grid", () => openViewer(d.items, i))));
+  }));
+  else photos.fill([]);
+  if (serverCaps.eh) jobs.push(api("eh/recent").then((d) => {
+    comics.fill((d.items || []).map((g) => comicCard(g)));
+  }));
+  else comics.fill([]);
+  await Promise.all(jobs.map((j) => j.catch(() => {})));
+  // 모두 비어 있으면 안내
+  if (!$app.querySelector(".shelf")) $app.querySelector(".home").append(h("div", { class: "empty" },
+    h("p", {}, "아직 보여 줄 것이 없습니다."), h("a", { class: "btn primary", href: "#/settings" }, "설정에서 폴더나 MEGA 링크 추가")));
+}
+
 // ---------------------------------------------------------------- e-hentai 즐겨찾기 만화
 function ehLoginForm(inApp) {
   const user = h("input", { type: "text", placeholder: "아이디", autocomplete: "username" });
@@ -1163,9 +1229,10 @@ function openReader(g, start) {
   const pages = [];
   const list = h("div", { class: "rpages" });
   const drawCounter = () => (counter.textContent = `${current} / ${g.pages}`);
+  const progressBody = () => ({ gid: g.gid, page: current, token: g.token, title: g.title_jpn || g.title, thumb: g.thumb, pages: g.pages });
   const saveProgress = () => {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => api("eh/progress", { method: "POST", body: { gid: g.gid, page: current } }).catch(() => {}), 800);
+    saveTimer = setTimeout(() => api("eh/progress", { method: "POST", body: progressBody() }).catch(() => {}), 800);
   };
   const load = (i) => {
     const pg = pages[i];
@@ -1195,7 +1262,7 @@ function openReader(g, start) {
     if (closed) return;
     closed = true; near.disconnect(); mid.disconnect(); el.remove(); document.body.style.overflow = "";
     window.removeEventListener("popstate", onPop);
-    api("eh/progress", { method: "POST", body: { gid: g.gid, page: current } }).catch(() => {}).then(() => route());
+    api("eh/progress", { method: "POST", body: progressBody() }).catch(() => {}).then(() => route());
   };
   const onPop = () => close();
   const bar = h("div", { class: "vtop" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, icon("close")), counter, h("span", { style: "width:40px" }));
