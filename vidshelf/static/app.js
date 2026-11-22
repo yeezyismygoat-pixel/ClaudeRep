@@ -2742,13 +2742,11 @@ function libIcon(name) {
 async function renderLibraryHub() {
   setTab("library");
   if (!Object.keys(serverCaps).length) serverCaps = await api("settings").catch(() => ({}));
-  const favN = h("span", {}, "…");
   const cloudN = (serverCaps.mega || []).length + (serverCaps.icloud || []).length;
   const row = (href, icon, title, sub) => h("a", { href }, setIcon(icon), h("div", { class: "set-text" }, h("div", { class: "set-title" }, title), sub ? h("div", { class: "meta" }, sub) : null), h("span", { class: "chev", "aria-hidden": "true" }, "›"));
   $app.replaceChildren(h("div", { class: "libhub" },
-    h("h2", { class: "set-group-title" }, "모아 보기"),
+    h("h2", { class: "set-group-title" }, "기록"),
     h("div", { class: "lib-list set-list" },
-      row("#/media?fav=1", "heart", "즐겨찾기", favN),
       row("#/stats", "info", "시청 기록 · 통계", "최근 본 영상 · 시청 시간 · 많이 본 출연자")),
     h("h2", { class: "set-group-title" }, "파일"),
     h("div", { class: "lib-list set-list" },
@@ -2757,7 +2755,6 @@ async function renderLibraryHub() {
       serverCaps.hidden_count !== undefined ? row("#/hidden", "info", "숨긴 영상", `${serverCaps.hidden_count}개`) : null),
     h("h2", { class: "set-group-title" }, "앱"),
     h("div", { class: "lib-list set-list" }, row("#/settings", "gear", "설정", "화면 · 폴더 · 클라우드 · 백업 · 비밀번호"))));
-  api("media?type=all&fav=1&per=1").then((d) => (favN.textContent = `${d.total.toLocaleString()}개`)).catch(() => {});
 }
 
 /** 탐색: 출연자를 큰 카드로 쭉 (장면 3장), 위쪽 검색·필터는 미디어 탭처럼 떠 있음. 태그·나이로 거르기 */
