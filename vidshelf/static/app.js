@@ -108,6 +108,35 @@ document.addEventListener("click", (e) => {
 try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme); } catch (e) {}
 applyTheme();
 
+/** 길게 누르면 즐겨찾기 추가/해제 (기기 파일은 갤러리 즐겨찾기에도 반영) */
+function longPressFav(el, it) {
+  let timer = null, sx = 0, sy = 0, fired = false;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  el.addEventListener("touchstart", (e) => {
+    fired = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    timer = setTimeout(async () => {
+      timer = null; fired = true;
+      try { navigator.vibrate && navigator.vibrate(18); } catch (er) {}
+      const fav = !it.favorite;
+      try {
+        await api(`${it.kind === "photo" ? "photos" : "videos"}/${it.id}`, { method: "PATCH", body: { favorite: fav } });
+        it.favorite = fav ? 1 : 0;
+        let mark = el.querySelector(".sq-fav, .badge.fav");
+        if (fav && !mark) { mark = h("span", { class: "sq-fav", "aria-label": "즐겨찾기" }, "♥"); (el.querySelector(".tile-img, .thumb") || el).append(mark); }
+        if (!fav && mark) mark.remove();
+        el.classList.remove("fav-pop"); void el.offsetWidth; el.classList.add("fav-pop");
+        toast(fav ? "♥ 즐겨찾기에 넣었습니다" : "즐겨찾기에서 뺐습니다");
+      } catch (er) { toast(er.message); }
+    }, 520);
+  }, { passive: true });
+  el.addEventListener("touchmove", (e) => { if (timer && Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 10) cancel(); }, { passive: true });
+  el.addEventListener("touchend", cancel);
+  el.addEventListener("touchcancel", cancel);
+  el.addEventListener("contextmenu", (e) => e.preventDefault());
+  el.addEventListener("click", (e) => { if (fired) { e.preventDefault(); e.stopImmediatePropagation(); fired = false; } }, true);   // 길게 누른 뒤에는 열지 않음
+  return el;
+}
+
 /** 목록 끝이 화면에 가까워지면 다음 목록을 자동으로 불러옴 (‘더 보기’ 버튼 대신) */
 function autoMore(moreEl, loadNext) {
   const mark = h("div", { class: "auto-more", "aria-hidden": "true" }, h("i", { class: "spin" }));
@@ -530,9 +559,9 @@ async function renderMedia(params0, type0) {
         if (it.kind === "photo") {
           const i = photos.length;
           photos.push(it);
-          grid.append(mode === "wall" ? photoCell(it, "wall", () => openViewer(photos, i)) : sqCell(it, () => openViewer(photos, i)));
+          grid.append(longPressFav(mode === "wall" ? photoCell(it, "wall", () => openViewer(photos, i)) : sqCell(it, () => openViewer(photos, i)), it));
         } else {
-          grid.append(mode === "wall" ? videoTile(it) : sqCell(it, null));
+          grid.append(longPressFav(mode === "wall" ? videoTile(it) : sqCell(it, null), it));
         }
       }
       const shown = (page - 1) * d.per + d.items.length;
@@ -1259,6 +1288,7 @@ async function renderSettings(opts = {}) {
 
   $app.replaceChildren(h("div", { class: "settings" },
     themePanel(),
+    st.fav_sync !== undefined ? favSyncPanel(st) : null,
     h("div", { class: "panel" }, h("h3", {}, "라이브러리"),
       h("div", { class: "stats" },
         h("div", { class: "stat" }, h("b", {}, (c.total || 0).toLocaleString()), h("span", {}, "영상")),
@@ -1761,6 +1791,18 @@ async function renderLibraryHub() {
   api("tags").then((l) => (tagSub.textContent = `${l.length}개`)).catch(() => {});
 }
 
+function favSyncPanel(st) {
+  return h("div", { class: "panel" }, h("h3", {}, "즐겨찾기 연동"),
+    h("p", { class: "meta" }, st.fav_sync
+      ? "이 기기의 사진·영상은 갤러리(안드로이드)의 즐겨찾기와 서로 맞춰집니다. 갤러리에서 바꾸면 앱을 열 때 반영되고, 앱에서 바꾸면 갤러리에도 반영됩니다."
+      : "안드로이드 11 이상에서만 갤러리 즐겨찾기와 연동됩니다. 이 기기에서는 앱 안에서만 즐겨찾기가 저장됩니다."),
+    h("p", { class: "meta" }, "MEGA·iCloud 항목은 공유 링크가 읽기 전용이라, 즐겨찾기가 앱 안에만 저장됩니다. 목록이나 홈에서 사진·영상을 길게 누르면 즐겨찾기에 넣거나 뺄 수 있습니다."),
+    st.fav_sync && st.manage_media_supported ? (st.manage_media
+      ? h("p", { class: "meta" }, "✓ ‘미디어 관리’ 권한이 켜져 있어 확인 창 없이 바로 반영됩니다.")
+      : h("div", {}, h("p", { class: "meta" }, "지금은 앱에서 즐겨찾기를 바꿀 때마다 안드로이드가 확인 창을 띄웁니다. 아래 버튼으로 ‘미디어 관리’ 권한을 켜면 묻지 않고 바로 반영됩니다."),
+          h("a", { class: "btn", href: "vidshelf://manage-media" }, "‘미디어 관리’ 권한 켜기"))) : null);
+}
+
 function themePanel() {
   const seg = h("div", { class: "theme-seg", role: "group", "aria-label": "화면 테마" });
   const draw = () => seg.replaceChildren(...[["system", "시스템 설정"], ["light", "라이트"], ["dark", "다크"]].map(([v, l]) =>
@@ -1789,7 +1831,7 @@ async function renderHome() {
   const stats = h("div", { class: "meta" });
   const resume = shelf("이어 보기", "#/?sort=played", "vids");
   const recent = shelf("최근 추가된 영상", "#/?sort=added", "vids");
-  const favs = shelf("즐겨찾기 영상", "#/?fav=1", "vids");
+  const favs = shelf("즐겨찾기", "#/media?fav=1", "favs");
   const photos = shelf("최근 사진", "#/photos", "photos");
   const people = shelf("출연자", "#/performers", "people");
   $app.replaceChildren(h("div", { class: "home" },
@@ -1809,7 +1851,19 @@ async function renderHome() {
       resume.fill(d.items.filter((v) => v.resume_pos > 5 && v.duration && v.resume_pos < v.duration - 10).slice(0, 12).map(small));
     }),
     api("videos?sort=added&order=desc&per=15").then((d) => recent.fill(d.items.map(small))),
-    api("videos?fav=1&sort=random&seed=" + (Date.now() % 100000) + "&per=15").then((d) => favs.fill(d.items.map(small))),
+    api("media?type=all&fav=1&sort=added&order=desc&per=24").then((d) => {   // 영상과 사진 모두
+      const photos = d.items.filter((x) => x.kind === "photo");
+      favs.fill(d.items.map((it) => {
+        const isPhoto = it.kind === "photo";
+        const img = h("img", { loading: "lazy", alt: it.title || "", src: isPhoto ? `/photothumb/${it.id}.jpg` : it.thumbs > 0 ? thumbUrl(it.id, 0, it.thumbs) : null });
+        img.onerror = () => (img.hidden = true);
+        const kids = [img, !isPhoto ? h("span", { class: "sq-dur" }, "▶ " + (it.duration ? fmtDur(it.duration) : "")) : null];
+        const cell = isPhoto
+          ? h("button", { class: "sq", "aria-label": it.title || "사진", onclick: () => openViewer(photos, photos.indexOf(it)) }, ...kids)
+          : h("a", { class: "sq", href: `#/v/${it.id}`, "aria-label": it.title || "영상" }, ...kids);
+        return longPressFav(cell, it);
+      }));
+    }),
     api("performers").then((list) => {
       counts.people = list.length; drawStats();
       people.fill(list.filter((p) => p.count || p.photo_count).sort((a, b) => (b.count + b.photo_count) - (a.count + a.photo_count)).slice(0, 20)

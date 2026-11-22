@@ -53,12 +53,30 @@ public class MainActivity extends Activity {
     private int loadedPort = -1;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable watcher = this::watchServer;
-    private static final int REQ_FILE = 7;
+    private static final int REQ_FILE = 7, REQ_FAV = 8;
+    private static volatile MainActivity current;
+
+    /** 기기 갤러리 즐겨찾기 바꾸기. ‘미디어 관리’ 권한이 있으면 바로, 없으면 안드로이드가 한 번 묻습니다. */
+    static void requestFavorite(Uri uri, boolean fav) {
+        MainActivity a = current;
+        if (a == null || Build.VERSION.SDK_INT < 30) return;
+        a.ui.post(() -> {
+            try {
+                android.app.PendingIntent pi = MediaStore.createFavoriteRequest(a.getContentResolver(), java.util.Collections.singletonList(uri), fav);
+                a.startIntentSenderForResult(pi.getIntentSender(), REQ_FAV, null, 0, 0, 0);
+            } catch (Exception ignored) {
+            }
+        });
+    }
     private android.webkit.ValueCallback<Uri[]> fileCallback;
 
     @Override
     protected void onActivityResult(int req, int result, android.content.Intent data) {
         super.onActivityResult(req, result, data);
+        if (req == REQ_FAV) {   // 갤러리 쪽 결과를 다시 읽어 앱과 맞춤 (취소했으면 원래대로)
+            new Thread(() -> Library.get(this).scan()).start();
+            return;
+        }
         if (req != REQ_FILE || fileCallback == null) return;
         Uri u = result == RESULT_OK && data != null ? data.getData() : null;
         fileCallback.onReceiveValue(u == null ? null : new Uri[]{u});
@@ -78,6 +96,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        current = this;
+        new Thread(() -> Library.get(this).scan()).start();   // 갤러리에서 바꾼 즐겨찾기 반영
         if (!hasVideoPermission()) {
             showPermissionScreen();
             return;
@@ -98,6 +118,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        if (current == this) current = null;
         ui.removeCallbacks(watcher);
         if (web != null) web.onPause();
     }
@@ -147,6 +168,11 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
                 Uri u = req.getUrl();
+                if ("vidshelf".equals(u.getScheme()) && "manage-media".equals(u.getHost()) && Build.VERSION.SDK_INT >= 31) {
+                    // ‘미디어 관리’ 권한 화면 (켜 두면 즐겨찾기를 바꿀 때마다 묻지 않음)
+                    try { startActivity(new android.content.Intent(android.provider.Settings.ACTION_REQUEST_MANAGE_MEDIA, Uri.parse("package:" + getPackageName()))); } catch (Exception ignored) {}
+                    return true;
+                }
                 // 앱 서버 주소만 앱 안에서 열고, 그 밖의 주소는 열지 않음
                 return !("127.0.0.1".equals(u.getHost()) || "localhost".equals(u.getHost()));
             }

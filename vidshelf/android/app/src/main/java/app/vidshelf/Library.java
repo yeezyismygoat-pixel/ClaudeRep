@@ -74,6 +74,7 @@ public class Library implements HttpServer.Handler {
         double duration;
         int width, height;
         Uri uri;
+        boolean sysFav;      // 기기 갤러리(안드로이드)의 즐겨찾기
         Mega.Link link;      // MEGA 영상이면 설정됨
         Mega.Node node;
         ICloud.Album album;  // iCloud 공유 앨범 항목이면 설정됨
@@ -646,7 +647,8 @@ public class Library implements HttpServer.Handler {
                 MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME, MediaStore.Video.Media.RELATIVE_PATH,
                 MediaStore.Video.Media.SIZE, MediaStore.Video.Media.DURATION, MediaStore.Video.Media.WIDTH,
                 MediaStore.Video.Media.HEIGHT, MediaStore.Video.Media.DATE_ADDED, MediaStore.Video.Media.DATE_MODIFIED,
-                MediaStore.Video.Media.MIME_TYPE, android.os.Build.VERSION.SDK_INT >= 30 ? MediaStore.MediaColumns.ORIENTATION : MediaStore.Video.Media._ID};
+                MediaStore.Video.Media.MIME_TYPE, android.os.Build.VERSION.SDK_INT >= 30 ? MediaStore.MediaColumns.ORIENTATION : MediaStore.Video.Media._ID,
+                android.os.Build.VERSION.SDK_INT >= 30 ? MediaStore.MediaColumns.IS_FAVORITE : MediaStore.Video.Media._ID};
         try (Cursor c = ctx.getContentResolver().query(base, proj, null, null, null)) {
             if (c != null) {
                 while (c.moveToNext()) {
@@ -666,6 +668,7 @@ public class Library implements HttpServer.Handler {
                         int t = v.width; v.width = v.height; v.height = t;
                     }
                     v.uri = ContentUris.withAppendedId(base, v.id);
+                    v.sysFav = android.os.Build.VERSION.SDK_INT >= 30 && c.getInt(11) == 1;
                     v.key = v.relPath + v.name + "|" + v.size;
                     list.add(v);
                 }
@@ -707,7 +710,8 @@ public class Library implements HttpServer.Handler {
                 MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.RELATIVE_PATH,
                 MediaStore.Images.Media.SIZE, MediaStore.Images.Media.WIDTH, MediaStore.Images.Media.HEIGHT,
                 MediaStore.Images.Media.DATE_ADDED, MediaStore.Images.Media.DATE_TAKEN, MediaStore.Images.Media.MIME_TYPE,
-                MediaStore.Images.Media.ORIENTATION};
+                MediaStore.Images.Media.ORIENTATION,
+                android.os.Build.VERSION.SDK_INT >= 30 ? MediaStore.MediaColumns.IS_FAVORITE : MediaStore.Images.Media._ID};
         try (Cursor c = ctx.getContentResolver().query(base, proj, null, null, null)) {
             if (c != null) {
                 while (c.moveToNext()) {
@@ -724,6 +728,7 @@ public class Library implements HttpServer.Handler {
                     v.taken = c.getLong(7) > 0 ? c.getLong(7) / 1000 : v.dateAdded;
                     v.mime = c.getString(8);
                     v.uri = ContentUris.withAppendedId(base, mid);
+                    v.sysFav = android.os.Build.VERSION.SDK_INT >= 30 && c.getInt(10) == 1;
                     v.key = v.relPath + v.name + "|" + v.size;
                     list.add(v);
                 }
@@ -754,6 +759,41 @@ public class Library implements HttpServer.Handler {
         allPhotos = list;
         photoById.clear();
         for (Video v : list) photoById.put(v.id, v);
+        syncGalleryFavorites();
+    }
+
+    // ------------------------------------------------------------------ 갤러리 즐겨찾기 연동
+    /** 갤러리에서 즐겨찾기를 바꾼 항목은 앱에도 반영. (마지막으로 본 갤러리 값과 다를 때만 — 앱에서 바꾼 값을 덮어쓰지 않도록) */
+    private synchronized void syncGalleryFavorites() {
+        if (android.os.Build.VERSION.SDK_INT < 30) return;
+        boolean changed = false;
+        List<Video> local = new ArrayList<>(all);
+        local.addAll(allPhotos);
+        for (Video v : local) {
+            if (v.cloud() || v.uri == null) continue;
+            JSONObject m = meta(v);
+            boolean seen = m.optBoolean("sys_fav_seen", false);
+            if (v.sysFav == seen && m.has("sys_fav_seen")) continue;
+            try {
+                if (!m.has("sys_fav_seen") && !v.sysFav) { m.put("sys_fav_seen", false); changed = true; continue; }   // 처음: 앱 값 유지
+                m.put("favorite", v.sysFav);
+                m.put("sys_fav_seen", v.sysFav);
+                changed = true;
+            } catch (JSONException ignored) {}
+        }
+        if (changed) save();
+    }
+
+    /** 앱에서 즐겨찾기를 바꾸면 기기 갤러리에도 반영 (안드로이드 11 이상, 기기 파일만). */
+    private void pushGalleryFavorite(Video v, boolean fav) {
+        if (android.os.Build.VERSION.SDK_INT < 30 || v.cloud() || v.uri == null) return;
+        try { meta(v).put("sys_fav_seen", fav); } catch (JSONException ignored) {}
+        v.sysFav = fav;
+        MainActivity.requestFavorite(v.uri, fav);
+    }
+
+    static boolean canManageMedia(Context ctx) {
+        return android.os.Build.VERSION.SDK_INT >= 31 && MediaStore.canManageMedia(ctx);
     }
 
     /** iCloud 공유 앨범의 영상(videos=true) 또는 사진을 목록에 넣음 */
@@ -1349,6 +1389,8 @@ public class Library implements HttpServer.Handler {
                 .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
                 .put("mega_supported", true).put("mega", megaJson()).put("icloud", icloudJson())
                 .put("server", serverJson()).put("performer_info", true).put("photos", true)
+                .put("fav_sync", android.os.Build.VERSION.SDK_INT >= 30).put("manage_media", canManageMedia(ctx))
+                .put("manage_media_supported", android.os.Build.VERSION.SDK_INT >= 31)
                 .put("duplicates", true).put("backup", true).put("mega_refresh_hours", megaRefreshHours())
                 .put("mega_last_refresh", lastMegaRefresh / 1000).put("hidden_count", hiddenCount()).put("mega_thumbs", megaThumbsOn())
                 .put("mega_thumb_missing", megaThumbMissing()[0]).put("mega_thumb_failed", megaThumbMissing()[1]);
@@ -1524,7 +1566,7 @@ public class Library implements HttpServer.Handler {
                         JSONObject b = body(r);
                         if (b.has("title")) meta.put("title", b.optString("title"));
                         if (b.has("rating")) meta.put("rating", Math.max(0, Math.min(5, b.optInt("rating"))));
-                        if (b.has("favorite")) meta.put("favorite", b.optBoolean("favorite"));
+                        if (b.has("favorite")) { meta.put("favorite", b.optBoolean("favorite")); pushGalleryFavorite(v, b.optBoolean("favorite")); }
                         if (b.has("details")) meta.put("details", b.optString("details"));
                         if (b.has("tags")) setLinks(meta, "tags", b.optJSONArray("tags"));
                         if (b.has("performers")) setLinks(meta, "performers", b.optJSONArray("performers"));
@@ -1623,7 +1665,7 @@ public class Library implements HttpServer.Handler {
                 if (m.equals("GET")) { res.json(200, photoDetail(v).toString()); return; }
                 if (m.equals("PATCH")) {
                     JSONObject b = body(r), meta = meta(v);
-                    if (b.has("favorite")) meta.put("favorite", b.optBoolean("favorite"));
+                    if (b.has("favorite")) { meta.put("favorite", b.optBoolean("favorite")); pushGalleryFavorite(v, b.optBoolean("favorite")); }
                     if (b.has("rating")) meta.put("rating", Math.max(0, Math.min(5, b.optInt("rating"))));
                     if (b.has("performers")) setLinks(meta, "performers", b.optJSONArray("performers"));
                     if (b.has("tags")) setLinks(meta, "tags", b.optJSONArray("tags"));

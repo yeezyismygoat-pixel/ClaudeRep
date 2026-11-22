@@ -639,3 +639,11 @@ body.shorts-mode #app { position: fixed; inset: 0; z-index: 1; }
 #cloud-settings { scroll-margin-top: 16px; }
 .panel.flash { animation: flash 1.4s ease; }
 @keyframes flash { 0%, 40% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+/* 홈 즐겨찾기 줄 (영상·사진 정사각형) */
+.shelf-row.favs > * { width: 116px; }
+.shelf-row.favs .sq { border-radius: 14px; }
+/* 길게 눌러 즐겨찾기 했을 때 */
+.fav-pop { animation: favPop .42s var(--ease); }
+@keyframes favPop { 0% { transform: scale(1); } 35% { transform: scale(.92); } 70% { transform: scale(1.04); } 100% { transform: scale(1); } }
+.sq, .tile, .pcard { -webkit-user-select: none; user-select: none; }
