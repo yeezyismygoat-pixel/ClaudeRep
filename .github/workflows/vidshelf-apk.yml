@@ -30,12 +30,21 @@ jobs:
       - name: Restore signing key
         uses: actions/cache@v4
         with:
-          path: ~/.android/debug.keystore
-          key: vidshelf-debug-keystore-v1
+          path: ~/vidshelf-signing
+          key: vidshelf-signing-v1
+
+      - name: Create signing key (first run only)
+        run: |
+          mkdir -p ~/vidshelf-signing
+          if [ ! -f ~/vidshelf-signing/vidshelf.jks ]; then
+            keytool -genkeypair -keystore ~/vidshelf-signing/vidshelf.jks -storepass vidshelf -keypass vidshelf \
+              -alias vidshelf -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=VidShelf"
+          fi
+          keytool -list -v -keystore ~/vidshelf-signing/vidshelf.jks -storepass vidshelf | grep -m1 SHA256
 
       - name: Build APK
         working-directory: vidshelf/android
-        run: gradle --no-daemon assembleDebug
+        run: VIDSHELF_KEYSTORE=$HOME/vidshelf-signing/vidshelf.jks gradle --no-daemon assembleDebug
 
       - name: Rename
         run: cp vidshelf/android/app/build/outputs/apk/debug/app-debug.apk VidShelf.apk

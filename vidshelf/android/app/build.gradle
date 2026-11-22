@@ -2,6 +2,9 @@ plugins {
     id "com.android.application"
 }
 
+// CI 에서 고정된 서명 키를 쓰면 새 버전을 덮어 설치할 수 있음 (VIDSHELF_KEYSTORE 가 없으면 기본 디버그 키)
+def stableKeystore = System.getenv("VIDSHELF_KEYSTORE")
+
 android {
     namespace "app.vidshelf"
     compileSdk 34
@@ -10,8 +13,8 @@ android {
         applicationId "app.vidshelf"
         minSdk 29
         targetSdk 34
-        versionCode 2
-        versionName "1.1"
+        versionCode 3
+        versionName "1.2"
     }
 
     compileOptions {
@@ -24,8 +27,22 @@ android {
         main.assets.srcDirs += ["../../static"]
     }
 
+    signingConfigs {
+        if (stableKeystore) {
+            stable {
+                storeFile file(stableKeystore)
+                storePassword "vidshelf"
+                keyAlias "vidshelf"
+                keyPassword "vidshelf"
+            }
+        }
+    }
+
     buildTypes {
-        debug { minifyEnabled false }
+        debug {
+            minifyEnabled false
+            if (stableKeystore) signingConfig signingConfigs.stable
+        }
     }
     lint { abortOnError false }
 }
