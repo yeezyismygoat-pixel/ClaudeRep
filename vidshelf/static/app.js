@@ -178,7 +178,7 @@ async function route() {
     if (path === "/tags") return await renderEntities("tags", "태그", "tag");
     if (path === "/performers") return await renderEntities("performers", "출연자", "performer");
     if (path === "/performer") return await renderPerformer(+params.get("id"));
-    if (path === "/settings") return await renderSettings();
+    if (path === "/settings") return await renderSettings({ section: params.get("section") });
     if (path === "/mega") return await renderMega(params);
     if (path === "/cloud") return await renderCloud();
     if (path === "/icloud") return await renderICloudAlbum(+params.get("a") || 0);
@@ -375,6 +375,15 @@ function finishTabSwipe() {
     $app.style.transform = `translateX(${dx}px)`;
     $app.style.opacity = String(1 - Math.min(0.35, Math.abs(dx) / W() * 0.5));
   }, { passive: false });
+  // 화면이 손가락 동작을 중간에 가져가면(세로 스크롤 등) 제자리로 돌려놓음
+  document.addEventListener("touchcancel", () => {
+    if (!from || mode !== "h") { from = null; return; }
+    from = null;
+    $app.style.transition = "transform .22s cubic-bezier(.3,.7,.3,1), opacity .22s ease";
+    $app.style.transform = "";
+    $app.style.opacity = "";
+    setTimeout(() => { $app.style.transition = ""; }, 240);
+  });
   document.addEventListener("touchend", () => {
     if (!from || mode !== "h") { from = null; return; }
     const i = TAB_ORDER.indexOf(from);
@@ -1229,7 +1238,7 @@ async function renderEntities(ep, label, filterKey) {
 }
 
 // ---------------------------------------------------------------- settings
-async function renderSettings() {
+async function renderSettings(opts = {}) {
   setTab("settings");
   const [st, status] = await Promise.all([api("settings"), api("status")]);
   const paths = st.library_paths.map((p) => p.path);
@@ -1267,8 +1276,7 @@ async function renderSettings() {
       suggestions ? h("div", { style: "margin-top:12px" }, suggestions) : null,
       status.last_scan ? h("p", { class: "meta" }, `마지막 스캔: ${fmtDate(status.last_scan)}`) : null),
     megaQuotaText(status) ? h("div", { class: "panel warn", style: "font-size:14px" }, megaQuotaText(status)) : null,
-    st.mega_supported ? megaPanel(st.mega || [], st) : null,
-    st.icloud ? icloudPanel(st.icloud) : null,
+    st.mega_supported ? cloudPanel(st) : null,
     h("div", { class: "panel" }, h("h3", {}, "정리"),
       h("p", { class: "meta" }, `찾을 수 없는 파일: ${c.missing || 0}개 (옮겨졌거나 삭제된 파일)`),
       h("button", { class: "btn", disabled: !c.missing, onclick: async () => {
@@ -1294,6 +1302,10 @@ async function renderSettings() {
         h("dt", {}, "데이터 폴더"), h("dd", {}, st.data_dir),
         h("dt", {}, "ffmpeg"), h("dd", {}, st.ffmpeg ? "사용 가능" : "없음 — pkg install ffmpeg"),
         h("dt", {}, "ffprobe"), h("dd", {}, st.ffprobe ? "사용 가능" : "없음 — pkg install ffmpeg")))));
+  if (opts.section === "cloud") {   // ‘클라우드 파일’에서 온 경우 클라우드 칸으로 바로
+    const el = document.getElementById("cloud-settings");
+    if (el) requestAnimationFrame(() => { el.scrollIntoView({ behavior: "smooth", block: "start" }); el.classList.add("flash"); });
+  }
 }
 
 // ---------------------------------------------------------------- 출연자 프로필
@@ -1462,38 +1474,52 @@ function serverPanel(st) {
 }
 
 // ---------------------------------------------------------------- MEGA
-function megaPanel(links, st) {
-  const input = h("input", { type: "text", placeholder: "https://mega.nz/folder/…#…", autocomplete: "off" });
+/** 클라우드 링크 (MEGA 폴더 · iCloud 공유 앨범) — 입력칸 하나, 링크를 보고 알아서 구분 */
+function cloudPanel(st) {
+  const mega = st.mega || [], icloud = st.icloud || [];
+  const input = h("input", { type: "text", placeholder: "MEGA 폴더 또는 iCloud 공유 앨범 링크", autocomplete: "off", "aria-label": "클라우드 링크" });
   const msg = h("p", { class: "meta" });
+  const kindOf = (url) => /mega\.(nz|co\.nz)\//i.test(url) ? "mega" : /icloud\.com\/sharedalbum/i.test(url) ? "icloud" : null;
   const add = async (btn) => {
     const url = input.value.trim();
     if (!url) return;
-    btn.disabled = true; msg.textContent = "MEGA 폴더를 불러오는 중…";
+    const kind = kindOf(url);
+    if (!kind) { msg.textContent = "MEGA 폴더 링크(https://mega.nz/folder/…#…)나 iCloud 공유 앨범 링크(https://www.icloud.com/sharedalbum/#…)만 추가할 수 있습니다."; return; }
+    btn.disabled = true; msg.textContent = kind === "mega" ? "MEGA 폴더를 불러오는 중…" : "iCloud 앨범을 불러오는 중…";
     try {
-      await api("mega", { method: "POST", body: { url } });
-      toast("MEGA 폴더를 추가했습니다"); renderSettings();
+      await api(kind, { method: "POST", body: { url } });
+      toast(kind === "mega" ? "MEGA 폴더를 추가했습니다" : "iCloud 앨범을 추가했습니다");
+      renderSettings({ section: "cloud" });
     } catch (e) { msg.textContent = e.message; btn.disabled = false; }
   };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(addBtn); } });
   const addBtn = h("button", { class: "btn primary", onclick: (e) => add(e.currentTarget) }, "추가");
-  return h("div", { class: "panel" }, h("h3", {}, "클라우드 · MEGA 폴더 링크"),
-    h("p", { class: "meta" }, "MEGA 앱이나 웹에서 폴더 → 공유 → 링크 복사로 만든 링크를 붙여넣으세요. 링크에는 열쇠(# 뒤)가 포함되어야 합니다. 영상은 라이브러리에, 모든 파일은 ‘MEGA 파일 보기’에 나옵니다."),
-    h("ul", { class: "pathlist" }, links.length ? links.map((l) => h("li", {},
-      h("span", { class: "p" }, "☁ " + l.name, h("div", { class: "meta" }, `파일 ${l.files}개 · 영상 ${l.videos}개`),
-        l.error ? h("div", { class: "warn" }, l.error) : null),
-      h("a", { class: "btn sm", href: `#/mega?link=${l.index}` }, "열기"),
-      h("button", { class: "btn sm danger", onclick: async () => {
-        if (!confirm(`‘${l.name}’ MEGA 폴더 연결을 끊을까요? (MEGA 의 파일은 그대로입니다)`)) return;
-        await api(`mega/${l.index}`, { method: "DELETE" }); renderSettings();
-      } }, "제거")))
-      : h("li", { class: "meta" }, "연결된 MEGA 폴더가 없습니다.")),
-    links.length ? h("a", { class: "btn", href: "#/mega", style: "margin-top:4px;display:inline-block" }, "☁ MEGA 파일 보기") : null,
+  const item = (kind, l, sub, open, del) => h("li", {},
+    h("span", { class: "p" }, h("span", { class: "src-badge " + kind }, kind === "mega" ? "MEGA" : "iCloud"), " " + l.name,
+      h("div", { class: "meta" }, sub), l.error ? h("div", { class: "warn" }, l.error) : null),
+    h("a", { class: "btn sm", href: open }, "열기"),
+    h("button", { class: "btn sm danger", onclick: async () => {
+      if (!confirm(`‘${l.name}’ 연결을 끊을까요? (클라우드의 파일은 그대로입니다)`)) return;
+      await api(del, { method: "DELETE" }); renderSettings({ section: "cloud" });
+    } }, "제거"));
+  const rows = [
+    ...mega.map((l) => item("mega", l, `파일 ${l.files}개 · 영상 ${l.videos}개`, `#/mega?link=${l.index}`, `mega/${l.index}`)),
+    ...icloud.map((a) => item("icloud", a, `사진 ${a.photos}장 · 영상 ${a.videos}개`, `#/icloud?a=${a.index}`, `icloud/${a.index}`)),
+  ];
+  return h("div", { class: "panel", id: "cloud-settings" }, h("h3", {}, "클라우드 (MEGA · iCloud)"),
+    h("p", { class: "meta" }, "링크를 붙여넣으면 MEGA 인지 iCloud 인지 알아서 구분해 추가합니다."),
+    h("ul", { class: "pathlist" }, rows.length ? rows : h("li", { class: "meta" }, "연결된 클라우드가 없습니다.")),
     h("div", { class: "taginput" }, input, addBtn),
     msg,
-    links.length && st.mega_thumbs !== undefined ? megaThumbToggle(st) : null,
-    links.length && st.mega_refresh_hours !== undefined ? megaRefreshSelect(st) : null,
-    links.length ? h("button", { class: "btn sm", style: "margin-top:8px", onclick: async (e) => {
-      e.currentTarget.disabled = true; await api("mega/refresh", { method: "POST" }); toast("MEGA 목록을 새로 받았습니다"); renderSettings();
-    } }, "MEGA 목록 새로고침") : null);
+    h("details", { class: "cloud-help" }, h("summary", {}, "링크 만드는 방법"),
+      h("p", { class: "meta" }, "MEGA: 앱이나 웹에서 폴더 → 공유 → 링크 복사. 링크에 열쇠(# 뒤 부분)가 있어야 합니다."),
+      h("p", { class: "meta" }, "iCloud: 아이폰 사진 앱 → 앨범 → 공유 앨범 → 사람 아이콘 → ‘공개 웹사이트’ 켜기 → 링크 복사. iCloud Drive 와 일반 사진 보관함은 로그인이 필요해서 지원하지 않습니다.")),
+    rows.length ? h("a", { class: "btn", href: "#/cloud", style: "margin-top:8px;display:inline-block" }, "☁ 클라우드 파일 보기") : null,
+    mega.length && st.mega_thumbs !== undefined ? megaThumbToggle(st) : null,
+    rows.length && st.mega_refresh_hours !== undefined ? megaRefreshSelect(st) : null,
+    rows.length ? h("button", { class: "btn sm", style: "margin-top:8px", onclick: async (e) => {
+      e.currentTarget.disabled = true; await api("mega/refresh", { method: "POST" }); toast("클라우드 목록을 새로 받았습니다"); renderSettings({ section: "cloud" });
+    } }, "클라우드 목록 새로고침") : null);
 }
 
 function megaRefreshSelect(st) {
@@ -1546,7 +1572,7 @@ async function renderCloud() {
     h("h2", { class: "pf-sec" }, "iCloud 공유 앨범"),
     icloud.length ? h("div", { class: "lib-list" }, icloud.map((a) => row(`#/icloud?a=${a.index}`, " " + a.name, `사진 ${a.photos}장 · 영상 ${a.videos}개`, a.error)))
       : h("p", { class: "meta" }, "연결된 iCloud 공유 앨범이 없습니다."),
-    h("a", { class: "btn", href: "#/settings", style: "margin-top:16px;display:inline-block" }, "설정에서 링크 추가·삭제")));
+    h("a", { class: "btn", href: "#/settings?section=cloud", style: "margin-top:16px;display:inline-block" }, "설정에서 링크 추가·삭제")));
 }
 
 async function renderICloudAlbum(i) {
@@ -1568,29 +1594,6 @@ async function renderICloudAlbum(i) {
     d.items.length ? grid : h("div", { class: "empty" }, "이 앨범은 비어 있습니다.")));
 }
 
-function icloudPanel(albums) {
-  const input = h("input", { type: "text", placeholder: "https://www.icloud.com/sharedalbum/#…", autocomplete: "off" });
-  const msg = h("p", { class: "meta" });
-  const addBtn = h("button", { class: "btn primary", onclick: async (e) => {
-    const url = input.value.trim();
-    if (!url) return;
-    const btn = e.currentTarget;
-    btn.disabled = true; msg.textContent = "iCloud 앨범을 불러오는 중…";
-    try { await api("icloud", { method: "POST", body: { url } }); toast("iCloud 앨범을 추가했습니다"); renderSettings(); }
-    catch (err) { msg.textContent = err.message; btn.disabled = false; }
-  } }, "추가");
-  return h("div", { class: "panel" }, h("h3", {}, "클라우드 · iCloud 공유 앨범"),
-    h("p", { class: "meta" }, "아이폰 사진 앱 → 앨범 → 공유 앨범 → 사람 아이콘 → ‘공개 웹사이트’를 켜면 나오는 링크를 붙여넣으세요. 그 앨범의 사진과 영상이 미디어 탭에 나옵니다. (iCloud Drive 와 일반 사진 보관함은 로그인이 필요해서 지원하지 않습니다)"),
-    h("ul", { class: "pathlist" }, albums.length ? albums.map((a) => h("li", {},
-      h("span", { class: "p" }, " " + a.name, h("div", { class: "meta" }, `사진 ${a.photos}장 · 영상 ${a.videos}개`), a.error ? h("div", { class: "warn" }, a.error) : null),
-      h("a", { class: "btn sm", href: `#/icloud?a=${a.index}` }, "열기"),
-      h("button", { class: "btn sm danger", onclick: async () => {
-        if (!confirm(`‘${a.name}’ iCloud 앨범 연결을 끊을까요? (iCloud 의 사진은 그대로입니다)`)) return;
-        await api(`icloud/${a.index}`, { method: "DELETE" }); renderSettings();
-      } }, "제거")))
-      : h("li", { class: "meta" }, "연결된 iCloud 공유 앨범이 없습니다.")),
-    h("div", { class: "taginput" }, input, addBtn), msg);
-}
 
 async function renderMega(params) {
   setTab("settings");   // MEGA 파일 보기는 설정 안에 있음
