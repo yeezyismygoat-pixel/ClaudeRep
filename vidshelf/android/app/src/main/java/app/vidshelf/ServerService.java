@@ -27,7 +27,7 @@ public class ServerService extends Service {
     /** 실제로 열린 포트. 8899 를 다른 공간(일반 공간 등)의 VidShelf 가 쓰고 있으면 다음 번호를 씀. */
     static volatile int port = PORT;
     static final String ACTION_STOP = "app.vidshelf.STOP";
-    private static final String CHANNEL = "server";
+    private static final String CHANNEL = "server_quiet";
 
     static volatile boolean running = false;
     static volatile String lastError = null;
@@ -83,7 +83,9 @@ public class ServerService extends Service {
                 }
             }
             if (!ok) throw last;
-            getSystemService(NotificationManager.class).notify(1, buildNotification(lan));
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (lan) nm.notify(1, buildNotification(true));   // 주소가 정해진 뒤 알림 내용 갱신
+            else nm.cancel(1);                                 // 앱 안에서만 쓸 때는 알림 없음
             running = true;
             lastError = null;
             acquireLocks(lan);
@@ -96,7 +98,10 @@ public class ServerService extends Service {
     }
 
     private void acquireLocks(boolean lan) {
-        if (wakeLock == null) {
+        if (!lan) {   // 앱을 쓰는 동안만 돌 때는 화면 꺼짐 방지 잠금도 필요 없음 (배터리 절약)
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+            wakeLock = null;
+        } else if (wakeLock == null) {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "vidshelf:server");
             wakeLock.acquire();
@@ -133,21 +138,28 @@ public class ServerService extends Service {
 
     private Notification buildNotification(boolean lan) {
         NotificationManager nm = getSystemService(NotificationManager.class);
-        nm.createNotificationChannel(new NotificationChannel(CHANNEL, "VidShelf 서버", NotificationManager.IMPORTANCE_LOW));
+        nm.deleteNotificationChannel("server");   // 예전(눈에 띄던) 알림 채널 정리
+        // 가장 낮은 중요도: 상태 표시줄 아이콘·소리 없이 알림창 맨 아래에 접힌 한 줄로만 (안드로이드 규칙상 다른 기기 접속 중에는 알림이 꼭 필요)
+        NotificationChannel ch = new NotificationChannel(CHANNEL, "다른 기기 접속", NotificationManager.IMPORTANCE_MIN);
+        ch.setShowBadge(false);
+        nm.createNotificationChannel(ch);
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stop = PendingIntent.getService(this, 1, new Intent(this, ServerService.class).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE);
         String text = "앱을 열어 영상을 보세요";
         List<String> ips = lanAddresses();
         if (lan) text = ips.isEmpty() ? "다른 기기 접속: Wi-Fi 에 연결되어 있지 않습니다" : "다른 기기 접속: http://" + ips.get(0) + ":" + port;
-        return new Notification.Builder(this, CHANNEL)
+        Notification.Builder nb = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle("VidShelf 실행 중 · " + spaceName())
+                .setContentTitle("다른 기기 접속 켜짐" + (userId() == 0 ? "" : " · " + spaceName()))
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setContentIntent(open)
                 .addAction(new Notification.Action.Builder(null, "중지", stop).build())
                 .setOngoing(true)
-                .build();
+                .setShowWhen(false)
+                .setCategory(Notification.CATEGORY_SERVICE);
+        if (Build.VERSION.SDK_INT >= 31) nb.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_DEFERRED);
+        return nb.build();
     }
 
     /** 안드로이드 사용자 번호: 0 = 일반 공간, 그 외(보통 150 이상) = 보안 폴더 등 별도 공간. */
