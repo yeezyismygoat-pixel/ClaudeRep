@@ -699,3 +699,49 @@ body.shorts-mode #app { position: fixed; inset: 0; z-index: 1; }
 .topbar .tabs { background: color-mix(in srgb, var(--nav-bg) 76%, transparent) !important;
   backdrop-filter: blur(16px) saturate(1.4); -webkit-backdrop-filter: blur(16px) saturate(1.4);
   border-color: color-mix(in srgb, var(--nav-border) 70%, transparent) !important; }
+
+/* ---------- 미디어 위쪽: 네모난 판 없이 버튼만 떠 있게, 상태 표시줄과 조금 떨어지게 ---------- */
+.media-bar { top: 10px !important; margin: 0 0 10px !important; padding: 0 !important;
+  background: none !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; border: 0 !important; }
+.media-bar .type-seg, .media-bar .round-btn, .media-bar .fchip, .sel-bar .round-btn, .sel-bar .sel-count, .sel-bar .btn {
+  background: color-mix(in srgb, var(--panel) 76%, transparent) !important;
+  backdrop-filter: blur(14px) saturate(1.4); -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: 0 4px 16px rgba(0,0,0,.08); }
+.media-bar .filter-btn { background: color-mix(in srgb, var(--text) 88%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); box-shadow: 0 4px 16px rgba(0,0,0,.12); }
+.media-bar .fchip { box-shadow: 0 3px 12px rgba(0,0,0,.08); }
+.media-bar .fclear { background: color-mix(in srgb, var(--panel) 70%, transparent); border-radius: 12px; }
+
+/* ---------- 선택 모드 ---------- */
+body.selecting .media-bar-row, body.selecting .media-bar .fchips { display: none !important; }
+.sel-bar { display: flex; align-items: center; gap: 8px; }
+.sel-bar[hidden] { display: none; }
+.sel-count { flex: 1; height: 42px; display: flex; align-items: center; padding: 0 16px; border-radius: 21px; font-size: 15px; gap: 2px; }
+.sel-bar .btn { height: 42px; }
+.sq.sel, .tile.sel .tile-img { outline: 3px solid var(--accent); outline-offset: -3px; }
+.sq::before, .tile .tile-img::before { content: ""; position: absolute; right: 6px; top: 6px; width: 22px; height: 22px; border-radius: 11px; z-index: 2;
+  border: 2px solid #fff; box-sizing: border-box; background: rgba(0,0,0,.25); opacity: 0; transition: opacity .2s ease, background-color .2s ease; }
+body.selecting .sq::before, body.selecting .tile .tile-img::before { opacity: 1; }
+.sq.sel::before, .tile.sel .tile-img::before { background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E") center/14px no-repeat; border-color: var(--accent); }
+.sq.sel img, .tile.sel img { transform: scale(.94); transition: transform .2s var(--ease); }
+body.selecting .topbar .tabs { transform: translateY(calc(100% + 30px)); opacity: 0; pointer-events: none; }
+.sel-actions { position: fixed; left: 16px; right: 16px; bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 45; max-width: 460px; margin: 0 auto;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 6px; border-radius: 26px;
+  background: color-mix(in srgb, var(--nav-bg) 82%, transparent); backdrop-filter: blur(16px) saturate(1.4); -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  border: 1px solid color-mix(in srgb, var(--nav-border) 70%, transparent); box-shadow: var(--shadow); animation: popUp .28s var(--ease) both; }
+.sel-actions[hidden] { display: none; }
+.sel-act { border: 0; background: transparent; color: var(--text); display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0; border-radius: 20px; font-size: 12px; }
+.sel-act .ico { width: 22px; height: 22px; }
+.sel-act:disabled { opacity: .4; }
+.sel-act:active { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.chip.struck { text-decoration: line-through; opacity: .6; }
+.sheet-body input[type=datetime-local] { width: 100%; }
+
+/* ---------- 사진 보기: 갤러리처럼 옆으로 넘기기 ---------- */
+.viewer .stage { overflow: hidden; touch-action: pan-y; display: block !important; }
+.vtrack { display: flex; width: 300%; align-items: center; transform: translateX(-33.3333%); will-change: transform; }
+.vslot { flex: 0 0 33.3333%; display: flex; align-items: center; justify-content: center; min-height: 50vh; }
+.vslot img { display: block; width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+@media (min-aspect-ratio: 1/1) { .vslot { min-height: 100vh; } .vslot img { width: auto; max-width: 100%; max-height: 100vh; } }
+/* 사진 보기 안의 버튼은 항상 어두운 바탕에 흰 글씨 */
+.viewer .btn { background: #23262c; color: #fff; border-color: transparent; }
+.viewer .btn.primary { background: var(--accent); color: var(--accent-ink); }

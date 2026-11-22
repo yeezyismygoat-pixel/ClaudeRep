@@ -108,6 +108,31 @@ document.addEventListener("click", (e) => {
 try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme); } catch (e) {}
 applyTheme();
 
+/** 아래에서 올라오는 창 (뒤로 가기로 닫힘). 돌려주는 close() 로 닫음 */
+function openSheet(title, body, foot) {
+  const sheet = h("section", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title },
+    h("div", { class: "sheet-grip", "aria-hidden": "true" }),
+    h("div", { class: "sheet-head" }, h("h2", {}, title), h("button", { class: "round-btn", "aria-label": "닫기", onclick: () => close() }, icon("close"))),
+    h("div", { class: "sheet-body" }, ...body.filter(Boolean)),
+    foot ? h("div", { class: "sheet-foot" }, ...foot) : null);
+  const shade = h("div", { class: "sheet-shade", onclick: () => close() });
+  let closed = false, after = null;
+  const onPop = () => {
+    if (closed) return;
+    closed = true;
+    window.removeEventListener("popstate", onPop);
+    sheet.classList.add("out"); shade.classList.add("out");
+    setTimeout(() => { sheet.remove(); shade.remove(); document.body.style.overflow = ""; }, 220);
+    if (after) setTimeout(after, 0);
+  };
+  function close(then) { if (closed) return; after = then || null; history.back(); }
+  document.body.append(shade, sheet);
+  document.body.style.overflow = "hidden";
+  history.pushState({ sheet: true }, "");
+  window.addEventListener("popstate", onPop);
+  return close;
+}
+
 /** 길게 누르면 즐겨찾기 추가/해제 (기기 파일은 갤러리 즐겨찾기에도 반영) */
 function longPressFav(el, it) {
   let timer = null, sx = 0, sy = 0, fired = false;
@@ -483,6 +508,7 @@ async function renderMedia(params0, type0) {
   const typeSeg = h("div", { class: "type-seg", role: "tablist", "aria-label": "미디어 종류" }, segInd, ...segBtns);
   const chipsBox = h("div", { class: "fchips" });
   const content = h("div", { class: "mcontent-wrap" });
+  const selHolder = h("div"), actHolder = h("div");   // 선택 모드 막대 자리
 
   function drawHeader() {
     const mode = viewMode("media");
@@ -522,10 +548,11 @@ async function renderMedia(params0, type0) {
 
   $app.replaceChildren(h("div", { class: "media" },
     h("div", { class: "home-head media-title" }, h("div", {}, countLine, h("h1", {}, "미디어"))),
-    h("div", { class: "media-bar" },   // 스크롤해도 위에 떠 있는 반투명 막대
+    h("div", { class: "media-bar" },   // 스크롤해도 위에 떠 있는 버튼들
       h("div", { class: "media-bar-row" }, typeSeg, viewBtn, filterBtn),
+      selHolder,
       chipsBox),
-    content));
+    content, actHolder));
 
 
   api("media?type=video&per=1").then((d) => (typeCounts.video.textContent = d.total.toLocaleString())).catch(() => {});
@@ -545,6 +572,7 @@ async function renderMedia(params0, type0) {
     const base = new URLSearchParams(params);
     base.set("type", type); base.set("sort", sort); base.set("order", order); base.set("per", "60");
     if (sort === "random" && !base.get("seed")) base.set("seed", "7");
+    cells.clear();
     const old = content.firstElementChild;
     if (old) { old.style.minHeight = old.offsetHeight + "px"; old.classList.add("leaving"); }   // 새 목록이 오기 전까지 높이 유지(깜빡임 방지)
     async function load() {
@@ -562,15 +590,157 @@ async function renderMedia(params0, type0) {
         if (it.kind === "photo") {
           const i = photos.length;
           photos.push(it);
-          grid.append(longPressFav(mode === "wall" ? photoCell(it, "wall", () => openViewer(photos, i)) : sqCell(it, () => openViewer(photos, i)), it));
+          grid.append(selectable(mode === "wall" ? photoCell(it, "wall", () => openViewer(photos, i)) : sqCell(it, () => openViewer(photos, i)), it));
         } else {
-          grid.append(longPressFav(mode === "wall" ? videoTile(it) : sqCell(it, null), it));
+          grid.append(selectable(mode === "wall" ? videoTile(it) : sqCell(it, null), it));
         }
       }
       const shown = (page - 1) * d.per + d.items.length;
       if (shown < d.total) autoMore(more, () => { page++; load(); }); else more.replaceChildren();
     }
     await load();
+  }
+
+  // ---- 선택 모드: 길게 누르면 선택, 이어서 누르면 더 고르기, 고른 항목을 한꺼번에 수정
+  const selected = new Map();   // "kind:id" → 항목
+  const keyOf = (it) => `${it.kind}:${it.id}`;
+  const cells = new Map();      // "kind:id" → 칸
+  const selCount = h("b");
+  const selBar = h("div", { class: "sel-bar", hidden: true },
+    h("button", { class: "round-btn", "aria-label": "선택 취소", onclick: () => endSelect() }, icon("close")),
+    h("span", { class: "sel-count" }, selCount, "개 선택"),
+    h("button", { class: "btn sm", onclick: () => { cells.forEach((el, k) => { if (!selected.has(k)) toggleSel(el._item, el); }); } }, "모두 선택"));
+  const act = (label, ico, fn) => { const b = h("button", { class: "sel-act", onclick: fn }); b.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ico}</svg>`; b.append(label); return b; };
+  const actBar = h("div", { class: "sel-actions", hidden: true },
+    act("태그", '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.4"/>', () => editLinks("tags")),
+    act("출연자", '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5"/>', () => editLinks("performers")),
+    act("날짜", '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>', () => editDate()),
+    act("즐겨찾기", '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>', () => editFav()));
+  selHolder.append(selBar);
+  actHolder.append(actBar);
+  let selecting = false;
+  function startSelect() {
+    selecting = true;
+    document.body.classList.add("selecting");
+    selBar.hidden = false; actBar.hidden = false;
+    pageCleanup = () => endSelect(true);
+  }
+  function endSelect(silent) {
+    selecting = false;
+    selected.clear();
+    cells.forEach((el) => el.classList.remove("sel"));
+    document.body.classList.remove("selecting");
+    selBar.hidden = true; actBar.hidden = true;
+    if (!silent) pageCleanup = null;
+  }
+  function toggleSel(it, el) {
+    const k = keyOf(it);
+    if (selected.has(k)) { selected.delete(k); el.classList.remove("sel"); } else { selected.set(k, it); el.classList.add("sel"); }
+    selCount.textContent = selected.size;
+    actBar.querySelectorAll("button").forEach((b) => (b.disabled = !selected.size));
+  }
+  function selectable(el, it) {
+    el._item = it;
+    cells.set(keyOf(it), el);
+    if (selected.has(keyOf(it))) el.classList.add("sel");
+    let timer = null, sx = 0, sy = 0, fired = false;
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    el.addEventListener("touchstart", (e) => {
+      fired = false; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      if (selecting) return;
+      timer = setTimeout(() => {   // 길게 누르면 선택 모드 시작
+        timer = null; fired = true;
+        try { navigator.vibrate && navigator.vibrate(18); } catch (er) {}
+        startSelect(); toggleSel(it, el);
+      }, 480);
+    }, { passive: true });
+    el.addEventListener("touchmove", (e) => { if (timer && Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 10) cancel(); }, { passive: true });
+    el.addEventListener("touchend", cancel);
+    el.addEventListener("touchcancel", cancel);
+    el.addEventListener("contextmenu", (e) => { e.preventDefault(); if (!selecting) { startSelect(); toggleSel(it, el); } });
+    el.addEventListener("click", (e) => {   // 선택 모드에서는 열지 않고 고르기
+      if (fired) { e.preventDefault(); e.stopImmediatePropagation(); fired = false; return; }
+      if (selecting) { e.preventDefault(); e.stopImmediatePropagation(); toggleSel(it, el); }
+    }, true);
+    return el;
+  }
+  const selItems = () => [...selected.values()].map((it) => ({ kind: it.kind, id: it.id }));
+  async function applyBatch(body, msg) {
+    try {
+      const r = await api("batch", { method: "POST", body: { items: selItems(), ...body } });
+      toast(msg.replace("{n}", r.updated));
+      endSelect();
+      update({ anim: "fade" });
+    } catch (e) { toast(e.message); }
+  }
+
+  /** 태그·출연자: 선택한 항목에 붙은 것은 빼고, 새로 넣을 것은 추가 */
+  async function editLinks(field) {
+    const label = field === "tags" ? "태그" : "출연자";
+    const info = await api("batch/info", { method: "POST", body: { items: selItems() } }).catch(() => null);
+    if (!info) return;
+    const remove = new Set(), add = new Set();
+    const curBox = h("div", { class: "chips" });
+    const drawCur = () => curBox.replaceChildren(...(info[field].length ? info[field].map((t) => {
+      const off = remove.has(t.id);
+      return h("button", { class: "chip" + (off ? " struck" : ""), "aria-pressed": off ? "true" : "false",
+        onclick: () => { off ? remove.delete(t.id) : remove.add(t.id); drawCur(); } },
+        (field === "tags" ? "#" : "") + t.name, h("span", { class: "meta" }, ` ${t.count}/${info.total}`), off ? " ✕" : "");
+    }) : [h("span", { class: "meta" }, `선택한 항목에 붙은 ${label}이(가) 없습니다.`)]));
+    const all = field === "tags" ? tags : performers;
+    const addBox = h("div", { class: "chips" });
+    const drawAdd = () => addBox.replaceChildren(...[...add].map((n) => h("span", { class: "chip on" }, (field === "tags" ? "#" : "") + n,
+      h("button", { "aria-label": `${n} 빼기`, onclick: () => { add.delete(n); drawAdd(); } }, "×"))));
+    const listId = "dl-batch-" + field;
+    const input = h("input", { type: "text", list: listId, placeholder: `추가할 ${label} 이름 (Enter)`, "aria-label": `추가할 ${label}` });
+    const addName = () => { input.value.split(",").map((x) => x.trim()).filter(Boolean).forEach((n) => add.add(n)); input.value = ""; drawAdd(); };
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addName(); } });
+    const quick = all.slice().sort((a, b) => ((b.count || 0) + (b.photo_count || 0)) - ((a.count || 0) + (a.photo_count || 0))).slice(0, 12)
+      .map((t) => h("button", { class: "chip", onclick: () => { add.add(t.name); drawAdd(); } }, "+ " + (field === "tags" ? "#" : "") + t.name));
+    drawCur(); drawAdd();
+    const close = openSheet(`${label} 한꺼번에 고치기 · ${selected.size}개`, [
+      h("div", { class: "sheet-sec" }, h("h3", {}, `붙어 있는 ${label} (누르면 빼기)`), curBox),
+      h("div", { class: "sheet-sec" }, h("h3", {}, `추가할 ${label}`), addBox, h("div", { class: "taginput" }, input, h("button", { class: "btn", onclick: addName }, "추가")),
+        h("datalist", { id: listId }, all.map((t) => h("option", { value: t.name }))),
+        quick.length ? h("div", { class: "chips", style: "margin-top:4px" }, ...quick) : null),
+    ], [
+      h("button", { class: "btn", onclick: () => close() }, "취소"),
+      h("button", { class: "btn primary sheet-go", onclick: () => {
+        if (input.value.trim()) addName();
+        if (!add.size && !remove.size) { close(); return; }
+        close(() => applyBatch({ ["add_" + field]: [...add], ["remove_" + field]: [...remove] }, `${label}를 {n}개 항목에 반영했습니다`));
+      } }, "적용"),
+    ]);
+  }
+
+  /** 날짜: 선택한 항목의 날짜를 한꺼번에 바꾸기 (정렬·사진 정보에 쓰임) */
+  function editDate() {
+    const first = [...selected.values()][0] || {};
+    const ts = first.taken || first.added_at || Date.now() / 1000;
+    const d = new Date(ts * 1000), pad = (n) => String(n).padStart(2, "0");
+    const input = h("input", { type: "datetime-local", value: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`, "aria-label": "날짜와 시간" });
+    const close = openSheet(`날짜 바꾸기 · ${selected.size}개`, [
+      h("p", { class: "meta", style: "margin:0" }, "고른 사진·영상의 날짜를 아래 날짜로 바꿉니다. ‘추가한 날짜’ 정렬과 사진의 촬영 날짜에 쓰입니다. 파일 자체는 바뀌지 않습니다."),
+      input,
+      h("button", { class: "btn", onclick: () => close(() => applyBatch({ date: 0 }, "{n}개 항목을 원래 날짜로 되돌렸습니다")) }, "원래 날짜로 되돌리기"),
+    ], [
+      h("button", { class: "btn", onclick: () => close() }, "취소"),
+      h("button", { class: "btn primary sheet-go", onclick: () => {
+        const t = new Date(input.value).getTime();
+        if (!t) { toast("날짜를 고르세요"); return; }
+        close(() => applyBatch({ date: Math.round(t / 1000) }, "{n}개 항목의 날짜를 바꿨습니다"));
+      } }, "적용"),
+    ]);
+  }
+
+  function editFav() {
+    const allFav = [...selected.values()].every((it) => it.favorite);
+    const close = openSheet(`즐겨찾기 · ${selected.size}개`, [
+      h("p", { class: "meta", style: "margin:0" }, "기기 사진·영상은 갤러리 즐겨찾기에도 반영됩니다."),
+    ], [
+      h("button", { class: "btn", onclick: () => close(() => applyBatch({ favorite: false }, "{n}개를 즐겨찾기에서 뺐습니다")) }, "즐겨찾기에서 빼기"),
+      h("button", { class: "btn primary sheet-go", onclick: () => close(() => applyBatch({ favorite: true }, "♥ {n}개를 즐겨찾기에 넣었습니다")) }, allFav ? "이미 모두 즐겨찾기" : "♥ 즐겨찾기에 넣기"),
+    ]);
   }
 
   /** 정사각형 칸: 영상은 ▶ 길이, 즐겨찾기는 ♥ */
@@ -851,8 +1021,8 @@ async function openViewer(items, start) {
   const favBtn = h("button", { class: "vbtn", "aria-label": "즐겨찾기" }, icon("heart"));
   const info = h("div", { class: "vinfo" });
   const input = h("input", { type: "text", list: "dl-viewer-perf", placeholder: "출연자 추가 (Enter)" });
-  const prevBtn = h("button", { onclick: () => show(i - 1) }, icon("prev"), "이전");
-  const nextBtn = h("button", { onclick: () => show(i + 1) }, "다음", icon("next"));
+  const prevBtn = h("button", { onclick: () => slide(-1) }, icon("prev"), "이전");
+  const nextBtn = h("button", { onclick: () => slide(1) }, "다음", icon("next"));
   const close = () => {
     if (closed) return;
     closed = true; el.remove(); document.body.style.overflow = "";
@@ -861,8 +1031,8 @@ async function openViewer(items, start) {
   const onPop = () => close();
   const onKey = (e) => {
     if (document.activeElement === input || document.activeElement === tagInput) return;
-    if (e.key === "ArrowLeft") show(i - 1);
-    else if (e.key === "ArrowRight") show(i + 1);
+    if (e.key === "ArrowLeft") slide(-1);
+    else if (e.key === "ArrowRight") slide(1);
     else if (e.key === "Escape") history.back();
   };
   async function save(patch) {
@@ -902,16 +1072,39 @@ async function openViewer(items, start) {
       h("datalist", { id: "dl-viewer-tag" }, allTags.map((t) => h("option", { value: t.name }))));
     prevBtn.disabled = i === 0; nextBtn.disabled = i === items.length - 1;
   }
+  // ---- 갤러리처럼 넘기기: [이전 | 지금 | 다음] 세 칸을 손가락 따라 옆으로 움직임
+  const slots = [0, 1, 2].map(() => h("div", { class: "vslot" }, h("img", { alt: "", draggable: "false" })));
+  const track = h("div", { class: "vtrack" }, ...slots);
+  const setX = (px, animate) => {
+    track.style.transition = animate ? "transform .3s cubic-bezier(.2,.8,.2,1)" : "none";
+    track.style.transform = `translateX(calc(-33.3333% + ${px}px))`;
+  };
+  const fillSlots = () => {
+    [i - 1, i, i + 1].forEach((k, j) => {
+      const im = slots[j].firstChild, p = items[k];
+      slots[j].style.visibility = p ? "visible" : "hidden";
+      const src = p ? `/photo/${p.id}` : "";
+      if (p && im.getAttribute("src") !== src) im.src = src;
+    });
+  };
   async function show(n) {
     if (n < 0 || n >= items.length) return;
     i = n;
-    const p = items[i];
-    img.src = `/photo/${p.id}`;
+    fillSlots();
+    setX(0, false);
     counter.textContent = `${i + 1} / ${items.length}`;
     el.scrollTop = 0;
-    if (items[i + 1]) new Image().src = `/photo/${items[i + 1].id}`;   // 다음 사진 미리 받기
-    const d = await api(`photos/${p.id}`);
+    if (items[i + 2]) new Image().src = `/photo/${items[i + 2].id}`;   // 그다음 사진도 미리 받기
+    const d = await api(`photos/${items[n].id}`);
     if (i === n) { cur = d; draw(); }
+  }
+  let sliding = false;
+  function slide(dir) {   // 버튼·화살표·밀기: 옆 사진이 미끄러져 들어옴
+    const n = i + dir;
+    if (sliding || n < 0 || n >= items.length) { setX(0, true); return; }
+    sliding = true;
+    setX(-dir * stage.clientWidth, true);
+    setTimeout(() => { sliding = false; show(n); }, 300);
   }
   favBtn.onclick = () => cur && save({ favorite: !cur.favorite });
   tagInput.addEventListener("keydown", (e) => {
@@ -924,14 +1117,31 @@ async function openViewer(items, start) {
     const names = cur.performer_refs.map((x) => x.name).concat(input.value.split(",").map((x) => x.trim()).filter(Boolean));
     input.value = ""; save({ performers: names });
   });
-  const stage = h("div", { class: "stage" }, img);
-  let sx = null, sy = null;
-  stage.addEventListener("touchstart", (e) => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
-  stage.addEventListener("touchend", (e) => {
+  const stage = h("div", { class: "stage" }, track);
+  let sx = null, sy = null, t0 = 0, lock = null, dx = 0;
+  stage.addEventListener("touchstart", (e) => {
+    if (sliding || e.touches.length !== 1) { sx = null; return; }
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; t0 = Date.now(); lock = null; dx = 0;
+  }, { passive: true });
+  stage.addEventListener("touchmove", (e) => {
     if (sx == null) return;
-    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy; sx = null;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) show(dx < 0 ? i + 1 : i - 1);   // 가로로 민 경우만 넘김
-  });
+    const x = e.touches[0].clientX - sx, y = e.touches[0].clientY - sy;
+    if (!lock) { if (Math.abs(x) < 8 && Math.abs(y) < 8) return; lock = Math.abs(x) > Math.abs(y) ? "h" : "v"; }
+    if (lock !== "h") return;
+    e.preventDefault();
+    const edge = (x > 0 && i === 0) || (x < 0 && i === items.length - 1);
+    dx = edge ? x * 0.3 : x;   // 처음·마지막 사진에서는 살짝만 끌림
+    setX(dx, false);
+  }, { passive: false });
+  const endDrag = () => {
+    if (sx == null || lock !== "h") { sx = null; return; }
+    sx = null;
+    const fast = Math.abs(dx) / Math.max(1, Date.now() - t0) > 0.45;
+    if (Math.abs(dx) > stage.clientWidth * 0.22 || (fast && Math.abs(dx) > 30)) slide(dx < 0 ? 1 : -1);
+    else setX(0, true);   // 제자리로
+  };
+  stage.addEventListener("touchend", endDrag);
+  stage.addEventListener("touchcancel", endDrag);
   const el = h("div", { class: "viewer", role: "dialog", "aria-modal": "true" },
     h("div", { class: "vtop" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, icon("close")), counter, favBtn),
     stage, info);

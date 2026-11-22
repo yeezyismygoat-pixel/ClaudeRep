@@ -57,12 +57,12 @@ public class MainActivity extends Activity {
     private static volatile MainActivity current;
 
     /** 기기 갤러리 즐겨찾기 바꾸기. ‘미디어 관리’ 권한이 있으면 바로, 없으면 안드로이드가 한 번 묻습니다. */
-    static void requestFavorite(Uri uri, boolean fav) {
+    static void requestFavorite(java.util.List<Uri> uris, boolean fav) {
         MainActivity a = current;
-        if (a == null || Build.VERSION.SDK_INT < 30) return;
+        if (a == null || Build.VERSION.SDK_INT < 30 || uris.isEmpty()) return;
         a.ui.post(() -> {
             try {
-                android.app.PendingIntent pi = MediaStore.createFavoriteRequest(a.getContentResolver(), java.util.Collections.singletonList(uri), fav);
+                android.app.PendingIntent pi = MediaStore.createFavoriteRequest(a.getContentResolver(), uris, fav);
                 a.startIntentSenderForResult(pi.getIntentSender(), REQ_FAV, null, 0, 0, 0);
             } catch (Exception ignored) {
             }

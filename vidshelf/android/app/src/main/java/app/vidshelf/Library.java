@@ -789,7 +789,88 @@ public class Library implements HttpServer.Handler {
         if (android.os.Build.VERSION.SDK_INT < 30 || v.cloud() || v.uri == null) return;
         try { meta(v).put("sys_fav_seen", fav); } catch (JSONException ignored) {}
         v.sysFav = fav;
-        MainActivity.requestFavorite(v.uri, fav);
+        MainActivity.requestFavorite(java.util.Collections.singletonList(v.uri), fav);
+    }
+
+    // ------------------------------------------------------------------ 날짜 (앱에서 고친 날짜가 있으면 그것을 씀)
+    private long added(Video v) {
+        long d = meta(v).optLong("date_override", 0);
+        return d > 0 ? d : v.dateAdded;
+    }
+
+    private long taken(Video v) {
+        long d = meta(v).optLong("date_override", 0);
+        return d > 0 ? d : v.taken;
+    }
+
+    // ------------------------------------------------------------------ 여러 항목 한꺼번에 고치기
+    private synchronized List<Video> batchItems(JSONArray arr) {
+        if (lastScan == 0) scan();
+        List<Video> out = new ArrayList<>();
+        for (int i = 0; arr != null && i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o == null) continue;
+            Video v = "photo".equals(o.optString("kind")) ? photoById.get(o.optLong("id")) : byId.get(o.optLong("id"));
+            if (v != null) out.add(v);
+        }
+        return out;
+    }
+
+    /** 선택한 항목들에 붙은 태그·출연자와 각각 몇 개에 붙어 있는지 */
+    private synchronized JSONObject batchInfo(List<Video> items) throws JSONException {
+        JSONObject out = new JSONObject();
+        for (String field : new String[]{"tags", "performers"}) {
+            Map<Long, Integer> n = new LinkedHashMap<>();
+            for (Video v : items) {
+                JSONArray ids = meta(v).optJSONArray(field);
+                for (int i = 0; ids != null && i < ids.length(); i++) n.merge(ids.optLong(i), 1, Integer::sum);
+            }
+            JSONArray arr = new JSONArray();
+            JSONObject names = store.optJSONObject(field);
+            for (Map.Entry<Long, Integer> e : n.entrySet()) {
+                String name = names.optString(String.valueOf(e.getKey()), "");
+                if (!name.isEmpty()) arr.put(new JSONObject().put("id", e.getKey()).put("name", name).put("count", e.getValue()));
+            }
+            out.put(field, arr);
+        }
+        return out.put("total", items.size());
+    }
+
+    /** 태그·출연자 추가/빼기, 날짜, 즐겨찾기를 한꺼번에 */
+    private synchronized int batchApply(List<Video> items, JSONObject b) throws JSONException {
+        List<Uri> favUris = new ArrayList<>();
+        boolean fav = b.optBoolean("favorite", false);
+        for (Video v : items) {
+            JSONObject m = meta(v);
+            for (String field : new String[]{"tags", "performers"}) {
+                JSONArray add = b.optJSONArray("add_" + field), remove = b.optJSONArray("remove_" + field);
+                if (add == null && remove == null) continue;
+                Set<Long> ids = new java.util.LinkedHashSet<>();
+                JSONArray cur = m.optJSONArray(field);
+                for (int i = 0; cur != null && i < cur.length(); i++) ids.add(cur.optLong(i));
+                for (int i = 0; remove != null && i < remove.length(); i++) ids.remove(remove.optLong(i));
+                for (int i = 0; add != null && i < add.length(); i++) {
+                    String name = add.optString(i).trim().replaceAll("\\s+", " ");
+                    if (!name.isEmpty()) ids.add(entityId(field, name.length() > 80 ? name.substring(0, 80) : name));
+                }
+                m.put(field, new JSONArray(ids));
+            }
+            if (b.has("date")) {
+                long d = b.optLong("date", 0);
+                if (d > 0) m.put("date_override", d); else m.remove("date_override");
+            }
+            if (b.has("favorite")) {
+                m.put("favorite", fav);
+                if (android.os.Build.VERSION.SDK_INT >= 30 && !v.cloud() && v.uri != null) {
+                    m.put("sys_fav_seen", fav);
+                    v.sysFav = fav;
+                    favUris.add(v.uri);
+                }
+            }
+        }
+        save();
+        if (!favUris.isEmpty()) MainActivity.requestFavorite(favUris, fav);   // 갤러리에는 한 번에 요청
+        return items.size();
     }
 
     static boolean canManageMedia(Context ctx) {
@@ -921,7 +1002,7 @@ public class Library implements HttpServer.Handler {
         int[] wh = dims(v, m);
         return new JSONObject().put("id", v.id).put("title", title(v)).put("width", wh[0]).put("height", wh[1])
                 .put("size", v.size).put("favorite", m.optBoolean("favorite", false) ? 1 : 0).put("rating", m.optInt("rating", 0))
-                .put("performers", performerNames(m)).put("added_at", v.dateAdded).put("taken", v.taken)
+                .put("performers", performerNames(m)).put("added_at", added(v)).put("taken", taken(v))
                 .put("source", v.source());
     }
 
@@ -957,9 +1038,9 @@ public class Library implements HttpServer.Handler {
             switch (sort) {
                 case "title": cmp = Comparator.comparing(v -> title(v).toLowerCase(Locale.ROOT)); break;
                 case "size": cmp = Comparator.comparingLong(v -> v.size); break;
-                case "added": cmp = Comparator.comparingLong(v -> v.dateAdded); break;
+                case "added": cmp = Comparator.comparingLong(v -> added(v)); break;
                 case "rating": cmp = Comparator.comparingInt(v -> meta(v).optInt("rating", 0)); break;
-                default: cmp = Comparator.comparingLong(v -> v.taken);
+                default: cmp = Comparator.comparingLong(v -> taken(v));
             }
             cmp = cmp.thenComparingLong(v -> v.id);
             list.sort(asc ? cmp : cmp.reversed());
@@ -1009,7 +1090,7 @@ public class Library implements HttpServer.Handler {
                 case "duration": cmp = Comparator.comparingDouble(v -> v.node != null ? meta(v).optDouble("duration", 0) : v.duration); break;
                 case "plays": cmp = Comparator.comparingInt(v -> meta(v).optInt("play_count", 0)); break;
                 case "played": cmp = Comparator.comparingLong(v -> meta(v).optLong("last_played", 0)); break;
-                default: cmp = Comparator.comparingLong(v -> v.dateAdded);
+                default: cmp = Comparator.comparingLong(v -> added(v));
             }
             cmp = cmp.thenComparingLong(v -> v.id);
             list.sort(asc ? cmp : cmp.reversed());
@@ -1165,7 +1246,7 @@ public class Library implements HttpServer.Handler {
         o.put("thumbs", v.node != null ? (megaHasThumb(v.node) ? 1 : 0) : v.item != null ? 1 : N_FRAMES);
         o.put("missing", 0);
         o.put("resume_pos", m.optDouble("resume_pos", 0));
-        o.put("added_at", v.dateAdded);
+        o.put("added_at", added(v));
         o.put("performers", performerNames(m));
         return o;
     }
@@ -1276,7 +1357,7 @@ public class Library implements HttpServer.Handler {
                 case "played": cmp = Comparator.comparingLong(v -> meta(v).optLong("last_played", 0)); break;
                 case "mtime": cmp = Comparator.comparingLong(v -> v.dateModified); break;
                 case "resolution": cmp = Comparator.comparingInt(v -> Math.min(v.width, v.height)); break;
-                default: cmp = Comparator.comparingLong(v -> v.dateAdded);
+                default: cmp = Comparator.comparingLong(v -> added(v));
             }
             cmp = cmp.thenComparingLong(v -> v.id);
             list.sort(asc ? cmp : cmp.reversed());
@@ -1933,6 +2014,14 @@ public class Library implements HttpServer.Handler {
             return;
         }
         if (p0.equals("media") && m.equals("GET")) { res.json(200, listMedia(r).toString()); return; }
+        if (p0.equals("batch") && m.equals("POST")) {   // 여러 항목 한꺼번에: /api/batch/info 또는 /api/batch
+            JSONObject b = body(r);
+            List<Video> items = batchItems(b.optJSONArray("items"));
+            if (items.isEmpty()) { res.error(400, "선택한 항목을 찾지 못했습니다"); return; }
+            if (parts.length == 2 && parts[1].equals("info")) { res.json(200, batchInfo(items).toString()); return; }
+            res.json(200, new JSONObject().put("updated", batchApply(items, b)).toString());
+            return;
+        }
         if (p0.equals("hidden") && m.equals("GET")) { res.json(200, hiddenVideos().toString()); return; }
         if (p0.equals("backup") && m.equals("GET")) {
             String day = new java.text.SimpleDateFormat("yyyyMMdd-HHmm", Locale.ROOT).format(new java.util.Date());
