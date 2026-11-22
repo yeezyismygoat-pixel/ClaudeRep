@@ -315,6 +315,11 @@ public class Library implements HttpServer.Handler {
         for (Video v : visible()) if (v.size > 1024 * 1024) bySize.computeIfAbsent(v.size, k -> new ArrayList<>()).add(v);
         List<List<Video>> groups = new ArrayList<>();
         for (List<Video> g : bySize.values()) if (g.size() > 1) groups.add(g);
+        // 사진: 파일 크기와 가로·세로가 모두 같으면 같은 사진으로 봄
+        Map<String, List<Video>> photoKey = new HashMap<>();
+        for (Video v : visiblePhotos()) if (v.size > 20 * 1024) { int[] wh = dims(v, meta(v)); photoKey.computeIfAbsent(v.size + "x" + wh[0] + "x" + wh[1], k -> new ArrayList<>()).add(v); }
+        Set<Long> photoIdsDup = new HashSet<>();
+        for (List<Video> g : photoKey.values()) if (g.size() > 1) { groups.add(g); for (Video v : g) photoIdsDup.add(v.id); }
         groups.sort((a, b) -> Long.compare(b.get(0).size, a.get(0).size));
         JSONArray out = new JSONArray();
         for (List<Video> g : groups) {
@@ -325,7 +330,8 @@ public class Library implements HttpServer.Handler {
             for (Video v : g) {
                 if (v.node != null) mega = true; else local = true;
                 folders.add(v.relPath);
-                items.put(summary(v).put("filename", v.name).put("folder", v.relPath).put("source", v.source()));
+                boolean ph = photoIdsDup.contains(v.id);
+                items.put((ph ? photoSummary(v) : summary(v)).put("kind", ph ? "photo" : "video").put("filename", v.name).put("folder", v.relPath).put("source", v.source()));
             }
             String reason = mega && local ? "이 기기 + MEGA" : folders.size() > 1 ? "여러 폴더" : "같은 폴더";
             out.put(new JSONObject().put("size", g.get(0).size).put("reason", reason).put("items", items));
@@ -336,6 +342,59 @@ public class Library implements HttpServer.Handler {
     // ------------------------------------------------------------------ 출연자 자동 지정 · 정보 찾기
     private final java.util.concurrent.atomic.AtomicBoolean lookupRunning = new java.util.concurrent.atomic.AtomicBoolean();
     private volatile String lookupStatus = "";
+
+    // ------------------------------------------------------------------ 태그 묶음(상위 태그)·다른 이름
+    private synchronized JSONObject tagInfo(long id) throws JSONException {
+        JSONObject all = store.optJSONObject("tag_info");
+        if (all == null) { all = new JSONObject(); store.put("tag_info", all); }
+        JSONObject o = all.optJSONObject(String.valueOf(id));
+        if (o == null) { o = new JSONObject(); all.put(String.valueOf(id), o); }
+        return o;
+    }
+
+    /** 이 태그와 그 아래(하위) 태그들 모두 */
+    private synchronized Set<Long> tagWithChildren(long id) {
+        Set<Long> out = new HashSet<>();
+        out.add(id);
+        JSONObject all = store.optJSONObject("tag_info");
+        if (all == null) return out;
+        boolean grew = true;
+        while (grew) {
+            grew = false;
+            Iterator<String> it = all.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                JSONObject o = all.optJSONObject(k);
+                long par = o == null ? 0 : o.optLong("parent", 0);
+                if (par != 0 && out.contains(par) && out.add(Long.parseLong(k))) grew = true;
+            }
+        }
+        return out;
+    }
+
+    private static boolean hasAny(JSONArray ids, Set<Long> wanted) {
+        for (int i = 0; ids != null && i < ids.length(); i++) if (wanted.contains(ids.optLong(i))) return true;
+        return false;
+    }
+
+    /** 검색에 쓰는 다른 이름들 (태그 이름·태그 다른 이름·사람 다른 이름) */
+    private synchronized String aliasText(JSONObject m) {
+        StringBuilder sb = new StringBuilder();
+        JSONArray tg = m.optJSONArray("tags");
+        JSONObject tagNames = store.optJSONObject("tags"), ti = store.optJSONObject("tag_info"), pi = store.optJSONObject("performer_info");
+        for (int i = 0; tg != null && i < tg.length(); i++) {
+            String k = String.valueOf(tg.optLong(i));
+            sb.append(' ').append(tagNames.optString(k));
+            JSONObject o = ti == null ? null : ti.optJSONObject(k);
+            if (o != null) sb.append(' ').append(o.optString("aliases"));
+        }
+        JSONArray pf = m.optJSONArray("performers");
+        for (int i = 0; pf != null && i < pf.length(); i++) {
+            JSONObject o = pi == null ? null : pi.optJSONObject(String.valueOf(pf.optLong(i)));
+            if (o != null) sb.append(' ').append(o.optString("aliases"));
+        }
+        return sb.toString();
+    }
 
     private synchronized JSONObject performerInfo(long id) throws JSONException {
         JSONObject all = store.optJSONObject("performer_info");
@@ -394,10 +453,15 @@ public class Library implements HttpServer.Handler {
 
     private synchronized JSONObject entityJson(String field, long id) throws JSONException {
         JSONObject o = new JSONObject().put("id", id).put("name", store.optJSONObject(field).optString(String.valueOf(id)));
+        if (field.equals("tags")) {   // 상위 태그·다른 이름
+            JSONObject ti = tagInfo(id);
+            o.put("parent", ti.optLong("parent", 0)).put("aliases", ti.optString("aliases", ""));
+        }
         if (field.equals("performers")) {
             JSONObject info = performerInfo(id);
-            for (String k : new String[]{"group", "real_name", "birthdate", "height", "source", "source_url"})
+            for (String k : new String[]{"group", "real_name", "birthdate", "height", "source", "source_url", "aliases"})
                 o.put(k, info.optString(k, ""));
+            o.put("cover_pick", info.optString("cover", ""));   // 직접 고른 대표 그림 ("video:123" / "photo:456")
             o.put("looked_up", info.has("lookup_at"));
             o.put("lookup_found", info.optBoolean("lookup_found", false));
         }
@@ -795,12 +859,36 @@ public class Library implements HttpServer.Handler {
         return out.put("total", items.size());
     }
 
+    private static final String[] UNDO_KEYS = {"tags", "performers", "date_override", "favorite", "hidden", "organized"};
+    private JSONArray lastUndo = new JSONArray();
+
+    /** 되돌리기: batchApply 가 돌려준 바꾸기 전 상태로 */
+    private synchronized int batchRestore(JSONArray undo) throws JSONException {
+        int n = 0;
+        for (int i = 0; undo != null && i < undo.length(); i++) {
+            JSONObject u = undo.optJSONObject(i);
+            if (u == null) continue;
+            Video v = "photo".equals(u.optString("kind")) ? photoById.get(u.optLong("id")) : byId.get(u.optLong("id"));
+            if (v == null) continue;
+            JSONObject m = meta(v), before = u.optJSONObject("meta");
+            for (String k : UNDO_KEYS) { if (before != null && before.has(k)) m.put(k, before.get(k)); else m.remove(k); }
+            n++;
+        }
+        save();
+        return n;
+    }
+
     /** 태그·출연자 추가/빼기, 날짜, 즐겨찾기를 한꺼번에 */
     private synchronized int batchApply(List<Video> items, JSONObject b) throws JSONException {
         List<Uri> favUris = new ArrayList<>(), delUris = new ArrayList<>();
         boolean fav = b.optBoolean("favorite", false);
+        lastUndo = new JSONArray();   // 되돌리기용: 바꾸기 전 상태
         for (Video v : items) {
             JSONObject m = meta(v);
+            JSONObject before = new JSONObject();
+            for (String k : UNDO_KEYS) if (m.has(k)) before.put(k, m.get(k));
+            lastUndo.put(new JSONObject().put("kind", photoById.get(v.id) == v ? "photo" : "video").put("id", v.id).put("meta", before));
+            if (b.has("organized")) m.put("organized", b.optBoolean("organized"));
             for (String field : new String[]{"tags", "performers"}) {
                 JSONArray add = b.optJSONArray("add_" + field), remove = b.optJSONArray("remove_" + field);
                 if (add == null && remove == null) continue;
@@ -1029,6 +1117,16 @@ public class Library implements HttpServer.Handler {
         String[] words = q.isEmpty() ? new String[0] : q.split("\\s+");
         Set<Long> perfFilter = longs(r.params("performer")), tagFilter = longs(r.params("tag"));
         boolean fav = "1".equals(r.param("fav")), unwatched = "1".equals(r.param("unwatched"));
+        // 태그는 아래(하위) 태그까지 포함, 빼기 조건, 범위 조건, 정리 안 된 항목
+        List<Set<Long>> tagGroups = new ArrayList<>();
+        for (long t : tagFilter) tagGroups.add(tagWithChildren(t));
+        Set<Long> xTags = new HashSet<>();
+        for (long t : longs(r.params("xtag"))) xTags.addAll(tagWithChildren(t));
+        Set<Long> xPerf = longs(r.params("xperformer"));
+        double minDur = parseInt(r.param("min_dur"), 0), maxDur = parseInt(r.param("max_dur"), 0);
+        long from = parseLong(nz(r.param("from")), 0), to = parseLong(nz(r.param("to")), 0);
+        int minH = parseInt(r.param("min_h"), 0), minRating = parseInt(r.param("min_rating"), 0);
+        boolean unorganized = "1".equals(r.param("unorganized"));
         List<Video> list = new ArrayList<>();
         Set<Long> photoIds = new HashSet<>();
         List<Video> src = new ArrayList<>();
@@ -1038,9 +1136,31 @@ public class Library implements HttpServer.Handler {
             JSONObject m = meta(v);
             if (fav && !m.optBoolean("favorite", false)) continue;
             if (unwatched && (photoIds.contains(v.id) || m.optInt("play_count", 0) > 0)) continue;
-            if (!containsAll(m.optJSONArray("performers"), perfFilter) || !containsAll(m.optJSONArray("tags"), tagFilter)) continue;
+            if (!containsAll(m.optJSONArray("performers"), perfFilter)) continue;
+            boolean tagOk = true;
+            for (Set<Long> g : tagGroups) if (!hasAny(m.optJSONArray("tags"), g)) { tagOk = false; break; }
+            if (!tagOk) continue;
+            if (!xTags.isEmpty() && hasAny(m.optJSONArray("tags"), xTags)) continue;
+            if (!xPerf.isEmpty() && hasAny(m.optJSONArray("performers"), xPerf)) continue;
+            boolean isPhoto = photoIds.contains(v.id);
+            if (minDur > 0 || maxDur > 0) {
+                if (isPhoto) continue;
+                double d = v.node != null ? m.optDouble("duration", 0) : v.duration;
+                if (d <= 0 || (minDur > 0 && d < minDur) || (maxDur > 0 && d > maxDur)) continue;
+            }
+            if (from > 0 || to > 0) {
+                long when = taken(v) > 0 ? taken(v) : added(v);
+                if ((from > 0 && when < from) || (to > 0 && when > to)) continue;
+            }
+            if (minH > 0) { int[] wh = dims(v, m); if (Math.min(wh[0], wh[1]) < minH) continue; }
+            if (minRating > 0 && m.optInt("rating", 0) < minRating) continue;
+            if (unorganized) {
+                JSONArray tg = m.optJSONArray("tags"), pf = m.optJSONArray("performers");
+                boolean has = (tg != null && tg.length() > 0) || (pf != null && pf.length() > 0);
+                if (has || m.optBoolean("organized", false)) continue;
+            }
             if (words.length > 0) {
-                String hay = (title(v) + " " + v.relPath + v.name + " " + performerNames(m).join(" ")).toLowerCase(Locale.ROOT);
+                String hay = (title(v) + " " + v.relPath + v.name + " " + performerNames(m).join(" ") + aliasText(m)).toLowerCase(Locale.ROOT);
                 boolean ok = true;
                 for (String w : words) if (!hay.contains(w)) { ok = false; break; }
                 if (!ok) continue;
@@ -1235,6 +1355,8 @@ public class Library implements HttpServer.Handler {
         o.put("favorite", m.optBoolean("favorite", false) ? 1 : 0);
         o.put("source", v.source());
         if (m.optLong("last_played", 0) > 0) o.put("last_played", m.optLong("last_played"));
+        if (m.optBoolean("organized", false)) o.put("organized", true);
+        o.put("taken", taken(v)).put("added_at", added(v));   // 찍은 날(촬영 당시 나이 계산용)
         o.put("play_count", m.optInt("play_count", 0));
         int thumbs = v.node != null ? (megaHasThumb(v.node) ? 1 : 0) : v.item != null ? 1 : N_FRAMES;
         if (thumbs == 0 && coverFile(v).length() > 0) thumbs = 1;   // 직접 정한 썸네일
@@ -1484,11 +1606,14 @@ public class Library implements HttpServer.Handler {
             String k = it.next();
             long id = Long.parseLong(k);
             Video cv = covers.get(id), pc = photoCovers.get(id);
-            JSONObject row = field.equals("performers") ? entityJson(field, id) : new JSONObject().put("id", id).put("name", names.optString(k));
+            JSONObject row = entityJson(field, id);
             out.add(row
                     .put("count", counts.getOrDefault(id, 0)).put("cover", cv == null ? JSONObject.NULL : cv.id)
                     .put("photo_count", photoCounts.getOrDefault(id, 0)).put("photo_cover", pc == null ? JSONObject.NULL : pc.id));
             if (perf) {
+                String cov = row.optString("cover_pick", "");   // 직접 고른 대표 그림: "video:123" 또는 "photo:456"
+                if (cov.startsWith("video:")) row.put("cover", parseLong(cov.substring(6), 0)).put("photo_cover", JSONObject.NULL);
+                else if (cov.startsWith("photo:")) row.put("cover", JSONObject.NULL).put("photo_cover", parseLong(cov.substring(6), 0));
                 List<Video> vs = vidsOf.getOrDefault(id, new ArrayList<>());   // 별점 높은 순 → 최근 순으로 3개
                 vs.sort((a, b) -> {
                     int r = Integer.compare(meta(b).optInt("rating", 0), meta(a).optInt("rating", 0));
@@ -1918,8 +2043,15 @@ public class Library implements HttpServer.Handler {
                     if (b.has("rating")) meta.put("rating", Math.max(0, Math.min(5, b.optInt("rating"))));
                     if (b.has("performers")) setLinks(meta, "performers", b.optJSONArray("performers"));
                     if (b.has("tags")) setLinks(meta, "tags", b.optJSONArray("tags"));
+                    if (b.has("organized")) meta.put("organized", b.optBoolean("organized"));
                     save();
                     res.json(200, photoDetail(v).toString());
+                    return;
+                }
+                if (m.equals("DELETE")) {   // 목록에서 숨기기 (파일은 그대로)
+                    meta(v).put("hidden", true);
+                    save();
+                    res.json(200, "{\"ok\":true}");
                     return;
                 }
             }
@@ -1938,7 +2070,7 @@ public class Library implements HttpServer.Handler {
                     synchronized (this) {
                         if (!store.optJSONObject("performers").has(String.valueOf(id))) { res.error(404, "not found"); return; }
                         JSONObject cur = performerInfo(id);
-                        for (String k : new String[]{"group", "real_name", "birthdate", "height"})
+                        for (String k : new String[]{"group", "real_name", "birthdate", "height", "aliases", "cover"})
                             if (info.has(k)) cur.put(k, info.optString(k, "").trim());
                         save();
                     }
@@ -1956,7 +2088,19 @@ public class Library implements HttpServer.Handler {
                 if (!names.has(key)) { res.error(404, "not found"); return; }
                 if (m.equals("GET")) { res.json(200, entityJson(field, id).toString()); return; }
                 if (m.equals("PATCH")) {
-                    String nn = body(r).optString("name", "").trim().replaceAll("\\s+", " ");
+                    JSONObject pb = body(r);
+                    if (field.equals("tags") && (pb.has("parent") || pb.has("aliases"))) {   // 상위 태그·다른 이름
+                        JSONObject ti = tagInfo(id);
+                        if (pb.has("parent")) {
+                            long par = pb.optLong("parent", 0);
+                            if (par == id || (par != 0 && tagWithChildren(id).contains(par))) { res.error(400, "자기 자신이나 그 아래 태그를 상위 태그로 정할 수 없습니다"); return; }
+                            if (par == 0) ti.remove("parent"); else ti.put("parent", par);
+                        }
+                        if (pb.has("aliases")) ti.put("aliases", pb.optString("aliases", "").trim());
+                        save();
+                        if (!pb.has("name")) { res.json(200, entityJson(field, id).toString()); return; }
+                    }
+                    String nn = pb.optString("name", "").trim().replaceAll("\\s+", " ");
                     if (nn.isEmpty()) { res.error(400, "이름이 비어 있습니다"); return; }
                     Long other = null;
                     Iterator<String> it = names.keys();
@@ -2106,10 +2250,11 @@ public class Library implements HttpServer.Handler {
             JSONObject b = body(r);
             synchronized (this) {
                 if (lastScan == 0) scan();
-                Video keep = byId.get(b.optLong("keep", -1));
+                Map<Long, Video> pool = "photo".equals(b.optString("kind")) ? photoById : byId;   // 사진 중복도 같은 방식
+                Video keep = pool.get(b.optLong("keep", -1));
                 JSONArray oa = b.optJSONArray("others");
                 List<Video> others = new ArrayList<>();
-                for (int i = 0; oa != null && i < oa.length(); i++) { Video o = byId.get(oa.optLong(i)); if (o != null) others.add(o); }
+                for (int i = 0; oa != null && i < oa.length(); i++) { Video o = pool.get(oa.optLong(i)); if (o != null) others.add(o); }
                 if (keep == null || others.isEmpty()) { res.error(400, "영상을 찾지 못했습니다"); return; }
                 mergeInto(keep, others);
             }
@@ -2117,13 +2262,18 @@ public class Library implements HttpServer.Handler {
             return;
         }
         if (p0.equals("media") && m.equals("GET")) { res.json(200, listMedia(r).toString()); return; }
+        if (p0.equals("batch") && parts.length == 2 && parts[1].equals("restore") && m.equals("POST")) {
+            res.json(200, new JSONObject().put("restored", batchRestore(body(r).optJSONArray("undo"))).toString());
+            return;
+        }
         if (p0.equals("batch") && m.equals("POST")) {   // 여러 항목 한꺼번에: /api/batch/info 또는 /api/batch
             JSONObject b = body(r);
             List<Video> items = batchItems(b.optJSONArray("items"));
             if (items.isEmpty()) { res.error(400, "선택한 항목을 찾지 못했습니다"); return; }
             if (parts.length == 2 && parts[1].equals("info")) { res.json(200, batchInfo(items).toString()); return; }
             try {
-                res.json(200, new JSONObject().put("updated", batchApply(items, b)).toString());
+                int n = batchApply(items, b);
+                res.json(200, new JSONObject().put("updated", n).put("undo", lastUndo).toString());
             } catch (JSONException e) {
                 res.error(400, e.getMessage());
             }
@@ -2135,7 +2285,15 @@ public class Library implements HttpServer.Handler {
             synchronized (this) {
                 list = store.optJSONArray("saved_filters");
                 if (list == null) { list = new JSONArray(); store.put("saved_filters", list); }
-                if (m.equals("POST") && parts.length == 3 && parts[2].equals("default")) {   // 기본 필터 지정/해제 (하나만)
+                if (m.equals("POST") && parts.length == 3 && parts[2].equals("home")) {   // 홈 화면 줄로 보이기/숨기기
+                    long id = parseLong(parts[1], -1);
+                    boolean on = body(r).optBoolean("on", true);
+                    for (int i = 0; i < list.length(); i++) {
+                        JSONObject o = list.optJSONObject(i);
+                        if (o != null && o.optLong("id") == id) { if (on) o.put("home", true); else o.remove("home"); }
+                    }
+                    save();
+                } else if (m.equals("POST") && parts.length == 3 && parts[2].equals("default")) {   // 기본 필터 지정/해제 (하나만)
                     long id = parseLong(parts[1], -1);
                     boolean on = body(r).optBoolean("on", true);
                     for (int i = 0; i < list.length(); i++) {
@@ -2150,14 +2308,16 @@ public class Library implements HttpServer.Handler {
                     if (name.isEmpty()) { res.error(400, "이름을 입력하세요"); return; }
                     if (name.length() > 40) name = name.substring(0, 40);
                     JSONArray out = new JSONArray();
-                    boolean wasDefault = false;
-                    for (int i = 0; i < list.length(); i++) {   // 같은 이름은 덮어씀 (기본 필터 표시는 유지)
+                    boolean wasDefault = false, wasHome = false;
+                    for (int i = 0; i < list.length(); i++) {   // 같은 이름은 덮어씀 (기본 필터·홈 표시는 유지)
                         JSONObject o = list.optJSONObject(i);
                         if (o == null) continue;
-                        if (!o.optString("name").equals(name)) out.put(o); else wasDefault = o.optBoolean("default", false);
+                        if (!o.optString("name").equals(name)) out.put(o);
+                        else { wasDefault = o.optBoolean("default", false); wasHome = o.optBoolean("home", false); }
                     }
                     JSONObject nf = new JSONObject();
                     if (wasDefault) nf.put("default", true);
+                    if (wasHome) nf.put("home", true);
                     out.put(nf.put("id", System.currentTimeMillis()).put("name", name)
                             .put("type", b.optString("type", "all")).put("params", b.optString("params", "")));
                     store.put("saved_filters", out);

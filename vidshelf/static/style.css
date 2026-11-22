@@ -1190,3 +1190,20 @@ body.tinted .panel, body.tinted .vcard { background: color-mix(in srgb, var(--pa
 .err-view { display: grid; gap: 6px; justify-items: center; padding-top: 18vh; }
 .err-view .err-title { margin: 0; font-size: 18px; font-weight: 700; color: var(--text); }
 .err-view .meta { margin: 0 0 10px; }
+/* 알림 팝업의 [되돌리기] 버튼 */
+.toast.has-act { display: flex; align-items: center; gap: 12px; text-align: left; }
+.toast.has-act[hidden] { display: none; }
+.toast-act { flex: none; border: 0; background: none; color: #9db4ff; font-weight: 800; padding: 4px 2px; font-size: 14px; }
+.sel-actions { grid-template-columns: none !important; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); max-width: 520px !important; }
+.sel-act { font-size: 11px !important; white-space: nowrap; }
+/* 빼기 조건 */
+.chip.ex, .fchip.ex { background: color-mix(in srgb, var(--danger) 12%, var(--panel)) !important; color: var(--danger) !important; text-decoration: line-through; text-decoration-thickness: 1.5px; }
+.pick-person.ex .pf-avatar { outline: 2.5px solid var(--danger); outline-offset: 2px; filter: grayscale(1) opacity(.6); }
+.pick-person.ex .nm { color: var(--danger); text-decoration: line-through; }
+.tri-hint { margin: -4px 0 0; font-size: 12px; }
+.watch-more { margin-top: 18px; display: grid; gap: 4px; }
+.shot-age { font-size: 12px; color: var(--muted); font-weight: 400; }
+.cover-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.cover-pick { border: 0; padding: 0; border-radius: 12px; overflow: hidden; aspect-ratio: 1; background: var(--panel2); }
+.cover-pick img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cover-pick.on { outline: 3px solid var(--accent); outline-offset: -3px; }
