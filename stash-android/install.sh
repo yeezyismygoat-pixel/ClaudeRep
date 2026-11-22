@@ -29,7 +29,7 @@ export DEBIAN_FRONTEND=noninteractive
 DPKG_OPTS=(-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef)
 apt update
 dpkg --configure -a || true
-apt --fix-broken install -y "${DPKG_OPTS[@]}"
+apt --fix-broken install -y "${DPKG_OPTS[@]}" || true
 apt full-upgrade -y "${DPKG_OPTS[@]}"
 apt install -y "${DPKG_OPTS[@]}" ffmpeg proot ca-certificates curl
 
