@@ -331,3 +331,5 @@ body.shorts-mode main { padding: 0; max-width: none; }
 .sbtn { width: 44px; height: 44px; border-radius: 50%; border: 0; background: rgba(0,0,0,.45); color: #fff; font-size: 20px; display: grid; place-items: center; }
 .sbar-wrap { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.2); }
 .sbar { height: 100%; width: 0; background: var(--accent); }
+/* 가로로 든 태블릿·PC: 숏폼 영상이 잘리지 않게 */
+@media (orientation: landscape) { .short video { object-fit: contain; } }
