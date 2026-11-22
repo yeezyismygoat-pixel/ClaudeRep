@@ -466,7 +466,7 @@ html { scroll-behavior: smooth; }
 @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
 /* 영상 정보 ↔ 수정 화면 전환, 펼쳐지는 패널 */
-.vinfo-box.switch > * { animation: pageIn .28s var(--ease) both; }
+.vinfo-box.swapping > * { animation: pageIn .28s var(--ease) both; }
 details.panel[open] > :not(summary) { animation: pageIn .25s var(--ease) both; }
 .splay { transition: opacity .2s ease, transform .2s var(--ease); transform: scale(.9); }
 .splay.show { transform: none; }
@@ -747,7 +747,7 @@ body.selecting .topbar .tabs { transform: translateY(calc(100% + 30px)); opacity
 .viewer .btn.primary { background: var(--accent); color: var(--accent-ink); }
 
 /* 화면 움직임이 끝나면 효과를 남기지 않음 (남아 있으면 안쪽의 고정 막대가 화면 아래에 붙지 못함) */
-#app.page-in > *, #app.slide-l > *, #app.slide-r > *, .mcontent.in-left, .mcontent.in-right, .mcontent.in-fade, .vinfo-box.switch > * { animation-fill-mode: backwards !important; }
+#app.page-in > *, #app.slide-l > *, #app.slide-r > *, .mcontent.in-left, .mcontent.in-right, .mcontent.in-fade, .vinfo-box.swapping > * { animation-fill-mode: backwards !important; }
 
 /* ---------- 미디어 목록: 유튜브처럼 ---------- */
 .ytfeed { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px 16px; }

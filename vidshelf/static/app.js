@@ -1522,9 +1522,9 @@ async function renderVideo(id, params) {
   }
   const setEditing = (on) => {
     editing = on;
-    infoBox.classList.add("switch");   // 보기 ↔ 수정 전환할 때만 살짝 움직임
+    infoBox.classList.add("swapping");   // 보기 ↔ 수정 전환할 때만 살짝 움직임
     drawInfo();
-    setTimeout(() => infoBox.classList.remove("switch"), 400);
+    setTimeout(() => infoBox.classList.remove("swapping"), 400);
   };
 
   // 장면 (누르면 그 지점으로)
