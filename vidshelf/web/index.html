@@ -515,8 +515,10 @@ function pickButtons(big) {
     h("input", { type: "file", accept: "video/*", multiple: true, id: big ? "pick-files-main" : "pick-files", onchange: onFiles }));
   const dirInput = h("input", { type: "file", multiple: true, id: big ? "pick-dir-main" : "pick-dir", onchange: onFiles });
   dirInput.webkitdirectory = true;
-  const dirBtn = h("label", { class: "btn filebtn" }, "📁 폴더째 고르기", dirInput);
-  const fsBtn = canPickDir() ? h("button", { class: "btn", onclick: pickDirectory }, "📂 폴더 연결 (기억됨)") : null;
+  // 안드로이드 브라우저는 폴더째 선택을 지원하지 않으므로 숨김
+  const android = /Android/i.test(navigator.userAgent);
+  const dirBtn = android ? null : h("label", { class: "btn filebtn" }, "📁 폴더째 고르기", dirInput);
+  const fsBtn = !android && canPickDir() ? h("button", { class: "btn", onclick: pickDirectory }, "📂 폴더 연결 (기억됨)") : null;
   return h("div", { class: "row" }, fileBtn, dirBtn, fsBtn);
 }
 
@@ -725,7 +727,8 @@ async function renderManage() {
         h("div", { class: "stat" }, h("b", {}, totalDur >= 3600 ? (totalDur / 3600).toFixed(1) + "시간" : fmtDur(totalDur)), h("span", {}, "전체 길이")))),
     h("div", { class: "panel" }, h("h3", {}, "영상 추가 · 다시 연결"),
       h("ol", { class: "steps meta" },
-        h("li", {}, "‘영상 고르기’로 보안 폴더의 영상을 여러 개 고르거나, ‘폴더째 고르기’로 폴더 하나를 통째로 고르세요."),
+        h("li", {}, "‘영상 고르기’를 누르고, 선택 창 메뉴(☰ 또는 ⋮)에서 DCIM이나 Download 폴더로 들어가세요."),
+        h("li", {}, "첫 영상을 길게 누른 뒤 나머지를 차례로 누르거나, 메뉴의 ‘모두 선택’으로 한꺼번에 고르세요."),
         h("li", {}, "이미 등록된 영상을 다시 고르면 새로 추가되지 않고 기존 정보에 연결됩니다."),
         h("li", {}, "브라우저는 파일 접근을 기억하지 못하므로, 앱을 다시 열면 같은 영상을 한 번 더 골라야 재생할 수 있습니다.")),
       h("div", { style: "margin-top:12px" }, pickButtons(true))),
