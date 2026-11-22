@@ -318,7 +318,7 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------ 테마 (라이트 / 다크)
-    private static final int LIGHT_BG = 0xFFF4F3EF, DARK_BG = 0xFF121316;
+    private static final int LIGHT_BG = 0xFFEFEDE8, DARK_BG = 0xFF111214;
 
     private boolean systemDark() {
         return (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)

@@ -103,7 +103,7 @@ function applyTheme() {
   const dark = pref === "dark" || (pref === "system" && systemDark());
   document.documentElement.dataset.theme = dark ? "dark" : "light";
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = dark ? "#121316" : "#F4F3EF";
+  if (meta) meta.content = dark ? "#111214" : "#EFEDE8";
   try { if (window.VidShelfApp) VidShelfApp.setDark(dark); } catch (e) {}   // 앱의 상태 표시줄 색도 맞춤
 }
 function setThemePref(p) { try { localStorage.setItem("vs-theme", p); } catch (e) {} applyTheme(); }
@@ -207,6 +207,66 @@ function attachScrub(track, fill, { duration, onSeek, previewSrc, onDrag, maxBox
   track.addEventListener("pointercancel", end);
   track.addEventListener("click", (e) => e.stopPropagation());
   return { isDragging: () => dragging };
+}
+
+/** 그림 색 따라가기: 썸네일의 대표 색을 뽑아 그 화면의 바탕 빛·강조색으로 */
+async function tintFromImage(src) {
+  try {
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+    const N = 24, c = document.createElement("canvas");
+    c.width = N; c.height = N;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    g.drawImage(img, 0, 0, N, N);
+    const d = g.getImageData(0, 0, N, N).data;
+    let r = 0, gg = 0, b = 0, w = 0;
+    for (let i = 0; i < d.length; i += 4) {   // 선명하고 너무 어둡거나 밝지 않은 색일수록 무게를 크게
+      const R = d[i] / 255, G = d[i + 1] / 255, B = d[i + 2] / 255;
+      const mx = Math.max(R, G, B), mn = Math.min(R, G, B), l = (mx + mn) / 2;
+      const sat = mx === mn ? 0 : (mx - mn) / (1 - Math.abs(2 * l - 1));
+      const wt = sat * sat * Math.max(0, 1 - Math.abs(l - 0.5) * 1.7) + 0.002;
+      r += R * wt; gg += G * wt; b += B * wt; w += wt;
+    }
+    if (w < 0.05) return null;   // 거의 흑백인 그림
+    return [r / w, gg / w, b / w];
+  } catch (e) { return null; }
+}
+function rgbToHsl([r, g, b]) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+  if (mx === mn) return [0, 0, l];
+  const dd = mx - mn, s = l > 0.5 ? dd / (2 - mx - mn) : dd / (mx + mn);
+  const hh = mx === r ? (g - b) / dd + (g < b ? 6 : 0) : mx === g ? (b - r) / dd + 2 : (r - g) / dd + 4;
+  return [hh * 60, s, l];
+}
+const hslCss = (hh, s, l) => `hsl(${Math.round(hh)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%)`;
+function hslRgbTriplet(hh, s, l) {   // "r g b" (rgb(var(--tint) / .3) 에 쓰임)
+  const k = (n) => (n + hh / 30) % 12, a = s * Math.min(l, 1 - l);
+  const f = (n) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)))));
+  return `${f(0)} ${f(8)} ${f(4)}`;
+}
+function setTint(rgb) {
+  if (!rgb) { clearTint(); return; }
+  let [hh, s] = rgbToHsl(rgb);
+  s = Math.min(0.85, Math.max(0.4, s));
+  const dark = document.documentElement.dataset.theme === "dark";
+  const b = document.body;
+  if (!document.getElementById("tintbg")) b.prepend(h("div", { id: "tintbg", "aria-hidden": "true" }));
+  b.style.setProperty("--tint", hslRgbTriplet(hh, s, dark ? 0.45 : 0.62));
+  b.style.setProperty("--accent", hslCss(hh, s, dark ? 0.72 : 0.4));
+  b.style.setProperty("--accent-ink", dark ? "#121316" : "#ffffff");
+  b.classList.add("tinted");
+}
+function clearTint() {
+  const b = document.body;
+  b.classList.remove("tinted");
+  ["--tint", "--accent", "--accent-ink"].forEach((k) => b.style.removeProperty(k));
+}
+/** 지금 화면이 그대로일 때만 물들이기 (그 사이 다른 화면으로 갔으면 무시) */
+function tintPage(src) {
+  if (!src) return;
+  const at = location.hash;
+  tintFromImage(src).then((rgb) => { if (location.hash === at) setTint(rgb); });
 }
 
 /** 영상을 꾹 누르고 있는 동안 2배속 (손을 떼면 원래 속도) */
@@ -525,6 +585,7 @@ async function route() {
   lastHash = location.hash;
   window.__mediaSwipe = null; window.__mediaSwipeTarget = null;
   stopHoldPreview();
+  clearTint();
   const { path, params } = parseHash();
   stopPlayer();
   if (pageCleanup) { try { pageCleanup(); } catch (e) {} pageCleanup = null; }
@@ -1978,6 +2039,7 @@ async function renderVideo(id, params) {
   const playerBox = h("div", { class: "player vp" }, video, ui, track, upNext);
   attachLoading(video, playerBox);
   holdFast(playerBox, video);
+  if (v.thumbs > 0) tintPage(thumbUrl(v.id, 0, v.thumbs));   // 이 영상의 색으로 화면을 물들임
   const dur = () => v.duration || (isFinite(video.duration) ? video.duration : 0);
   const drawPlay = () => {
     const d = video.paused ? PLAY : PAUSE;
@@ -2440,6 +2502,7 @@ async function renderPerformer(id) {
   const avatar = h("div", { class: "pf-avatar" }, h("span", {}, "👤"));
   const setAvatar = (src) => {
     if (!src || avatar.querySelector("img")) return;
+    tintPage(src);   // 이 사람의 대표 그림 색으로 화면을 물들임
     const img = h("img", { src, alt: "" });
     img.onload = () => avatar.replaceChildren(img);
   };
