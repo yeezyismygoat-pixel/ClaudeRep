@@ -1508,28 +1508,42 @@ async function openViewer(items, start) {
       h("datalist", { id: "dl-viewer-tag" }, allTags.map((t) => h("option", { value: t.name }))));
     prevBtn.disabled = i === 0; nextBtn.disabled = i === items.length - 1;
   }
-  // ---- 갤러리처럼 넘기기: [이전 | 지금 | 다음] 세 칸을 손가락 따라 옆으로 움직임
-  const slots = [0, 1, 2].map(() => h("div", { class: "vslot" }, h("img", { alt: "", draggable: "false" })));
+  // ---- 갤러리처럼 넘기기: [이전 | 지금 | 다음] 세 칸. 넘긴 뒤에는 칸 자체를 돌려 끼워서(그림을 다시 받지 않음) 이전 사진이 다시 보이지 않음
+  let slots = [0, 1, 2].map(() => h("div", { class: "vslot" }, h("img", { alt: "", draggable: "false" })));
   const track = h("div", { class: "vtrack" }, ...slots);
   const setX = (px, animate) => {
     track.style.transition = animate ? "transform .3s cubic-bezier(.2,.8,.2,1)" : "none";
     track.style.transform = `translateX(calc(-33.3333% + ${px}px))`;
   };
-  const fillSlots = () => {
-    [i - 1, i, i + 1].forEach((k, j) => {
-      const im = slots[j].firstChild, p = items[k];
-      slots[j].style.visibility = p ? "visible" : "hidden";
-      const src = p ? `/photo/${p.id}` : "";
-      if (p && im.getAttribute("src") !== src) im.src = src;
-    });
+  const fillSlot = (slot, k) => {
+    const im = slot.firstChild, p = items[k];
+    slot.style.visibility = p ? "visible" : "hidden";
+    const src = p ? `/photo/${p.id}` : "";
+    if (im.getAttribute("src") !== src) { if (src) im.src = src; else im.removeAttribute("src"); }
   };
+  const fillSlots = () => [i - 1, i, i + 1].forEach((k, j) => fillSlot(slots[j], k));
+  // 확대·축소 (두 손가락 벌리기, 두 번 탭) — 지금 사진에만
+  let zoom = 1, zx = 0, zy = 0;
+  const curImg = () => slots[1].firstChild;
+  const applyZoom = (animate) => {
+    const im = curImg();
+    im.style.transition = animate ? "transform .25s cubic-bezier(.2,.8,.2,1)" : "none";
+    im.style.transform = zoom > 1 ? `translate(${zx}px, ${zy}px) scale(${zoom})` : "";
+    el.classList.toggle("zoomed", zoom > 1);
+  };
+  const clampPan = () => {
+    const im = curImg(), r = stage.getBoundingClientRect();
+    const w = im.offsetWidth * zoom, hgt = im.offsetHeight * zoom;
+    const mx = Math.max(0, (w - r.width) / 2), my = Math.max(0, (hgt - r.height) / 2);
+    zx = Math.min(mx, Math.max(-mx, zx)); zy = Math.min(my, Math.max(-my, zy));
+  };
+  const resetZoom = (animate) => { zoom = 1; zx = 0; zy = 0; applyZoom(animate); };
   async function show(n) {
     if (n < 0 || n >= items.length) return;
     i = n;
     fillSlots();
     setX(0, false);
     counter.textContent = `${i + 1} / ${items.length}`;
-    el.scrollTop = 0;
     if (items[i + 2]) new Image().src = `/photo/${items[i + 2].id}`;   // 그다음 사진도 미리 받기
     const d = await api(`photos/${items[n].id}`);
     if (i === n) { cur = d; draw(); }
@@ -1539,8 +1553,15 @@ async function openViewer(items, start) {
     const n = i + dir;
     if (sliding || n < 0 || n >= items.length) { setX(0, true); return; }
     sliding = true;
+    resetZoom(false);
     setX(-dir * stage.clientWidth, true);
-    setTimeout(() => { sliding = false; show(n); }, 300);
+    setTimeout(() => {
+      // 칸 돌려 끼우기: 다음으로 갔으면 맨 앞 칸을 맨 뒤로 (그 칸에만 새 사진)
+      if (dir > 0) { const s0 = slots.shift(); slots.push(s0); track.append(s0); }
+      else { const s2 = slots.pop(); slots.unshift(s2); track.prepend(s2); }
+      sliding = false;
+      show(n);
+    }, 300);
   }
   favBtn.onclick = () => cur && save({ favorite: !cur.favorite });
   tagInput.addEventListener("keydown", (e) => {
@@ -1554,33 +1575,78 @@ async function openViewer(items, start) {
     input.value = ""; save({ performers: names });
   });
   const stage = h("div", { class: "stage" }, track);
+  // 손가락 동작: 사진뿐 아니라 아래 정보 부분에서 밀어도 넘어감 (세로로 움직이면 스크롤)
   let sx = null, sy = null, t0 = 0, lock = null, dx = 0;
-  stage.addEventListener("touchstart", (e) => {
-    if (sliding || e.touches.length !== 1) { sx = null; return; }
+  let pinch = null, pan = null, lastTap = 0;
+  const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const onStart = (e) => {
+    if (e.target.closest("input, textarea, select, .vtop")) { sx = null; return; }
+    const inStage = stage.contains(e.target);
+    if (e.touches.length === 2 && inStage) {   // 두 손가락: 확대·축소
+      sx = null;
+      const r = stage.getBoundingClientRect();
+      pinch = { d: dist(e.touches), z: zoom, zx, zy, cx: (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left - r.width / 2, cy: (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top - r.height / 2 };
+      return;
+    }
+    if (e.touches.length !== 1 || sliding) { sx = null; return; }
+    if (zoom > 1 && inStage) { pan = { x: e.touches[0].clientX, y: e.touches[0].clientY, zx, zy }; sx = null; return; }   // 확대 중: 끌어서 이동
     sx = e.touches[0].clientX; sy = e.touches[0].clientY; t0 = Date.now(); lock = null; dx = 0;
-  }, { passive: true });
-  stage.addEventListener("touchmove", (e) => {
+  };
+  const onMove = (e) => {
+    if (pinch && e.touches.length === 2) {
+      e.preventDefault();
+      const z = Math.min(5, Math.max(1, pinch.z * dist(e.touches) / pinch.d));
+      const k = z / pinch.z;   // 두 손가락 가운데를 기준으로 커짐
+      zoom = z; zx = pinch.cx - (pinch.cx - pinch.zx) * k; zy = pinch.cy - (pinch.cy - pinch.zy) * k;
+      clampPan(); applyZoom(false);
+      return;
+    }
+    if (pan && e.touches.length === 1) {
+      e.preventDefault();
+      zx = pan.zx + (e.touches[0].clientX - pan.x); zy = pan.zy + (e.touches[0].clientY - pan.y);
+      clampPan(); applyZoom(false);
+      return;
+    }
     if (sx == null) return;
     const x = e.touches[0].clientX - sx, y = e.touches[0].clientY - sy;
-    if (!lock) { if (Math.abs(x) < 8 && Math.abs(y) < 8) return; lock = Math.abs(x) > Math.abs(y) ? "h" : "v"; }
+    if (!lock) { if (Math.abs(x) < 8 && Math.abs(y) < 8) return; lock = Math.abs(x) > Math.abs(y) * 1.2 ? "h" : "v"; }
     if (lock !== "h") return;
     e.preventDefault();
     const edge = (x > 0 && i === 0) || (x < 0 && i === items.length - 1);
     dx = edge ? x * 0.3 : x;   // 처음·마지막 사진에서는 살짝만 끌림
     setX(dx, false);
-  }, { passive: false });
-  const endDrag = () => {
-    if (sx == null || lock !== "h") { sx = null; return; }
+  };
+  const onEnd = (e) => {
+    if (pinch) { if (e.touches.length < 2) { pinch = null; if (zoom < 1.05) resetZoom(true); } return; }
+    if (pan) { pan = null; return; }
+    if (sx == null) return;
+    if (lock !== "h") {   // 움직이지 않은 짧은 탭: 사진을 두 번 누르면 확대/원래대로
+      if (!lock && stage.contains(e.target) && Date.now() - t0 < 250) {
+        const now = Date.now();
+        if (now - lastTap < 300) {
+          lastTap = 0;
+          if (zoom > 1) resetZoom(true);
+          else {
+            const r = stage.getBoundingClientRect();
+            const px = sx - r.left - r.width / 2, py = sy - r.top - r.height / 2;
+            zoom = 2.5; zx = -px * 1.5; zy = -py * 1.5; clampPan(); applyZoom(true);
+          }
+        } else lastTap = now;
+      }
+      sx = null; return;
+    }
     sx = null;
     const fast = Math.abs(dx) / Math.max(1, Date.now() - t0) > 0.45;
     if (Math.abs(dx) > stage.clientWidth * 0.22 || (fast && Math.abs(dx) > 30)) slide(dx < 0 ? 1 : -1);
     else setX(0, true);   // 제자리로
   };
-  stage.addEventListener("touchend", endDrag);
-  stage.addEventListener("touchcancel", endDrag);
   const el = h("div", { class: "viewer", role: "dialog", "aria-modal": "true" },
     h("div", { class: "vtop" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, icon("close")), counter, favBtn),
     stage, info);
+  el.addEventListener("touchstart", onStart, { passive: true });
+  el.addEventListener("touchmove", onMove, { passive: false });
+  el.addEventListener("touchend", onEnd);
+  el.addEventListener("touchcancel", onEnd);
   document.body.append(el);
   document.body.style.overflow = "hidden";
   history.pushState({ viewer: true }, "");   // 휴대폰 뒤로 가기로 닫히게

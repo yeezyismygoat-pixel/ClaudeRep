@@ -1068,3 +1068,12 @@ body.selecting .card .thumb::before, body.selecting .pcard .thumb::before { opac
 /* 막대 미리보기: 시간은 그림 위에 겹쳐서 (크기를 작게 유지) */
 .scrub-bubble.has-img .scrub-time { position: absolute; left: 50%; bottom: 5px; transform: translateX(-50%); font-size: 11px; padding: 1px 6px; }
 .scrub-bubble canvas { max-height: none; width: auto; }
+
+/* 사진 보기: 사진 칸 높이를 고정해서 넘길 때 아래 정보가 위아래로 움직이지 않게 */
+.viewer .stage { height: 72vh; height: 72svh; min-height: 0 !important; touch-action: pan-y; }
+.viewer.zoomed .stage { touch-action: none; }
+.vslot { height: 100%; min-height: 0 !important; overflow: hidden; }
+.vslot img { width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; object-fit: contain; transform-origin: center center; will-change: transform; }
+.vtrack { height: 100%; }
+@media (min-aspect-ratio: 1/1) { .viewer .stage { height: 100vh; height: 100svh; } }
+.viewer .vinfo { min-height: 40vh; align-content: start; }
