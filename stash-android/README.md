@@ -21,7 +21,7 @@
 2. Termux를 열고 이 저장소를 받습니다.
    ```bash
    pkg install -y git
-   git clone https://github.com/yeezyismygoat-pixel/ClaudeRep.git
+   git clone -b ccr-51e89e69-zcgdip https://github.com/yeezyismygoat-pixel/ClaudeRep.git
    cd ClaudeRep/stash-android
    ```
 
