@@ -122,6 +122,7 @@ public class Comics implements HttpServer.Handler {
         if (hash.isEmpty()) { st.remove("eh_pass_hash_enc"); st.remove("eh_pass_hash"); }
         eh.memberId = id;
         eh.passHash = hash;
+        eh.forgetHtml();
         save();
     }
 
@@ -387,6 +388,26 @@ public class Comics implements HttpServer.Handler {
                 res.json(200, new JSONObject().put("logged_in", false).put("favcat", -1).toString());
             } catch (IOException e) {
                 res.error(502, e.getMessage());
+            }
+            return;
+        }
+        if (action.equals("details") || action.equals("previews") || (action.equals("comment") && m.equals("POST"))) {
+            JSONObject b = action.equals("comment") ? body(r) : null;
+            long gid = b != null ? b.optLong("gid", -1) : parseLong(r.param("gid"), -1);
+            String t = b != null ? b.optString("t") : nz(r.param("t"));
+            if (gid < 0 || !t.matches("[0-9a-f]{10}")) { res.error(400, "잘못된 갤러리"); return; }
+            try {
+                if (action.equals("details")) res.json(200, eh.details(gid, t).toString());
+                else if (action.equals("previews")) res.json(200, eh.previewPage(gid, t, Math.max(0, parseInt(nz(r.param("p")), 0))).toString());
+                else {
+                    String text = b.optString("text").trim();
+                    if (text.length() < 10) { res.error(400, "댓글은 10글자 이상이어야 합니다"); return; }
+                    res.json(200, new JSONObject().put("comments", eh.postComment(gid, t, text)).toString());
+                }
+            } catch (EHentai.NotLoggedIn e) {
+                res.error(401, "댓글을 쓰려면 e-hentai 에 로그인하세요");
+            } catch (IOException e) {
+                res.error(502, e.getMessage() == null ? "e-hentai 연결 실패" : e.getMessage());
             }
             return;
         }

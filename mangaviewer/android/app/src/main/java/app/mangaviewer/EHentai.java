@@ -242,9 +242,19 @@ class EHentai {
     private static final Pattern IMG = Pattern.compile("<img[^>]*id=\"img\"[^>]*src=\"([^\"]+)\"|<img[^>]*src=\"([^\"]+)\"[^>]*id=\"img\"");
     private static final Pattern NL = Pattern.compile("nl\\('([^']+)'\\)");
 
-    /** 갤러리 목록 한 쪽(p, 0부터)을 읽어 페이지 토큰을 기억합니다. 그 쪽에 있던 페이지 수를 돌려줌. */
-    private int loadGalleryPage(long gid, String token, Gallery g, int p) throws IOException {
-        String url = BASE + "/g/" + gid + "/" + token + "/?p=" + p;
+    /** 갤러리 화면 한 쪽(p, 0부터)의 HTML. 첫 쪽은 댓글 전체(hc=1)를 포함. 1분 동안 다시 받지 않음. */
+    private final Map<String, Object[]> htmlCache = new LinkedHashMap<String, Object[]>(16, .75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Object[]> e) { return size() > 12; }
+    };
+
+    private String galleryHtml(long gid, String token, int p) throws IOException {
+        String key = gid + "/" + token + "/" + p;
+        synchronized (htmlCache) {
+            Object[] c = htmlCache.get(key);
+            if (c != null && System.currentTimeMillis() - (Long) c[0] < 60_000) return (String) c[1];
+        }
+        String url = BASE + "/g/" + gid + "/" + token + "/?p=" + p + (p == 0 ? "&hc=1" : "");
         String html = get(url);
         if (!PAGE_LINK.matcher(html).find() && html.contains("nw=")) html = get(url + "&nw=session");   // 성인 경고 화면 넘기기
         if (!PAGE_LINK.matcher(html).find()) {
@@ -255,15 +265,163 @@ class EHentai {
                 throw new IOException("갤러리 페이지에서 그림 목록을 찾지 못했습니다 (" + (t.find() ? unescape(t.group(1)).trim() : html.length() + "자") + ")");
             }
         }
+        synchronized (htmlCache) { htmlCache.put(key, new Object[]{System.currentTimeMillis(), html}); }
+        return html;
+    }
+
+    /** 즐겨찾기·댓글을 바꾼 뒤, 로그인이 바뀐 뒤에는 새로 받도록 */
+    void forgetHtml() {
+        synchronized (htmlCache) { htmlCache.clear(); }
+    }
+
+    /** HTML 에 있는 페이지 토큰을 기억하고 그 개수를 돌려줌 */
+    private int storeTokens(long gid, Gallery g, String html) {
         Matcher m = PAGE_LINK.matcher(html);
         Set<Integer> found = new LinkedHashSet<>();
-        while (m.find()) {
-            if (Long.parseLong(m.group(2)) != gid) continue;
-            int n = Integer.parseInt(m.group(3));
-            g.pageTokens.put(n, m.group(1));
-            found.add(n);
+        synchronized (g) {
+            while (m.find()) {
+                if (Long.parseLong(m.group(2)) != gid) continue;
+                int n = Integer.parseInt(m.group(3));
+                g.pageTokens.put(n, m.group(1));
+                found.add(n);
+            }
         }
         return found.size();
+    }
+
+    /** 갤러리 목록 한 쪽(p, 0부터)을 읽어 페이지 토큰을 기억합니다. 그 쪽에 있던 페이지 수를 돌려줌. */
+    private int loadGalleryPage(long gid, String token, Gallery g, int p) throws IOException {
+        return storeTokens(gid, g, galleryHtml(gid, token, p));
+    }
+
+    // ------------------------------------------------------------------ 미리보기 (갤러리의 작은 그림들)
+    private static final Pattern STYLE_URL = Pattern.compile("style=\"([^\"]*url\\([^\"]*)\"");
+    private static final Pattern IMG_SRC = Pattern.compile("<img[^>]+src=\"(https?://[^\"]+)\"");
+    private static final Pattern CSS_W = Pattern.compile("width:\\s*(\\d+)px");
+    private static final Pattern CSS_H = Pattern.compile("height:\\s*(\\d+)px");
+    private static final Pattern CSS_BG = Pattern.compile("url\\(['\"]?([^)'\"]+)['\"]?\\)\\s*(-?\\d+)(?:px)?(?:\\s+(-?\\d+)(?:px)?)?");
+
+    /**
+     * 갤러리 화면의 미리보기 그림. 작은 그림은 여러 장이 한 그림(스프라이트)에 붙어 있어서
+     * {n, url, x, y, w, h} 로 돌려줍니다 (x, y: 그 그림 안의 위치). 큰 미리보기면 {n, url, full: true}.
+     */
+    static JSONArray previews(long gid, String html) throws JSONException {
+        JSONArray out = new JSONArray();
+        int s = html.indexOf("id=\"gdt\"");
+        if (s < 0) return out;
+        int e = html.indexOf("class=\"gtb\"", s);
+        if (e < 0) e = html.indexOf("id=\"cdiv\"", s);
+        if (e < 0) e = html.length();
+        String sec = html.substring(s, e);
+        List<int[]> links = new ArrayList<>();
+        Matcher m = PAGE_LINK.matcher(sec);
+        while (m.find()) {
+            if (Long.parseLong(m.group(2)) != gid) continue;
+            int end = sec.indexOf('>', m.end());
+            links.add(new int[]{m.start(), end < 0 ? m.end() : end + 1, Integer.parseInt(m.group(3))});
+        }
+        if (links.isEmpty()) return out;
+        int firstUrl = sec.indexOf("url(");
+        boolean styleBefore = firstUrl >= 0 && firstUrl < links.get(0)[0];   // 예전 화면: 그림 상자 안에 링크
+        for (int k = 0; k < links.size(); k++) {
+            int[] l = links.get(k);
+            String after = sec.substring(l[1], k + 1 < links.size() ? links.get(k + 1)[0] : sec.length());
+            String before = sec.substring(k > 0 ? links.get(k - 1)[1] : 0, l[0]);
+            JSONObject it = new JSONObject().put("n", l[2]);
+            Matcher im = IMG_SRC.matcher(after);
+            String style = null;
+            if (im.find() && !im.group(1).contains("blank.gif")) {
+                it.put("url", unescape(im.group(1))).put("full", true);
+            } else {
+                Matcher st = STYLE_URL.matcher(styleBefore ? before : after);
+                while (st.find()) {
+                    style = st.group(1);
+                    if (!styleBefore) break;   // 앞에 있으면 링크에 가장 가까운(마지막) 것
+                }
+            }
+            if (style != null) {
+                Matcher bg = CSS_BG.matcher(style), w = CSS_W.matcher(style), hh = CSS_H.matcher(style);
+                if (!bg.find() || !w.find() || !hh.find()) continue;
+                it.put("url", unescape(bg.group(1))).put("x", Integer.parseInt(bg.group(2)))
+                        .put("y", bg.group(3) == null ? 0 : Integer.parseInt(bg.group(3)))
+                        .put("w", Integer.parseInt(w.group(1))).put("h", Integer.parseInt(hh.group(1)));
+            }
+            if (it.has("url")) out.put(it);
+        }
+        return out;
+    }
+
+    /** 미리보기 한 쪽 (p, 0부터). {items, per_page} */
+    JSONObject previewPage(long gid, String token, int p) throws IOException, JSONException {
+        String html = galleryHtml(gid, token, p);
+        Gallery g = gallery(gid);
+        int k = storeTokens(gid, g, html);
+        if (p == 0 && k > 0) synchronized (g) { if (g.perPage == 0) g.perPage = k; }
+        return new JSONObject().put("items", previews(gid, html)).put("per_page", k);
+    }
+
+    /** 만화 정보 화면에 필요한 것을 한 번에: 첫 쪽 미리보기, 댓글, 즐겨찾기 상태 */
+    JSONObject details(long gid, String token) throws IOException, JSONException {
+        JSONObject out = previewPage(gid, token, 0);
+        String html = galleryHtml(gid, token, 0);
+        out.put("comments", comments(html)).put("logged_in", loggedIn());
+        if (loggedIn()) out.put("fav", favState(html));
+        return out;
+    }
+
+    // ------------------------------------------------------------------ 댓글
+    private static final Pattern COMMENT_POSTED = Pattern.compile("Posted on (.+?) by:", Pattern.DOTALL);
+    private static final Pattern COMMENT_NAME = Pattern.compile("by:.*?<a[^>]*>(.*?)</a>", Pattern.DOTALL);
+    private static final Pattern COMMENT_SCORE = Pattern.compile("id=\"comment_score_\\d+\"[^>]*>([^<]*)<");
+    private static final Pattern COMMENT_BODY = Pattern.compile("<div class=\"c6\"[^>]*id=\"comment_(\\d+)\"[^>]*>");
+    private static final Pattern ERROR_P = Pattern.compile("<p class=\"br\">(.*?)</p>", Pattern.DOTALL);
+
+    /** 갤러리 첫 쪽 HTML 의 댓글 목록: {id, name, posted, score, text, uploader} */
+    static JSONArray comments(String html) throws JSONException {
+        JSONArray out = new JSONArray();
+        int s = html.indexOf("id=\"cdiv\"");
+        if (s < 0) return out;
+        String sec = html.substring(s);
+        String[] blocks = sec.split("<div class=\"c1\"");
+        for (int i = 1; i < blocks.length; i++) {
+            String b = blocks[i];
+            Matcher body = COMMENT_BODY.matcher(b);
+            if (!body.find()) continue;
+            int end = b.length();
+            for (String stop : new String[]{"<div class=\"c7\"", "<div class=\"c8\"", "<div id=\"chd\"", "<div id=\"formdiv\""}) {
+                int k = b.indexOf(stop, body.end());
+                if (k >= 0 && k < end) end = k;
+            }
+            String text = b.substring(body.end(), end).replaceAll("(</div>\\s*)+$", "");
+            text = text.replaceAll("[\\r\\n]+", " ").replaceAll("(?i)<br\\s*/?>", "\n").replaceAll("<[^>]+>", "");
+            StringBuilder lines = new StringBuilder();
+            for (String line : text.split("\n", -1)) lines.append(unescape(line).trim()).append('\n');
+            text = lines.toString().trim();
+            Matcher posted = COMMENT_POSTED.matcher(b), name = COMMENT_NAME.matcher(b), score = COMMENT_SCORE.matcher(b);
+            long id = Long.parseLong(body.group(1));
+            out.put(new JSONObject().put("id", id)
+                    .put("name", name.find() ? unescape(name.group(1).replaceAll("<[^>]+>", "")).trim() : "")
+                    .put("posted", posted.find() ? unescape(posted.group(1).replaceAll("<[^>]+>", "")).trim() : "")
+                    .put("score", score.find() ? score.group(1).trim() : "")
+                    .put("uploader", id == 0 || b.contains("Uploader Comment"))
+                    .put("text", text));
+        }
+        return out;
+    }
+
+    /** 댓글 쓰기. 등록 뒤의 댓글 목록을 돌려줌. */
+    JSONArray postComment(long gid, String token, String text) throws IOException, JSONException {
+        if (!loggedIn()) throw new NotLoggedIn();
+        String html = post(BASE + "/g/" + gid + "/" + token + "/?hc=1", "application/x-www-form-urlencoded",
+                ("commenttext_new=" + enc(text)).getBytes(StandardCharsets.UTF_8), null);
+        forgetHtml();
+        if (html.contains("This page requires you to log on")) throw new NotLoggedIn();
+        Matcher err = ERROR_P.matcher(html);
+        if (err.find()) {
+            String msg = unescape(err.group(1).replaceAll("<[^>]+>", "")).trim();
+            if (!msg.isEmpty()) throw new IOException("댓글을 등록하지 못했습니다: " + msg);
+        }
+        return comments(galleryHtml(gid, token, 0));
     }
 
     private synchronized Gallery gallery(long gid) {
@@ -446,7 +604,10 @@ class EHentai {
     /** 이 갤러리가 내 즐겨찾기 어느 폴더에 있는지. {"favcat": -1(없음)~9, "name": 폴더 이름} */
     JSONObject favoriteState(long gid, String token) throws IOException, JSONException {
         if (!loggedIn()) throw new NotLoggedIn();
-        String html = get(BASE + "/g/" + gid + "/" + token + "/?p=0");
+        return favState(galleryHtml(gid, token, 0));
+    }
+
+    private static JSONObject favState(String html) throws JSONException {
         Matcher box = FAV_BOX.matcher(html);
         if (box.find()) {
             String attrs = box.group(1);
@@ -464,6 +625,7 @@ class EHentai {
                 + (favcat < 0 ? "&apply=Apply+Changes" : "&apply=Add+to+Favorites");
         String html = post(BASE + "/gallerypopups.php?gid=" + gid + "&t=" + token + "&act=addfav",
                 "application/x-www-form-urlencoded", form.getBytes(StandardCharsets.UTF_8), null);
+        forgetHtml();
         if (html.contains("This page requires you to log on")) throw new NotLoggedIn();
     }
 

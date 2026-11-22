@@ -437,87 +437,270 @@ async function renderSettings() {
     themePanel(),
     account || h("div", {}, ehLoginForm()),
     storage, vpn,
-    h("p", { class: "meta", style: "text-align:center;margin-top:20px" }, "Manga Viewer 1.0")));
+    h("p", { class: "meta", style: "text-align:center;margin-top:20px" }, "Manga Viewer 1.1")));
 }
 
 // ---------------------------------------------------------------- 만화 정보
+const NS = { language: "언어", parody: "패러디", character: "캐릭터", group: "그룹", artist: "작가", cosplayer: "코스플레이어", male: "남성", female: "여성", mixed: "혼합", other: "기타", misc: "기타", reclass: "분류", location: "장소", temp: "임시" };
+const NS_ORDER = ["artist", "group", "parody", "character", "female", "male", "mixed", "cosplayer", "location", "other", "misc", "reclass", "temp", "language"];
+const ACT_ICON = {
+  heart: '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>',
+  save: '<path d="M12 3.5v11"/><path d="M7.5 10l4.5 4.5 4.5-4.5"/><path d="M4.5 15.5v3a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3"/>',
+  chat: '<path d="M4 5.5h16v11H9l-5 4z"/>',
+};
+function actIcon(name, filled) {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", "ico" + (filled ? " filled" : "")); s.setAttribute("aria-hidden", "true");
+  s.innerHTML = ACT_ICON[name];
+  return s;
+}
+
+/** 아래에서 올라오는 선택 창. 뒤로 가기로도 닫힘. */
+function openSheet(title, body) {
+  let closed = false;
+  const close = (fromPop) => {
+    if (closed) return;
+    closed = true;
+    window.removeEventListener("popstate", onPop);
+    wrap.classList.add("out");
+    setTimeout(() => wrap.remove(), 220);
+    if (!fromPop) history.back();
+  };
+  const onPop = () => close(true);
+  const wrap = h("div", { class: "sheet-wrap", onclick: (e) => { if (e.target === wrap) close(); } },
+    h("div", { class: "sheet", role: "dialog", "aria-modal": "true" },
+      h("div", { class: "sheet-grip" }), h("h3", {}, title), body));
+  document.body.append(wrap);
+  history.pushState({ sheet: true }, "");
+  window.addEventListener("popstate", onPop);
+  return () => close();
+}
+
+/** e-hentai 날짜(“22 November 2026, 10:00”)를 한국어로 */
+function fmtPosted(s) {
+  const d = new Date(String(s).replace(",", "") + " UTC");
+  return isNaN(d) ? s : d.toLocaleString("ko-KR", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+/** 미리보기 한 칸. 작은 그림은 여러 장이 붙은 그림에서 잘라서 보여 줌. */
+function previewCell(it, onOpen) {
+  const cell = h("button", { class: "pv", "aria-label": `${it.n}쪽부터 읽기`, onclick: () => onOpen(it.n) });
+  if (it.full) {
+    const img = h("img", { src: comicThumb(it.url), loading: "lazy", alt: "" });
+    cell.append(img);
+  } else {
+    const inner = h("div", { class: "pv-in" });
+    inner.style.cssText = `width:${it.w}px;height:${it.h}px;background-image:url("${comicThumb(it.url)}");background-position:${it.x}px ${it.y}px`;
+    cell.dataset.w = it.w; cell.dataset.h = it.h;
+    cell.append(inner);
+  }
+  cell.append(h("span", { class: "pv-n" }, it.n));
+  return cell;
+}
+function layoutPreviews(root) {
+  root.querySelectorAll(".pv[data-w]").forEach((c) => {
+    const cw = c.clientWidth, ch = c.clientHeight, w = +c.dataset.w, hh = +c.dataset.h;
+    if (!cw || !w) return;
+    const s = Math.min(cw / w, ch / hh);
+    c.firstChild.style.transform = `translate(${(cw - w * s) / 2}px, ${(ch - hh * s) / 2}px) scale(${s})`;
+  });
+}
+window.addEventListener("resize", () => layoutPreviews(document));
+
+function commentView(c) {
+  const sc = parseInt(c.score, 10);
+  return h("div", { class: "cmt" + (c.uploader ? " up" : "") },
+    h("div", { class: "cmt-head" },
+      h("b", {}, c.name || "알 수 없음"),
+      c.uploader ? h("span", { class: "cmt-tag" }, "올린 사람") : null,
+      h("span", { class: "meta" }, fmtPosted(c.posted)),
+      c.score ? h("span", { class: "cmt-score" + (sc > 0 ? " pos" : sc < 0 ? " neg" : "") }, c.score) : null),
+    h("div", { class: "cmt-text" }, c.text));
+}
+
 async function renderComic(gid, token, params) {
-  let g;
+  let g, offline = false;
   try { g = await api(`eh/gallery?gid=${gid}&t=${token}`); }
   catch (e) {   // 연결이 안 되어도 저장한 만화면 정보 없이 바로 읽을 수 있게
     const s = (await api("eh/saved").catch(() => ({ items: [] }))).items.find((x) => x.gid === gid);
     if (!s) throw e;
     g = Object.assign({ tags: [], rating: "", posted: "" }, s);
-    toast("연결이 안 되어 저장한 정보로 보여 줍니다");
+    offline = true;
   }
   if (g.logged_in === false) { location.hash = "#/fav"; return; }
+  let startAt = Math.min(Math.max(1, g.read_page || 1), g.pages);
+  const read = (n) => openReader(g, n, (last) => {   // 다 읽고 닫으면 화면은 그대로, 읽기 버튼만 새로
+    g.read_page = last;
+    startAt = Math.min(Math.max(1, last), g.pages);
+    drawReadRow();
+  });
+
+  // ---- 위쪽: 표지와 제목
   const cover = h("img", { src: comicThumb(g.thumb), alt: "" });
   cover.onerror = () => (cover.hidden = true);
+  const title = h("h1", { class: "comic-title", onclick: () => title.classList.toggle("open") }, g.title_jpn || g.title);
+  const facts = [g.category, `${g.pages}쪽`, g.rating ? `★ ${(+g.rating).toFixed(1)}` : "", g.posted ? new Date(g.posted * 1000).toLocaleDateString("ko-KR") : ""].filter(Boolean);
+  const hero = h("div", { class: "hero" },
+    h("div", { class: "comic-cover", onclick: () => read(startAt) }, cover),
+    h("div", { class: "hero-main" },
+      title,
+      g.title_jpn && g.title !== g.title_jpn ? h("p", { class: "orig" }, g.title) : null,
+      h("div", { class: "facts" }, facts.map((f) => h("span", {}, f))),
+      g.uploader ? h("p", { class: "meta", style: "margin:4px 0 0" }, `올린 사람 ${g.uploader}`) : null));
+
+  // ---- 읽기 버튼
+  const readRow = h("div", { class: "read-row" });
+  const drawReadRow = () => readRow.replaceChildren(...[
+    h("button", { class: "btn primary read-main", onclick: () => read(startAt) }, g.read_page > 1 ? `이어 읽기 · ${startAt}쪽` : "읽기"),
+    g.read_page > 1 ? h("button", { class: "btn", onclick: () => read(1) }, "처음부터") : null].filter(Boolean));
+  drawReadRow();
+
+  // ---- 즐겨찾기 · 저장 · 댓글 버튼
+  const favAct = h("button", { class: "act", disabled: true }, actIcon("heart"), h("b", {}, "즐겨찾기"), h("small", {}, "…"));
+  const saveAct = h("button", { class: "act" }, actIcon("save"), h("b", {}, "휴대폰에 저장"), h("small", {}, "…"));
+  const cmtAct = h("button", { class: "act", onclick: () => cmtSec.scrollIntoView({ behavior: "smooth", block: "start" }) }, actIcon("chat"), h("b", {}, "댓글"), h("small", {}, "…"));
+  const setAct = (btn, sub, on) => { btn.lastChild.textContent = sub; btn.classList.toggle("on", !!on); btn.querySelector(".ico").classList.toggle("filled", !!on); };
+
+  let fav = null;
+  const drawFav = (f) => {
+    fav = f;
+    if (!f || f.logged_in === false) { favAct.disabled = false; setAct(favAct, "로그인 필요", false); return; }
+    favAct.disabled = false;
+    setAct(favAct, f.favcat >= 0 ? (f.name || `폴더 ${f.favcat}`) : "추가하기", f.favcat >= 0);
+  };
+  favAct.onclick = () => {
+    if (!fav || fav.logged_in === false) { location.hash = "#/settings"; toast("설정에서 e-hentai 에 로그인하세요"); return; }
+    const names = folderNames();
+    let closeSheet;
+    const setFav = async (cat, btn) => {
+      btn.disabled = true;
+      try {
+        const f = await api("eh/fav", { method: "POST", body: { gid: g.gid, t: g.token, favcat: cat } });
+        drawFav(Object.assign({ logged_in: true }, f));
+        toast(cat < 0 ? "즐겨찾기에서 뺐습니다" : `‘${f.name || names[cat] || "폴더 " + cat}’에 넣었습니다`);
+        closeSheet();
+      } catch (e) { toast(e.message); btn.disabled = false; }
+    };
+    const list = h("div", { class: "sheet-list" }, Array.from({ length: 10 }, (_, i) =>
+      h("button", { class: "sheet-item" + (fav.favcat === i ? " on" : ""), onclick: (e) => setFav(i, e.currentTarget) },
+        h("span", { class: "dot c" + i }), h("span", { class: "grow" }, names[i] || `폴더 ${i}`), fav.favcat === i ? h("span", { class: "meta" }, "지금 여기") : null)));
+    closeSheet = openSheet(fav.favcat >= 0 ? "다른 폴더로 옮기기" : "즐겨찾기 폴더 고르기", h("div", {}, list,
+      fav.favcat >= 0 ? h("button", { class: "btn danger block", style: "margin-top:10px", onclick: (e) => setFav(-1, e.currentTarget) }, "즐겨찾기에서 빼기") : null));
+  };
+
+  const drawSave = async () => {
+    const d = await api("eh/saved").catch(() => ({ items: [] }));
+    const s = d.items.find((x) => x.gid === g.gid);
+    setAct(saveAct, !s ? "저장하기" : s.done ? "저장됨" : s.error ? `멈춤 ${s.saved_pages}/${s.pages}` : `받는 중 ${s.saved_pages}/${s.pages}`, !!s);
+    saveAct.onclick = s ? () => (location.hash = "#/saved") : async () => {
+      saveAct.disabled = true;
+      try {
+        await api("eh/save", { method: "POST", body: { gid: g.gid, token: g.token, title: g.title_jpn || g.title, thumb: g.thumb, pages: g.pages, category: g.category } });
+        toast("휴대폰에 저장을 시작했습니다. 아래 막대에 진행 상황이 나옵니다.");
+      } catch (e) { toast(e.message); }
+      saveAct.disabled = false;
+      drawSave();
+    };
+  };
+  drawSave();
+
+  // ---- 미리보기
+  const pvGrid = h("div", { class: "pv-grid" });
+  const pvMore = h("div");
+  const pvSec = h("section", { class: "csec" }, h("h2", {}, "미리보기"), pvGrid, pvMore);
+  let pvPage = 0, perPage = 0;
+  const addPreviews = (items) => {
+    items.forEach((it) => pvGrid.append(previewCell(it, read)));
+    requestAnimationFrame(() => layoutPreviews(pvGrid));
+    const pagesOfPv = perPage ? Math.ceil(g.pages / perPage) : 1;
+    pvMore.replaceChildren(...[pvPage + 1 < pagesOfPv ? h("button", { class: "btn block", onclick: async (e) => {
+      e.currentTarget.disabled = true; e.currentTarget.textContent = "불러오는 중…";
+      try { pvPage++; const d = await api(`eh/previews?gid=${g.gid}&t=${g.token}&p=${pvPage}`); addPreviews(d.items); }
+      catch (x) { pvPage--; pvMore.replaceChildren(errorBox(x.message, () => addPreviews([]))); }
+    } }, "미리보기 더 보기") : null].filter(Boolean));
+  };
+
+  // ---- 태그
   const groups = {};
   for (const tag of g.tags || []) {
     const [ns, name] = tag.includes(":") ? tag.split(/:(.*)/s) : ["misc", tag];
     (groups[ns] = groups[ns] || []).push(name);
   }
-  const NS = { language: "언어", parody: "패러디", character: "캐릭터", group: "그룹", artist: "작가", cosplayer: "코스플레이어", male: "남성", female: "여성", mixed: "혼합", other: "기타", misc: "기타", reclass: "분류", location: "장소" };
-  const tagRows = Object.entries(groups).flatMap(([ns, names]) => [h("dt", {}, NS[ns] || ns),
-    h("dd", {}, h("div", { class: "chips" }, names.map((n) => h("a", { class: "chip", href: `#/ko?q=${encodeURIComponent(`${ns}:"${n}$"`)}` }, n))))]);
-  const startAt = Math.min(Math.max(1, g.read_page || 1), g.pages);
+  const nsList = Object.keys(groups).sort((a, b) => (NS_ORDER.indexOf(a) + 99) % 99 - (NS_ORDER.indexOf(b) + 99) % 99);
+  const tagSec = nsList.length ? h("section", { class: "csec" }, h("h2", {}, "태그"),
+    h("div", { class: "tag-groups" }, nsList.map((ns) => h("div", { class: "tag-group" },
+      h("span", { class: "tag-ns" }, NS[ns] || ns),
+      h("div", { class: "chips" }, groups[ns].map((n) => h("a", { class: "chip", href: `#/ko?q=${encodeURIComponent(`${ns}:"${n}$"`)}` }, n))))))) : null;
 
-  // 즐겨찾기 (로그인했을 때만)
-  const favBox = h("div", { class: "row" });
-  const drawFav = (f) => {
-    if (!f || f.logged_in === false) { favBox.replaceChildren(); return; }
-    const names = folderNames();
-    const sel = h("select", { "aria-label": "즐겨찾기 폴더" }, Array.from({ length: 10 }, (_, i) =>
-      h("option", { value: i, selected: i === Math.max(0, f.favcat) }, names[i] || `폴더 ${i}`)));
-    const setFav = async (cat, btn) => {
-      btn.disabled = true;
-      try { drawFav(await api("eh/fav", { method: "POST", body: { gid: g.gid, t: g.token, favcat: cat } })); toast(cat < 0 ? "즐겨찾기에서 뺐습니다" : "즐겨찾기에 넣었습니다"); }
-      catch (e) { toast(e.message); btn.disabled = false; }
-    };
-    favBox.replaceChildren(...(f.favcat >= 0
-      ? [h("span", { class: "chip on" }, `♥ ${f.name || "즐겨찾기"}`), sel,
-         h("button", { class: "btn sm", onclick: (e) => setFav(+sel.value, e.currentTarget) }, "폴더 옮기기"),
-         h("button", { class: "btn sm danger", onclick: (e) => setFav(-1, e.currentTarget) }, "해제")]
-      : [sel, h("button", { class: "btn sm", onclick: (e) => setFav(+sel.value, e.currentTarget) }, "♡ 즐겨찾기 추가")]));
+  // ---- 댓글
+  const cmtList = h("div", { class: "cmt-list" });
+  const cmtWrite = h("div");
+  const cmtTitle = h("h2", {}, "댓글");
+  const cmtSec = h("section", { class: "csec" }, cmtTitle, cmtList, cmtWrite);
+  const SHOW = 4;
+  const drawComments = (list, all) => {
+    cmtTitle.textContent = list.length ? `댓글 ${list.length}` : "댓글";
+    setAct(cmtAct, list.length ? `${list.length}개` : "쓰기", false);
+    if (!list.length) { cmtList.replaceChildren(h("p", { class: "meta" }, "아직 댓글이 없습니다.")); return; }
+    const shown = all ? list : list.slice(0, SHOW);
+    cmtList.replaceChildren(...shown.map(commentView),
+      ...(!all && list.length > SHOW ? [h("button", { class: "btn block", onclick: () => drawComments(list, true) }, `댓글 ${list.length}개 모두 보기`)] : []));
   };
-  api(`eh/favstate?gid=${g.gid}&t=${g.token}`).then(drawFav).catch(() => {});
-
-  // 휴대폰에 저장
-  const saveBox = h("div", { class: "row" });
-  const drawSave = async () => {
-    const d = await api("eh/saved").catch(() => ({ items: [] }));
-    const s = d.items.find((x) => x.gid === g.gid);
-    saveBox.replaceChildren(s
-      ? h("a", { class: "chip", href: "#/saved" }, s.done ? "💾 저장됨" : s.error ? `💾 멈춤 ${s.saved_pages}/${s.pages}` : `💾 받는 중 ${s.saved_pages}/${s.pages}`)
-      : h("button", { class: "btn sm", onclick: async (e) => {
-          e.currentTarget.disabled = true;
-          await api("eh/save", { method: "POST", body: { gid: g.gid, token: g.token, title: g.title_jpn || g.title, thumb: g.thumb, pages: g.pages, category: g.category } });
-          toast("휴대폰에 저장을 시작했습니다. 아래 막대에 진행 상황이 나옵니다."); drawSave();
-        } }, "💾 휴대폰에 저장"));
+  const drawWrite = (loggedIn) => {
+    if (!loggedIn) {
+      cmtWrite.replaceChildren(h("p", { class: "meta" }, "댓글을 쓰려면 ", h("a", { href: "#/settings", style: "text-decoration:underline" }, "설정에서 로그인"), "하세요."));
+      return;
+    }
+    const ta = h("textarea", { rows: 3, placeholder: "댓글 쓰기 (10글자 이상)", maxlength: 1000 });
+    const msg = h("p", { class: "warn" });
+    const send = h("button", { class: "btn dark", onclick: async () => {
+      const text = ta.value.trim();
+      if (text.length < 10) { msg.textContent = "댓글은 10글자 이상이어야 합니다"; return; }
+      send.disabled = true; msg.textContent = "";
+      try {
+        const d = await api("eh/comment", { method: "POST", body: { gid: g.gid, t: g.token, text } });
+        const mine = d.comments.some((c) => c.text.replace(/\s+/g, " ").includes(text.replace(/\s+/g, " ").slice(0, 20)));
+        drawComments(d.comments, true);
+        if (mine) { ta.value = ""; toast("댓글을 등록했습니다"); }
+        else msg.textContent = "댓글이 목록에 보이지 않습니다. e-hentai 가 거절했을 수 있습니다 (새 계정·하루 제한 등).";
+      } catch (e) { msg.textContent = e.message; }
+      send.disabled = false;
+    } }, "등록");
+    cmtWrite.replaceChildren(h("div", { class: "cmt-write" }, ta, h("div", { class: "row", style: "justify-content:space-between" }, h("span", { class: "meta" }, "e-hentai 에 내 이름으로 올라갑니다"), send)), msg);
   };
-  drawSave();
 
   $app.replaceChildren(h("div", { class: "comic" },
     h("button", { class: "backbtn", onclick: () => (history.length > 1 ? history.back() : (location.hash = "#/ko")) }, icon("back"), "뒤로"),
-    h("div", { class: "comic-head" },
-      h("div", { class: "comic-cover", onclick: () => openReader(g, startAt) }, cover),
-      h("div", { class: "comic-main" },
-        h("h2", { class: "comic-title" }, g.title_jpn || g.title),
-        g.title_jpn ? h("p", { class: "meta", style: "margin:4px 0 0;word-break:break-all" }, g.title) : null,
-        h("p", { class: "meta", style: "margin:6px 0 0" }, [g.category, `${g.pages}쪽`, g.rating ? `★ ${g.rating}` : "", g.posted ? new Date(g.posted * 1000).toLocaleDateString("ko-KR") : ""].filter(Boolean).join(" · ")))),
-    h("div", { class: "actions" },
-      h("div", { class: "row" },
-        g.read_page > 1 ? h("button", { class: "btn primary", onclick: () => openReader(g, startAt) }, `이어 읽기 (${startAt}쪽)`) : null,
-        h("button", { class: "btn" + (g.read_page > 1 ? "" : " primary"), onclick: () => openReader(g, 1) }, "처음부터 읽기")),
-      favBox, saveBox),
-    tagRows.length ? h("div", { class: "panel" }, h("h3", {}, "태그"), h("dl", { class: "tags" }, ...tagRows)) : null));
-  if (params.get("read")) openReader(g, +params.get("read") || startAt);
+    hero, readRow,
+    h("div", { class: "acts" }, favAct, saveAct, cmtAct),
+    pvSec, tagSec, cmtSec));
+
+  // 미리보기·댓글·즐겨찾기 상태는 갤러리 화면 한 번으로 받음
+  const loadDetails = async () => {
+    pvGrid.replaceChildren(...Array.from({ length: 8 }, () => h("div", { class: "pv skel" })));
+    cmtList.replaceChildren(h("p", { class: "meta" }, "불러오는 중…"));
+    try {
+      const d = await api(`eh/details?gid=${g.gid}&t=${g.token}`);
+      perPage = d.per_page; pvGrid.replaceChildren();
+      if (d.items.length) addPreviews(d.items); else pvGrid.replaceWith(h("p", { class: "meta" }, "미리보기가 없습니다."));
+      drawComments(d.comments, false);
+      drawFav(d.logged_in ? Object.assign({ logged_in: true }, d.fav) : { logged_in: false });
+      drawWrite(d.logged_in);
+    } catch (e) {
+      pvGrid.replaceChildren();
+      pvMore.replaceChildren(errorBox((offline ? "연결이 안 되어 저장한 정보로 보여 줍니다. " : "") + e.message, loadDetails));
+      cmtList.replaceChildren(h("p", { class: "meta" }, "댓글을 불러오지 못했습니다."));
+      setAct(cmtAct, "-", false);
+      drawFav(null); favAct.disabled = true; setAct(favAct, "-", false);
+    }
+  };
+  loadDetails();
+  if (params.get("read")) read(+params.get("read") || startAt);
 }
 
 // ---------------------------------------------------------------- 만화 보기
 /** 세로 스크롤 또는 한 장씩 넘기기. 화면 근처 페이지만 받고, 읽은 위치를 기억. */
-function openReader(g, start) {
+function openReader(g, start, onClose) {
   let closed = false, current = start, saveTimer;
   let mode = store("mv-reader-mode") || "scroll";
   const counter = h("span", { class: "count" });
@@ -596,7 +779,7 @@ function openReader(g, start) {
     if (closed) return;
     closed = true; near.disconnect(); mid.disconnect(); el.remove(); document.body.style.overflow = "";
     window.removeEventListener("popstate", onPop); document.removeEventListener("keydown", onKey);
-    api("eh/progress", { method: "POST", body: progressBody() }).catch(() => {}).then(() => route());
+    api("eh/progress", { method: "POST", body: progressBody() }).catch(() => {}).then(() => (onClose ? onClose(current) : route()));
   };
   const onPop = () => close();
   const onKey = (e) => {
