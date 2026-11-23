@@ -40,12 +40,23 @@ jobs:
           KEYSTORE_B64: ${{ secrets.VIDSHELF_KEYSTORE_B64 }}
         run: |
           mkdir -p ~/vidshelf-signing
+          used_secret=no
           if [ -n "$KEYSTORE_B64" ]; then
-            if ! printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n' | base64 -d > ~/vidshelf-signing/vidshelf.jks; then
-              echo "::error::VIDSHELF_KEYSTORE_B64 비밀값이 올바른 base64 가 아닙니다."
-              exit 1
+            # 비밀값을 풀어 보고, 열리지 않으면 무엇이 다른지 알려 준 뒤 이전(캐시) 키로 계속 빌드
+            printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n\t' | base64 -d > /tmp/secret.jks 2>/tmp/b64err || true
+            echo "비밀값 글자 수(공백 제외): $(printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n\t' | wc -c) / 기대값 3432"
+            echo "풀어낸 키 파일 크기: $(wc -c < /tmp/secret.jks) / 기대값 2572"
+            echo "풀어낸 키 지문: $(sha256sum /tmp/secret.jks | cut -c1-16)… / 기대값 47358fa11eae789a…"
+            if keytool -list -keystore /tmp/secret.jks -storepass vidshelf >/dev/null 2>&1; then
+              cp /tmp/secret.jks ~/vidshelf-signing/vidshelf.jks
+              used_secret=yes
+              echo "서명 키: 저장소 비밀값(VIDSHELF_KEYSTORE_B64) 사용"
+            else
+              echo "::warning::VIDSHELF_KEYSTORE_B64 비밀값으로 키를 열 수 없습니다. 파일 내용을 처음부터 끝까지 빠짐없이 붙여 넣었는지 확인하세요. 이번 빌드는 이전 키로 만듭니다."
             fi
-            echo "서명 키: 저장소 비밀값(VIDSHELF_KEYSTORE_B64) 사용"
+          fi
+          if [ "$used_secret" = yes ]; then
+            :
           elif [ -f ~/vidshelf-signing/vidshelf.jks ]; then
             echo "서명 키: Actions 캐시의 키 사용"
           else
