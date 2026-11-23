@@ -113,6 +113,17 @@ public class MainActivity extends Activity {
         root = new FrameLayout(this);
         root.setBackgroundColor(systemDark() ? DARK_BG : LIGHT_BG);
         setContentView(root);
+        // 안드로이드 15부터는 화면이 상태 표시줄·내비게이션 막대 아래까지 그려짐 → 그만큼 직접 비워 둠 (키보드가 올라오면 키보드 높이도)
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().setDecorFitsSystemWindows(false);
+            root.setOnApplyWindowInsetsListener((v, ins) -> {
+                if (customView != null) { v.setPadding(0, 0, 0, 0); return WindowInsets.CONSUMED; }   // 영상 전체 화면은 끝까지
+                android.graphics.Insets bars = ins.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                android.graphics.Insets ime = ins.getInsets(WindowInsets.Type.ime());
+                v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, ime.bottom));
+                return WindowInsets.CONSUMED;
+            });
+        }
         applyBars(systemDark());
     }
 
@@ -201,8 +212,12 @@ public class MainActivity extends Activity {
                     try { startActivity(new android.content.Intent(android.provider.Settings.ACTION_REQUEST_MANAGE_MEDIA, Uri.parse("package:" + getPackageName()))); } catch (Exception ignored) {}
                     return true;
                 }
-                // 앱 서버 주소만 앱 안에서 열고, 그 밖의 주소는 열지 않음
-                return !("127.0.0.1".equals(u.getHost()) || "localhost".equals(u.getHost()));
+                // 앱 서버 주소만 앱 안에서 열고, 바깥 https 주소(개인정보처리방침 등)는 휴대폰 브라우저로
+                if ("127.0.0.1".equals(u.getHost()) || "localhost".equals(u.getHost())) return false;
+                if ("https".equals(u.getScheme())) {
+                    try { startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, u)); } catch (Exception ignored) {}
+                }
+                return true;
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
@@ -214,6 +229,7 @@ public class MainActivity extends Activity {
                 root.addView(view, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
                 web.setVisibility(View.GONE);
                 setFullscreenBars(true);
+                root.requestApplyInsets();
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR);
             }
 
@@ -256,6 +272,7 @@ public class MainActivity extends Activity {
         customCallback = null;
         web.setVisibility(View.VISIBLE);
         setFullscreenBars(false);
+        root.requestApplyInsets();
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
     }
 
@@ -363,8 +380,9 @@ public class MainActivity extends Activity {
     @SuppressWarnings("deprecation")
     private void applyBars(boolean dark) {
         int bg = dark ? DARK_BG : LIGHT_BG;
-        getWindow().setStatusBarColor(bg);
+        getWindow().setStatusBarColor(bg);       // 안드로이드 14 이하용 (15부터는 아래 root 배경이 막대 뒤에 보임)
         getWindow().setNavigationBarColor(bg);
+        if (root != null) root.setBackgroundColor(bg);
         if (web != null) web.setBackgroundColor(bg);
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController c = getWindow().getInsetsController();
@@ -473,9 +491,8 @@ public class MainActivity extends Activity {
     private void show(View v) {
         if (web != null) return;
         root.removeAllViews();
+        applyBars(true);   // 권한·오류 화면은 어두운 바탕
         root.setBackgroundColor(BG);
-        getWindow().setStatusBarColor(BG);
-        getWindow().setNavigationBarColor(BG);
         root.addView(v, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 

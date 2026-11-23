@@ -7,14 +7,14 @@ def stableKeystore = System.getenv("VIDSHELF_KEYSTORE")
 
 android {
     namespace "app.vidshelf"
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId "app.vidshelf"
         minSdk 29
-        targetSdk 34
-        versionCode 66
-        versionName "8.6"
+        targetSdk 35   // 플레이스토어 요구 (안드로이드 15)
+        versionCode 67
+        versionName "8.7"
     }
 
     compileOptions {
@@ -41,6 +41,12 @@ android {
     buildTypes {
         debug {
             minifyEnabled false
+            if (stableKeystore) signingConfig signingConfigs.stable
+        }
+        // 플레이스토어용 (AAB). 웹 화면과 이어지는 코드가 이름으로 불리므로 코드 줄이기(난독화)는 쓰지 않음
+        release {
+            minifyEnabled false
+            shrinkResources false
             if (stableKeystore) signingConfig signingConfigs.stable
         }
     }

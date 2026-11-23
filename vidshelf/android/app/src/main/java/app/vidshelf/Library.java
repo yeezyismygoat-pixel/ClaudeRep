@@ -140,7 +140,6 @@ public class Library implements HttpServer.Handler {
         synchronized (this) { albums = new ArrayList<>(icloudAlbums); }
         for (ICloud.Album a : albums) ICloud.load(a);   // iCloud 공유 앨범도 함께 새로 받음
         scan();
-        lookupMissingSoon();
         megaThumbsSoon();
     }
 
@@ -340,8 +339,7 @@ public class Library implements HttpServer.Handler {
     }
 
     // ------------------------------------------------------------------ 출연자 자동 지정 · 정보 찾기
-    private final java.util.concurrent.atomic.AtomicBoolean lookupRunning = new java.util.concurrent.atomic.AtomicBoolean();
-    private volatile String lookupStatus = "";
+    private volatile String lookupStatus = "";   // (사람 정보 자동 찾기는 없앰 — 항상 비어 있음)
 
     // ------------------------------------------------------------------ 태그 묶음(상위 태그)·다른 이름
     private synchronized JSONObject tagInfo(long id) throws JSONException {
@@ -402,53 +400,6 @@ public class Library implements HttpServer.Handler {
         JSONObject o = all.optJSONObject(String.valueOf(id));
         if (o == null) { o = new JSONObject(); all.put(String.valueOf(id), o); }
         return o;
-    }
-
-    /** 정보를 아직 찾아보지 않은 출연자를 백그라운드에서 인터넷으로 찾습니다. */
-    public void lookupMissingSoon() {
-        if (!lookupRunning.compareAndSet(false, true)) return;
-        new Thread(() -> {
-            try {
-                List<long[]> todo = new ArrayList<>();
-                synchronized (this) {
-                    Iterator<String> it = store.optJSONObject("performers").keys();
-                    while (it.hasNext()) {
-                        long id = Long.parseLong(it.next());
-                        if (!performerInfo(id).has("lookup_at")) todo.add(new long[]{id});
-                    }
-                }
-                int i = 0;
-                for (long[] t : todo) {
-                    lookupStatus = "사람 정보 찾는 중… " + (++i) + "/" + todo.size();
-                    lookupPerformer(t[0], false);
-                }
-            } catch (Exception ignored) {
-            } finally {
-                lookupStatus = "";
-                lookupRunning.set(false);
-            }
-        }).start();
-    }
-
-    /** 한 출연자의 정보를 찾아 저장합니다. overwrite 가 false 면 비어 있는 항목만 채움. */
-    public JSONObject lookupPerformer(long id, boolean overwrite) throws JSONException {
-        String name, group;
-        synchronized (this) {
-            name = store.optJSONObject("performers").optString(String.valueOf(id), "");
-            group = performerInfo(id).optString("group", "");
-        }
-        if (name.isEmpty()) return null;
-        PersonLookup.Result r = PersonLookup.find(name, group);
-        synchronized (this) {
-            JSONObject info = performerInfo(id);
-            String[][] f = {{"real_name", r.realName}, {"birthdate", r.birthdate}, {"height", r.height}};
-            for (String[] kv : f) if (kv[1] != null && (overwrite || info.optString(kv[0]).isEmpty())) info.put(kv[0], kv[1]);
-            if (r.source != null) { info.put("source", r.source); info.put("source_url", r.sourceUrl); }
-            info.put("lookup_at", System.currentTimeMillis() / 1000);
-            info.put("lookup_found", !r.empty());
-            save();
-            return entityJson("performers", id);
-        }
     }
 
     private synchronized JSONObject entityJson(String field, long id) throws JSONException {
@@ -1775,8 +1726,8 @@ public class Library implements HttpServer.Handler {
         String app = appToken(), tok = authToken();
         for (String part : cookie.split(";")) {
             String p = part.trim();
-            if (p.startsWith("vs_app=") && MessageDigest.isEqual(p.substring(7).getBytes(), app.getBytes())) return true;
-            if (tok != null && p.startsWith("vs_auth=") && MessageDigest.isEqual(p.substring(8).getBytes(), tok.getBytes())) return true;
+            // 이 앱 화면만 아는 무작위 열쇠(앱 안 WebView 에만 넣어 둠). 같은 폰의 다른 앱은 이 값을 몰라 접근할 수 없음
+            if (!app.isEmpty() && p.startsWith("vs_app=") && MessageDigest.isEqual(p.substring(7).getBytes(), app.getBytes())) return true;
         }
         return false;
     }
@@ -1869,7 +1820,8 @@ public class Library implements HttpServer.Handler {
             res.json(200, new JSONObject().put("required", true).put("ok", authed(r)).put("password_set", authToken() != null).toString());
             return;
         }
-        if (p0.equals("login") && m.equals("POST")) {
+        if (p0.equals("login") && m.equals("POST")) {   // 비밀번호 로그인은 쓰지 않음 (다른 앱이 비밀번호를 맞혀 들어오는 것을 막음)
+            if (true) { res.error(403, "이 앱에서는 비밀번호 로그인을 쓰지 않습니다"); return; }
             JSONObject b = body(r);
             String ph = settings().optString("password_hash", "");
             if (!ph.isEmpty() && MessageDigest.isEqual(hashPassword(b.optString("password"), settings().optString("salt")).getBytes(), ph.getBytes())) {
@@ -2057,11 +2009,6 @@ public class Library implements HttpServer.Handler {
             }
         }
         if (p0.equals("performers") && parts.length >= 2) {
-            if (parts.length == 3 && parts[2].equals("lookup") && m.equals("POST")) {   // 인터넷에서 다시 찾기 (네트워크, 잠금 밖)
-                JSONObject e = lookupPerformer(parseLong(parts[1], -1), true);
-                if (e == null) res.error(404, "not found"); else res.json(200, e.toString());
-                return;
-            }
             if (parts.length == 2 && m.equals("PATCH")) {
                 JSONObject b = body(r);
                 JSONObject info = b.optJSONObject("info");

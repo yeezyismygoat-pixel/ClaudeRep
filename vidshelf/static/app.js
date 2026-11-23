@@ -2436,7 +2436,9 @@ async function renderSettings(opts = {}) {
         h("div", { class: "lib-list set-list" }, g.items.filter(Boolean).map((it) =>
           h("a", { href: `#/settings?section=${it.id}` }, setIcon(it.icon),
             h("div", { class: "set-text" }, h("div", { class: "set-title" }, it.title), h("div", { class: "meta" }, it.sub)),
-            h("span", { class: "chev", "aria-hidden": "true" }, "›"))))))));
+            h("span", { class: "chev", "aria-hidden": "true" }, "›")))))),
+      h("p", { class: "meta about-line" }, "VidShelf · ", h("a", { href: "https://yeezyismygoat-pixel.github.io/ClaudeRep/vidshelf/privacy/", target: "_blank", rel: "noopener" }, "개인정보처리방침"),
+        " · 모든 정보는 이 휴대폰 안에만 저장됩니다")));
     return;
   }
 
@@ -2585,9 +2587,8 @@ async function renderPerformer(id) {
       counts,
       h("div", { class: "row", style: "margin:8px 0 2px" }, shuffleBtn),
       facts.length ? h("dl", { class: "info pf-facts" }, ...facts.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)]))
-        : hasInfo ? h("p", { class: "meta" }, p.looked_up ? "등록된 정보가 없습니다. ‘수정’에서 직접 입력할 수 있습니다." : "정보를 인터넷에서 찾는 중이거나 아직 찾지 않았습니다.") : null,
-      p.source ? h("p", { class: "meta", style: "margin:6px 0 0" }, "출처: ",
-        p.source_url ? h("a", { href: p.source_url, target: "_blank", rel: "noopener", style: "text-decoration:underline" }, p.source) : p.source) : null));
+        : hasInfo ? h("p", { class: "meta" }, "등록된 정보가 없습니다. ‘수정’에서 직접 입력할 수 있습니다.") : null,
+      null));
 
   // --- 수정 (이름 변경 · 정보 · 삭제)
   let editPanel = null;
@@ -2617,14 +2618,6 @@ async function renderPerformer(id) {
         location.hash = `#/performer?id=${newId}`;
       } catch (e) { toast(e.message); ev.currentTarget.disabled = false; }
     } }, "저장");
-    const lookupBtn = hasInfo ? h("button", { class: "btn", onclick: async (ev) => {
-      const b = ev.currentTarget; b.disabled = true; b.textContent = "찾는 중…";
-      try {
-        const r = await api(`performers/${id}/lookup`, { method: "POST" });
-        toast(r.lookup_found ? "인터넷에서 정보를 찾았습니다" : "정보를 찾지 못했습니다");
-      } catch (e) { toast(e.message); }
-      route();
-    } }, "인터넷에서 다시 찾기") : null;
     const delBtn = h("button", { class: "btn danger", onclick: async () => {
       if (!confirm(`‘${p.name}’ 사람을 삭제할까요?\n영상과 사진은 그대로 남고, 사람 지정만 없어집니다.`)) return;
       await api(`performers/${id}`, { method: "DELETE" });
@@ -2635,8 +2628,8 @@ async function renderPerformer(id) {
     editPanel = h("div", { class: "panel" }, h("h3", {}, "수정"),
       form,
       h("div", { class: "row", style: "margin-top:10px" }, coverBtn),
-      h("div", { class: "row", style: "margin-top:12px" }, saveBtn, lookupBtn, h("button", { class: "btn", onclick: () => setEdit(false) }, "취소")),
-      hasInfo ? h("p", { class: "meta" }, "이름을 다른 사람과 같게 바꾸면 두 사람이 합쳐집니다. 그룹 이름을 정확히 적어 두면 인터넷에서 찾을 때 동명이인을 거릅니다.") : null,
+      h("div", { class: "row", style: "margin-top:12px" }, saveBtn, h("button", { class: "btn", onclick: () => setEdit(false) }, "취소")),
+      hasInfo ? h("p", { class: "meta" }, "이름을 다른 사람과 같게 바꾸면 두 사람이 합쳐집니다.") : null,
       h("div", { class: "pf-danger" }, delBtn));
   }
 

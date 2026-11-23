@@ -193,7 +193,7 @@ class ICloud {
                 String loc = u.optString("url_location"), path = u.optString("url_path"), scheme = "https", host = loc;
                 JSONObject l = locs == null ? null : locs.optJSONObject(loc);
                 if (l != null) {
-                    scheme = l.optString("scheme", "https");
+                    scheme = "https";   // 항상 암호화 연결
                     JSONArray hosts = l.optJSONArray("hosts");
                     if (hosts != null && hosts.length() > 0) host = hosts.optString(0, loc);
                 }

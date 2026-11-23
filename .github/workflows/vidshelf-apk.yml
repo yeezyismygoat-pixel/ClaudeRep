@@ -57,21 +57,28 @@ jobs:
 
       - name: Build APK
         working-directory: vidshelf/android
-        run: VIDSHELF_KEYSTORE=$HOME/vidshelf-signing/vidshelf.jks gradle --no-daemon assembleDebug
+        run: VIDSHELF_KEYSTORE=$HOME/vidshelf-signing/vidshelf.jks gradle --no-daemon assembleDebug bundleRelease
 
       - name: Rename
-        run: cp vidshelf/android/app/build/outputs/apk/debug/app-debug.apk VidShelf.apk
+        run: |
+          cp vidshelf/android/app/build/outputs/apk/debug/app-debug.apk VidShelf.apk
+          # 플레이스토어에 올리는 파일 (AAB)
+          cp vidshelf/android/app/build/outputs/bundle/release/app-release.aab VidShelf.aab
 
       - uses: actions/upload-artifact@v4
         with:
           name: VidShelf-apk
-          path: VidShelf.apk
+          path: |
+            VidShelf.apk
+            VidShelf.aab
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: vidshelf-apk
           name: VidShelf APK
-          body: "보안 폴더 안의 브라우저로 이 페이지를 열고 VidShelf.apk 를 받아 설치하세요."
-          files: VidShelf.apk
+          body: "폰에 바로 설치: VidShelf.apk · 플레이스토어 업로드용: VidShelf.aab"
+          files: |
+            VidShelf.apk
+            VidShelf.aab
           make_latest: true
