@@ -1900,7 +1900,8 @@ async function renderMedia(params0, type0) {
 
 // ---------------------------------------------------------------- 보기 방식 (그리드 / 이미지 벽)
 function viewMode(kind) {
-  try { return localStorage.getItem("vs-mode-" + kind) || "grid"; } catch (e) { return "grid"; }
+  const def = kind === "media" ? "wall" : "grid";   // 미디어 탭은 이미지 벽이 기본
+  try { return localStorage.getItem("vs-mode-" + kind) || def; } catch (e) { return def; }
 }
 function modeToggle(kind, onChange) {
   const cur = viewMode(kind);
@@ -2027,8 +2028,10 @@ async function renderPhotos(params) {
 
 function photoCell(p, mode, open) {
   if (mode === "wall") {
-    return wallTile({ onclick: open, src: `/photothumb/${p.id}.jpg`, ratio: p.width && p.height ? p.width / p.height : 0,
+    const t = wallTile({ onclick: open, src: `/photothumb/${p.id}.jpg`, ratio: p.width && p.height ? p.width / p.height : 0,
       performers: p.performers, badges: [p.favorite ? h("span", { class: "badge fav" }, ico("heart", "filled")) : null] });
+    t.dataset.pid = p.id;   // 사진 보기를 닫으면 마지막으로 본 사진 칸으로
+    return t;
   }
   const img = h("img", { src: `/photothumb/${p.id}.jpg`, loading: "lazy", alt: "" });
   img.onerror = () => (img.hidden = true);
@@ -2056,7 +2059,16 @@ async function openViewer(items, start) {
   const close = () => {
     if (closed) return;
     closed = true; el.remove(); document.body.style.overflow = "";
+    try { if (window.VidShelfApp && VidShelfApp.immersive) VidShelfApp.immersive(false); } catch (er) {}
+    applyTheme();   // 사진 보기 동안 검게 했던 위아래 막대를 원래 색으로
     document.removeEventListener("keydown", onKey); window.removeEventListener("popstate", onPop);
+    // 목록으로 돌아가면 마지막으로 본 사진 칸이 화면에 보이게
+    const p = items[i], cell = p && document.querySelector(`[data-pid="${p.id}"]`);
+    if (cell) {
+      const r = cell.getBoundingClientRect();
+      if (r.top < 70 || r.bottom > window.innerHeight - 150) cell.scrollIntoView({ block: "center", inline: "nearest" });
+      cell.classList.remove("just-seen"); void cell.offsetWidth; cell.classList.add("just-seen");
+    }
   };
   const onPop = () => close();
   const onKey = (e) => {
@@ -2177,7 +2189,16 @@ async function openViewer(items, start) {
   const stage = h("div", { class: "stage" }, track);
   // 손가락 동작: 사진뿐 아니라 아래 정보 부분에서 밀어도 넘어감 (세로로 움직이면 스크롤)
   let sx = null, sy = null, t0 = 0, lock = null, dx = 0;
-  let pinch = null, pan = null, lastTap = 0;
+  let pinch = null, pan = null, lastTap = 0, tapTimer = null, full = false, pull = 0;
+  const fullBtn = h("button", { class: "vbtn", "aria-label": "전체 화면으로 보기" }, ico("full"));
+  const setFull = (on) => {
+    full = on;
+    el.classList.toggle("full", on);
+    if (on) el.scrollTo({ top: 0 });
+    fullBtn.setAttribute("aria-label", on ? "전체 화면 끝내기" : "전체 화면으로 보기");
+    try { if (window.VidShelfApp && VidShelfApp.immersive) VidShelfApp.immersive(on); } catch (er) {}   // 휴대폰 위아래 막대도 숨김
+  };
+  fullBtn.onclick = () => setFull(!full);
   const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
   const onStart = (e) => {
     if (e.target.closest("input, textarea, select, .vtop")) { sx = null; return; }
@@ -2209,7 +2230,19 @@ async function openViewer(items, start) {
     }
     if (sx == null) return;
     const x = e.touches[0].clientX - sx, y = e.touches[0].clientY - sy;
-    if (!lock) { if (Math.abs(x) < 8 && Math.abs(y) < 8) return; lock = Math.abs(x) > Math.abs(y) * 1.2 ? "h" : "v"; }
+    if (!lock) {
+      if (Math.abs(x) < 8 && Math.abs(y) < 8) return;
+      lock = Math.abs(x) > Math.abs(y) * 1.2 ? "h" : "v";
+      // 맨 위(또는 전체 화면)에서 아래로 쓸면 닫기
+      if (lock === "v" && y > 0 && zoom === 1 && (full || el.scrollTop <= 0)) { lock = "d"; el.style.transition = "none"; }
+    }
+    if (lock === "d") {
+      if (e.cancelable) e.preventDefault();
+      pull = Math.max(0, y);
+      el.style.transform = `translateY(${pull}px) scale(${1 - Math.min(0.12, pull / 2500)})`;
+      el.style.opacity = String(1 - Math.min(0.55, pull / 700));
+      return;
+    }
     if (lock !== "h") return;
     e.preventDefault();
     const edge = (x > 0 && i === 0) || (x < 0 && i === items.length - 1);
@@ -2220,9 +2253,22 @@ async function openViewer(items, start) {
     if (pinch) { if (e.touches.length < 2) { pinch = null; if (zoom < 1.05) resetZoom(true); } return; }
     if (pan) { pan = null; return; }
     if (sx == null) return;
-    if (lock !== "h") {   // 움직이지 않은 짧은 탭: 사진을 두 번 누르면 확대/원래대로
+    if (lock === "d") {   // 아래로 쓸기: 충분히 내렸으면 닫고, 아니면 제자리로
+      sx = null;
+      const fast = pull / Math.max(1, Date.now() - t0) > 0.5;
+      el.style.transition = "transform .22s cubic-bezier(.2,.8,.2,1), opacity .22s ease";
+      if (pull > 110 || (fast && pull > 40)) {
+        el.style.transform = "translateY(60%) scale(.9)"; el.style.opacity = "0";
+        setTimeout(() => history.back(), 180);
+      } else { el.style.transform = ""; el.style.opacity = ""; }
+      pull = 0;
+      return;
+    }
+    if (lock !== "h") {   // 움직이지 않은 짧은 탭: 한 번 = 전체 화면 켜고 끄기, 두 번 = 확대/원래대로
       if (!lock && stage.contains(e.target) && Date.now() - t0 < 250) {
         const now = Date.now();
+        clearTimeout(tapTimer);
+        if (now - lastTap >= 300) tapTimer = setTimeout(() => { if (zoom === 1 && !closed) setFull(!full); }, 300);
         if (now - lastTap < 300) {
           lastTap = 0;
           if (zoom > 1) resetZoom(true);
@@ -2241,7 +2287,7 @@ async function openViewer(items, start) {
     else setX(0, true);   // 제자리로
   };
   const el = h("div", { class: "viewer", role: "dialog", "aria-modal": "true" },
-    h("div", { class: "vtop" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, icon("close")), counter, favBtn),
+    h("div", { class: "vtop" }, h("button", { class: "vbtn", "aria-label": "닫기", onclick: () => history.back() }, icon("close")), counter, fullBtn, favBtn),
     stage, info);
   el.addEventListener("touchstart", onStart, { passive: true });
   el.addEventListener("touchmove", onMove, { passive: false });
@@ -2249,6 +2295,7 @@ async function openViewer(items, start) {
   el.addEventListener("touchcancel", onEnd);
   document.body.append(el);
   document.body.style.overflow = "hidden";
+  try { if (window.VidShelfApp) VidShelfApp.setDark(true); } catch (er) {}   // 사진 보기는 검은 바탕이라 위아래 막대도 검게
   history.pushState({ viewer: true }, "");   // 휴대폰 뒤로 가기로 닫히게
   window.addEventListener("popstate", onPop);
   document.addEventListener("keydown", onKey);

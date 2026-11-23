@@ -1435,3 +1435,15 @@ body.shorts-mode .topbar .tabs a.on .ico { --knock: #fff; }
 .setup-bar .setup-all { background: var(--panel); border: 0; box-shadow: var(--soft-lo); }
 .lib-mode { margin: 0 0 10px; }
 .lib-mode button { display: inline-flex; align-items: center; justify-content: center; }
+
+/* ================= 사진 보기: 전체 화면 · 아래로 쓸어 닫기 ================= */
+.viewer { will-change: transform, opacity; }
+.viewer.full { overflow: hidden; }
+.viewer.full .vtop { opacity: 0; pointer-events: none; transition: opacity .2s ease; }
+.viewer .vtop { transition: opacity .2s ease; }
+.viewer.full .vinfo { display: none; }
+.viewer.full .stage { height: 100vh; height: 100dvh; touch-action: none; }
+.viewer .stage { transition: height .25s cubic-bezier(.2,.8,.2,1); }
+/* 사진 보기를 닫으면 마지막으로 본 칸을 잠깐 표시 */
+.just-seen .tile-img, .just-seen.tile-img { animation: justSeen 1.1s ease; }
+@keyframes justSeen { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 3px transparent; } }

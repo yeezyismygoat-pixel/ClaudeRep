@@ -367,6 +367,20 @@ public class MainActivity extends Activity {
             }
         }
 
+        /** 사진 전체 화면: 상태 표시줄·내비게이션 막대를 숨김 (가장자리에서 쓸면 잠깐 보임) */
+        @android.webkit.JavascriptInterface
+        public void immersive(boolean on) {
+            ui.post(() -> {
+                if (Build.VERSION.SDK_INT < 30) return;
+                WindowInsetsController c = getWindow().getInsetsController();
+                if (c == null) return;
+                if (on) {
+                    c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                    c.hide(WindowInsets.Type.systemBars());
+                } else c.show(WindowInsets.Type.systemBars());
+            });
+        }
+
         /** 웹 화면에서 재생할 수 없는 영상을 앱 내장 플레이어(ExoPlayer)로 재생 */
         @android.webkit.JavascriptInterface
         public void playNative(String id, String title, double pos) {
