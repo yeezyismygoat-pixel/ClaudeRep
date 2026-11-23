@@ -1341,3 +1341,76 @@ body.dock-down .media.docked .media-bar { transform: none; opacity: 1; pointer-e
 /* 고른 탭의 아이콘은 안쪽이 채워짐 */
 .tabs .ico .f { fill: transparent; transition: fill .2s ease; }
 .tabs a.on .ico .f { fill: currentColor; }
+
+/* ================= 10.0: 새 아이콘 한 벌 · 통통 튀는 원 ================= */
+/* 아이콘: 가는 둥근 선. .b 몸통은 켜지면 통째로 칠하고, .k 안쪽 무늬는 뚫림(--knock = 뒤 바탕색) */
+.ico { stroke-width: 1.5; overflow: visible; --knock: var(--panel); }
+.ico .b { fill: var(--ico-fill, transparent); transition: fill .2s ease; }
+.ico .k { stroke: var(--ico-k, currentColor); transition: stroke .2s ease; }
+.ico .k.fk { fill: var(--ico-kf, transparent); }
+.ico .d { fill: currentColor; stroke: none; }
+.ico .d.kd { fill: var(--ico-kd, currentColor); }
+.ico .tp { fill: var(--ico-tp, currentColor); stroke: none; transition: fill .2s ease; }
+.ico text { font: 700 6.5px system-ui, sans-serif; fill: currentColor; stroke: none; }
+.ico.filled, .on > .ico, .on > i > .ico, .fav > .ico, .sfav.on .ico, .heart-burst .ico, .favbtn.on .ico {
+  --ico-fill: currentColor; --ico-k: var(--knock); --ico-kf: var(--knock); --ico-tp: var(--knock); --ico-kd: var(--knock); }
+.viewer .vbtn.fav .ico, .sfav.on .ico { fill: none; }
+/* 글자 옆 작은 아이콘 */
+.ico.in { width: 1.15em; height: 1.15em; vertical-align: -.22em; margin-right: .32em; flex: none; }
+.ico.x { width: 15px; height: 15px; vertical-align: -3px; }
+.chev .ico { width: 18px; height: 18px; display: block; }
+.sq-fav .ico { width: 17px; height: 17px; display: block; filter: drop-shadow(0 1px 3px rgba(0,0,0,.45)); }
+.yt-thumb .sq-fav .ico { width: 20px; height: 20px; }
+.badge.fav .ico { width: 12px; height: 12px; display: block; }
+.sf-star .ico { width: 13px; height: 13px; vertical-align: -2px; color: var(--accent); }
+.yt-av > .ico { width: 17px; height: 17px; color: var(--muted); }
+.noimg .ico { width: 28px; height: 28px; opacity: .55; }
+.pf-avatar > .ico, .pf-avatar .noimg .ico { width: 42%; height: 42%; color: var(--muted); opacity: 1; }
+.pf-avatar { display: grid; place-items: center; }
+.splay .ico { width: 58px; height: 58px; filter: drop-shadow(0 2px 10px rgba(0,0,0,.4)); }
+.stars-mini { display: inline-flex; gap: 1px; vertical-align: -1px; }
+.stars-mini .ico { width: 12px; height: 12px; }
+.stars button .ico, .stars.ro span .ico { width: 26px; height: 26px; display: block; }
+.stars button { color: var(--star-off); }
+.stars button.on, .stars.ro span.on { color: var(--accent); }
+.home-search > .ico, .sheet-search > .ico, .ex-search-box > .ico { width: 19px; height: 19px; color: var(--muted); flex: none; }
+.vact i .ico, .peek-act i .ico { width: 23px; height: 23px; display: block; margin: 0 auto 1px; }
+.vact i, .peek-act i { display: block; }
+.vact.on i { color: var(--fav); }
+.peek-act.on i { color: var(--fav); }
+.sbtn .ico { width: 26px; height: 26px; }
+.round-btn .ico { width: 21px; height: 21px; }
+.seg button .ico.in, .hchip .ico.in { width: 1.05em; height: 1.05em; }
+.swipe-under .ico.in { width: 1.2em; height: 1.2em; }
+.meta .ico.in { width: 1.05em; height: 1.05em; opacity: .85; }
+/* 설정 목록 아이콘: 항목마다 옅은 색 칸 */
+:root, :root[data-theme="light"] { --t1: #E4ECFF; --i1: #2F5BEA; --t2: #FBE5EA; --i2: #D23F63; --t3: #E2F2E8; --i3: #2E8A57; --t4: #FCEFD9; --i4: #B7791F; --t5: #ECE6FA; --i5: #7656C8; }
+:root[data-theme="dark"] { --t1: #222D4D; --i1: #9DB4FF; --t2: #3D2229; --i2: #FF8DA6; --t3: #1E3428; --i3: #74D19E; --t4: #3A2F1C; --i4: #F0BE6A; --t5: #2C2545; --i5: #B9A2F5; }
+.set-ico.t1 { background: var(--t1); color: var(--i1); } .set-ico.t2 { background: var(--t2); color: var(--i2); } .set-ico.t3 { background: var(--t3); color: var(--i3); }
+.set-ico.t4 { background: var(--t4); color: var(--i4); } .set-ico.t5 { background: var(--t5); color: var(--i5); }
+
+/* 하단 바: 고른 탭 뒤에 원 하나가 통통 튀며 옮겨 감 */
+@property --tx { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --tw { syntax: "<length>"; inherits: false; initial-value: 46px; }
+.topbar .tabs { touch-action: none; }
+.tab-blob { position: absolute; left: 0; top: 50%; width: var(--tw); height: 46px; margin-top: -23px; border-radius: 23px; z-index: 0; pointer-events: none;
+  background: var(--accent); box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 35%, transparent);
+  transform: translateX(calc(var(--tx) - var(--tw) / 2));
+  transition: --tx .55s cubic-bezier(.34,1.42,.5,1), --tw .2s ease, background-color .3s ease, opacity .2s ease; }
+.tab-blob.still { transition: none; }
+.tab-blob.off { opacity: 0; }
+.tab-blob.drag { transition: --tw .2s ease, background-color .3s ease; scale: 1.08; }
+.tab-blob.press { animation: blobPress .42s cubic-bezier(.34,1.5,.5,1); }
+@keyframes blobPress { 35% { scale: .8; } 100% { scale: 1; } }
+.topbar .tabs a { z-index: 1; }
+.topbar .tabs a.on { color: var(--accent-ink) !important; }
+.topbar .tabs a.on::after { display: none !important; }
+.topbar .tabs a.near { color: var(--text) !important; }
+.topbar .tabs a .ico { stroke-width: 1.5 !important; }
+.topbar .tabs a.on .ico { --knock: var(--accent); animation: tabPop .4s cubic-bezier(.34,1.7,.5,1); }
+@keyframes tabPop { from { transform: scale(.66); } }
+body.shorts-mode .tab-blob { background: #fff; box-shadow: none; }
+body.shorts-mode .topbar .tabs a.on { color: #16161A !important; }
+body.shorts-mode .topbar .tabs a.on .ico { --knock: #fff; }
+@media (prefers-reduced-motion: reduce) { .tab-blob { transition: opacity .2s ease; } .topbar .tabs a.on .ico { animation: none; } }
+.topbar .tabs a, .topbar .tabs .ico { -webkit-user-drag: none; user-select: none; -webkit-user-select: none; }

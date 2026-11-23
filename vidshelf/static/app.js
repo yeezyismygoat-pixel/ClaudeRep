@@ -31,6 +31,99 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 
+// ---------------------------------------------------------------- 아이콘 (둥근 선 한 벌)
+// .b 몸통(켜지면 통째로 칠함) · .k 몸통 안 무늬(켜지면 뚫림) · .fk 뚫린 무늬를 칠로 · .d 늘 칠하는 점·삼각형 · .tp 재생 삼각형(꺼짐 = 칠, 켜짐 = 뚫림)
+const ICONS = (() => {
+  const gear = () => {
+    const n = 8, ro = 9.3, ri = 7.2, P = (Math.PI * 2) / n, pts = [];
+    for (let k = 0; k < n; k++) {
+      const a = k * P - Math.PI / 2;
+      [[a - 0.17 * P, ro], [a + 0.17 * P, ro], [a + 0.31 * P, ri], [a + 0.69 * P, ri]].forEach(([t, r]) => pts.push([12 + r * Math.cos(t), 12 + r * Math.sin(t)]));
+    }
+    return `<path class="b" d="M${pts.map((p) => p.map((v) => v.toFixed(2)).join(" ")).join("L")}z"/><circle class="k" cx="12" cy="12" r="2.8"/>`;
+  };
+  const P3 = [3.5, 9.8, 16.1];
+  const WALL = [[3.5, 3.5, 9.6], [15.3, 3.5, 5.2], [3.5, 13.1, 5.2], [10.9, 13.1, 9.6]];
+  const PHOTO = '<rect class="b" x="3.5" y="4.5" width="17" height="15" rx="3.2"/><circle class="k fk" cx="9" cy="9.6" r="1.6"/><path class="k" d="M20.5 15.2l-4-3.9a1.6 1.6 0 0 0-2.2 0L6.2 19.4"/>';
+  const FOLDER = '<path class="b" d="M3.5 7.4c0-1.1.9-1.9 1.9-1.9h3.7c.5 0 1 .2 1.3.6l1.4 1.6h6.8c1.1 0 1.9.9 1.9 1.9v8.2c0 1.1-.9 1.9-1.9 1.9H5.4c-1.1 0-1.9-.9-1.9-1.9z"/>';
+  const SPEAKER = '<path class="b" d="M4 9.8v4.4c0 .7.5 1.2 1.2 1.2h2.5l4.2 3.5c.6.5 1.6.1 1.6-.8V5.9c0-.9-1-1.3-1.6-.8L7.7 8.6H5.2C4.5 8.6 4 9.1 4 9.8z"/>';
+  const CHECK = '<path class="k" d="M8.2 12.3l2.6 2.6 5-5.2"/>';
+  return {
+    home: '<path class="b" d="M4 10.4 10.6 5a2.2 2.2 0 0 1 2.8 0L20 10.4V18.6a2 2 0 0 1-2 2h-3.2v-4.4a2.8 2.8 0 0 0-5.6 0v4.4H6a2 2 0 0 1-2-2z"/>',
+    media: '<path d="M7.5 3.8h9.7a3.3 3.3 0 0 1 3.3 3.3v8.4"/><rect class="b" x="3.5" y="7.3" width="13.6" height="12.9" rx="3.2"/><path class="tp" d="M8.03 11.5Q8.03 10.75 8.69 11.11L12.78 13.39Q13.43 13.75 12.78 14.11L8.69 16.39Q8.03 16.75 8.03 16z"/>',
+    shorts: '<rect class="b" x="5.8" y="2.6" width="12.4" height="18.8" rx="3.6"/><path class="tp" d="M9.56 9.45Q9.56 8.7 10.22 9.07L14.71 11.63Q15.36 12 14.71 12.37L10.22 14.93Q9.56 15.3 9.56 14.55z"/>',
+    explore: '<circle class="b" cx="12" cy="12" r="8.8"/><path class="k fk" d="M15.6 8.4 13.4 13.4 8.4 15.6 10.6 10.6z"/>',
+    apps: '<rect class="b" x="3.5" y="3.5" width="6.6" height="6.6" rx="2.2"/><rect class="b" x="13.9" y="3.5" width="6.6" height="6.6" rx="2.2"/><rect class="b" x="3.5" y="13.9" width="6.6" height="6.6" rx="2.2"/><rect class="b" x="13.9" y="13.9" width="6.6" height="6.6" rx="2.2"/>',
+    search: '<circle cx="10.8" cy="10.8" r="6.6"/><path d="M15.8 15.8 20.3 20.3"/>',
+    filter: '<path d="M3.5 7.5h6.7M19.8 7.5h.7M3.5 16.5h.7M13.8 16.5h6.7"/><circle class="b" cx="15" cy="7.5" r="2.3"/><circle class="b" cx="9" cy="16.5" r="2.3"/>',
+    viewList: '<rect class="d" x="3.5" y="3.5" width="17" height="9" rx="1.8"/><rect class="d" x="3.5" y="14.6" width="17" height="2.2" rx="1.1"/><rect class="d" x="3.5" y="18.3" width="10.5" height="2.2" rx="1.1"/>',
+    viewWall: WALL.map(([x, y, w]) => `<rect class="d" x="${x}" y="${y}" width="${w}" height="7.4" rx="1.8"/>`).join(""),
+    viewGrid: P3.flatMap((y) => P3.map((x) => `<rect class="d" x="${x}" y="${y}" width="4.4" height="4.4" rx="1.3"/>`)).join(""),
+    sort: '<path d="M7.5 19.5V4.5M4 8l3.5-3.5L11 8M16.5 4.5v15M13 16l3.5 3.5L20 16"/>',
+    shuffle: '<path d="M3.5 7.5h2.7c2.1 0 3.4 1 4.5 2.8l2.6 4.2c1.1 1.8 2.4 2.8 4.5 2.8h2.7M3.5 16.5h2.7c1.2 0 2.1-.3 2.9-1M14.4 8.5c.8-.7 1.7-1 2.9-1h2.7M17.8 5l2.5 2.5-2.5 2.5M17.8 14.5l2.5 2.5-2.5 2.5"/>',
+    history: '<path d="M4.2 12.5a7.8 7.8 0 1 0 2.3-6"/><path d="M4 3.8v3.7h3.7M12 8v4.3l2.8 1.8"/>',
+    star: '<path class="b" d="M11.1 3.9c.4-.8 1.4-.8 1.8 0l1.9 3.9 4.3.6c.8.1 1.2 1.1.6 1.7l-3.1 3 .7 4.3c.1.9-.8 1.5-1.5 1.1L12 16.5l-3.8 2c-.7.4-1.6-.2-1.5-1.1l.7-4.3-3.1-3c-.6-.6-.3-1.6.6-1.7l4.3-.6z"/>',
+    close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    up: '<path d="M6 14.5 12 8.5l6 6"/>',
+    down: '<path d="M6 9.5l6 6 6-6"/>',
+    next: '<path d="M9.5 5.5 16 12l-6.5 6.5"/>',
+    back: '<path d="M14.5 5.5 8 12l6.5 6.5"/>',
+    heart: '<path class="b" d="M12 20s-7.6-4.5-8.9-9.4C2.3 7.4 4.3 4.6 7.3 4.6c1.9 0 3.4 1 4.7 2.8 1.3-1.8 2.8-2.8 4.7-2.8 3 0 5 2.8 4.2 6C19.6 15.5 12 20 12 20z"/>',
+    tag: '<path class="b" d="M3.8 11.9V5.3c0-.8.7-1.5 1.5-1.5h6.6c.4 0 .8.2 1.1.4l7.2 7.2c.6.6.6 1.5 0 2.1l-6.6 6.6c-.6.6-1.5.6-2.1 0l-7.2-7.2c-.3-.3-.5-.7-.5-1z"/><circle class="k fk" cx="8.4" cy="8.4" r="1.4"/>',
+    person: '<circle class="b" cx="12" cy="8" r="3.8"/><path class="b" d="M4.9 19.6c.7-3.4 3.6-5.3 7.1-5.3s6.4 1.9 7.1 5.3c.1.6-.3 1-.9 1H5.8c-.6 0-1-.4-.9-1z"/>',
+    people: '<circle class="b" cx="9" cy="8.3" r="3.4"/><path class="b" d="M2.9 19.4c.6-3 3-4.7 6.1-4.7s5.5 1.7 6.1 4.7c.1.6-.3 1-.9 1H3.8c-.6 0-1-.4-.9-1z"/><path d="M15.4 4.9a3.4 3.4 0 0 1 0 6.8M17.6 14.9c2 .6 3.3 2.1 3.6 4.5"/>',
+    bookmark: '<path class="b" d="M6.5 5.2c0-.9.7-1.7 1.7-1.7h7.6c.9 0 1.7.7 1.7 1.7v14.6c0 .5-.6.8-1 .5L12 16.8l-4.5 3.5c-.4.3-1 0-1-.5z"/>',
+    more: '<circle class="d" cx="5.5" cy="12" r="1.8"/><circle class="d" cx="12" cy="12" r="1.8"/><circle class="d" cx="18.5" cy="12" r="1.8"/>',
+    edit: '<path class="b" d="M15.2 4.6a2 2 0 0 1 2.8 0l1.4 1.4a2 2 0 0 1 0 2.8L9.5 18.7 4.5 19.5l.8-5z"/><path class="k" d="M13.3 6.5l4.2 4.2"/>',
+    image: PHOTO,
+    photos: PHOTO,
+    frame: '<path d="M4 8.5V6.2C4 5 5 4 6.2 4h2.3M15.5 4h2.3C19 4 20 5 20 6.2v2.3M20 15.5v2.3c0 1.2-1 2.2-2.2 2.2h-2.3M8.5 20H6.2C5 20 4 19 4 17.8v-2.3"/><circle class="b" cx="12" cy="12" r="3.3"/>',
+    download: '<path d="M12 4v10.5M7.6 10.3 12 14.7l4.4-4.4M5 19.5h14"/>',
+    calendar: '<rect class="b" x="3.8" y="5" width="16.4" height="15.2" rx="3.2"/><path class="k" d="M3.8 10h16.4"/><path d="M8.2 3v3.6M15.8 3v3.6"/>',
+    done: '<circle class="b" cx="12" cy="12" r="8.8"/>' + CHECK,
+    select: '<rect class="b" x="4" y="4" width="16" height="16" rx="4.5"/>' + CHECK,
+    trash: '<path d="M4.5 7h15M9.6 7V5.3c0-.7.6-1.3 1.3-1.3h2.2c.7 0 1.3.6 1.3 1.3V7"/><path class="b" d="M6.5 7l.9 11.4c.1 1.2 1 2.1 2.2 2.1h4.8c1.2 0 2.1-.9 2.2-2.1L17.5 7z"/><path class="k" d="M10.3 11v5.3M13.7 11v5.3"/>',
+    undo: '<path d="M8.8 13.8 4.5 9.5l4.3-4.3"/><path d="M4.5 9.5h9.8a5.2 5.2 0 0 1 0 10.4h-3.3"/>',
+    pin: '<path class="b" d="M9 3.5h6c.6 0 1 .4 1 1s-.4 1-1 1h-.5v3.3l2.7 2.9c.2.2.3.5.3.8v1.1c0 .6-.4 1-1 1H7.5c-.6 0-1-.4-1-1v-1.1c0-.3.1-.6.3-.8l2.7-2.9V5.5H9c-.6 0-1-.4-1-1s.4-1 1-1z"/><path d="M12 14.6v5.9"/>',
+    play: '<path class="d" d="M7.2 5.6v12.8c0 1 1.1 1.6 1.9 1l10-6.4c.8-.5.8-1.6 0-2.1l-10-6.4c-.8-.5-1.9.1-1.9 1.1z"/>',
+    pause: '<rect class="d" x="5.8" y="4.8" width="4.4" height="14.4" rx="1.6"/><rect class="d" x="13.8" y="4.8" width="4.4" height="14.4" rx="1.6"/>',
+    prev: '<path d="M6 5.5v13"/><path class="d" d="M18.5 6.6v10.8c0 .9-1 1.4-1.7.9l-7.6-5.4c-.6-.4-.6-1.3 0-1.8l7.6-5.4c.7-.5 1.7 0 1.7.9z"/>',
+    nextv: '<path d="M18 5.5v13"/><path class="d" d="M5.5 6.6v10.8c0 .9 1 1.4 1.7.9l7.6-5.4c.6-.4.6-1.3 0-1.8L7.2 5.7c-.7-.5-1.7 0-1.7.9z"/>',
+    rew10: '<path d="M12 5.2A7.8 7.8 0 1 1 4.67 10.33"/><path d="M14.3 2.9 12 5.2l2.3 2.3"/><text x="12" y="15.4" text-anchor="middle">10</text>',
+    fwd10: '<path d="M12 5.2A7.8 7.8 0 1 0 19.33 10.33"/><path d="M9.7 2.9 12 5.2 9.7 7.5"/><text x="12" y="15.4" text-anchor="middle">10</text>',
+    speed: '<path class="d" d="M3.5 7.3v9.4c0 .8.9 1.3 1.6.8l6.2-4.7c.5-.4.5-1.2 0-1.6L5.1 6.5c-.7-.5-1.6 0-1.6.8zM12.5 7.3v9.4c0 .8.9 1.3 1.6.8l6.2-4.7c.5-.4.5-1.2 0-1.6l-6.2-4.7c-.7-.5-1.6 0-1.6.8z"/>',
+    full: '<path d="M4 9V6.4C4 5.1 5.1 4 6.4 4H9M15 4h2.6C18.9 4 20 5.1 20 6.4V9M20 15v2.6c0 1.3-1.1 2.4-2.4 2.4H15M9 20H6.4C5.1 20 4 18.9 4 17.6V15"/>',
+    external: '<path d="M10.5 5.5H7a3 3 0 0 0-3 3V17a3 3 0 0 0 3 3h8.5a3 3 0 0 0 3-3v-3.5"/><path d="M14 4h6v6M20 4l-8.3 8.3"/>',
+    sound: SPEAKER + '<path d="M16.6 9.2a4 4 0 0 1 0 5.6M19.2 6.6a7.6 7.6 0 0 1 0 10.8"/>',
+    mute: SPEAKER + '<path d="M16.8 9.6l4.8 4.8M21.6 9.6l-4.8 4.8"/>',
+    info: '<circle class="b" cx="12" cy="12" r="8.8"/><path class="k" d="M12 11.2v5"/><circle class="d kd" cx="12" cy="7.9" r="1.2"/>',
+    tidy: '<path class="b" d="M10 3.5c.6 4.1 2.4 5.9 6.5 6.5-4.1.6-5.9 2.4-6.5 6.5-.6-4.1-2.4-5.9-6.5-6.5 4.1-.6 5.9-2.4 6.5-6.5z"/><path class="b" d="M17.5 14c.3 2 1.2 2.9 3.2 3.2-2 .3-2.9 1.2-3.2 3.2-.3-2-1.2-2.9-3.2-3.2 2-.3 2.9-1.2 3.2-3.2z"/>',
+    stats: '<rect class="b" x="3.5" y="3.5" width="17" height="17" rx="3.5"/><path class="k" d="M7.5 15.8l3.2-3.6 2.8 2.2 3.4-4.6"/>',
+    dup: '<path d="M8.3 4h8.2A3.5 3.5 0 0 1 20 7.5v8.2"/><rect class="b" x="4" y="8" width="12" height="12" rx="3"/><path class="k" d="M7.5 12.6h5M7.5 15.6h5"/>',
+    hidden: '<path d="M9.3 6.1c.9-.4 1.7-.6 2.7-.6 5.6 0 9 6.5 9 6.5s-.7 1.4-2.1 2.9M14.7 18c-.8.3-1.7.5-2.7.5-5.6 0-9-6.5-9-6.5s.7-1.4 2.1-2.9"/><path d="M4 4l16 16"/>',
+    eye: '<path class="b" d="M3 12s3.4-6.5 9-6.5 9 6.5 9 6.5-3.4 6.5-9 6.5S3 12 3 12z"/><circle class="k fk" cx="12" cy="12" r="2.6"/>',
+    folder: FOLDER,
+    folderUp: FOLDER + '<path class="k" d="M12 16.2v-5M9.7 13.3 12 11l2.3 2.3"/>',
+    cloud: '<path class="b" d="M7.2 18.5h10a3.9 3.9 0 0 0 .6-7.7 5.9 5.9 0 0 0-11.3-1.3 4.5 4.5 0 0 0 .7 9z"/>',
+    device: '<rect class="b" x="6.3" y="2.8" width="11.4" height="18.4" rx="3.2"/><path class="k" d="M10.5 18h3"/>',
+    gear: gear(),
+    theme: '<circle cx="12" cy="12" r="8.8"/><path class="d" d="M12 3.2a8.8 8.8 0 0 1 0 17.6z"/>',
+    backup: '<rect class="b" x="3.5" y="3.5" width="17" height="3.8" rx="1.6"/><path class="b" d="M5 11h14v7c0 1.4-1.1 2.5-2.5 2.5h-9C6.1 20.5 5 19.4 5 18z"/><path class="k" d="M12 18.2v-4.4M9.9 15.8 12 13.7l2.1 2.1"/>',
+    lock: '<rect class="b" x="4.8" y="10.3" width="14.4" height="10.2" rx="3"/><path d="M8.2 10.3V7.8a3.8 3.8 0 0 1 7.6 0v2.5"/><path class="k" d="M12 14.4v2"/>',
+    warn: '<path class="b" d="M10.4 4.6c.7-1.2 2.5-1.2 3.2 0l7 12.2c.7 1.2-.2 2.7-1.6 2.7H5c-1.4 0-2.3-1.5-1.6-2.7z"/><path class="k" d="M12 9.6v4"/><circle class="d kd" cx="12" cy="16.4" r="1.1"/>',
+    doc: '<path class="b" d="M7 3.5h6.4c.5 0 1 .2 1.3.5l3.8 3.8c.3.3.5.8.5 1.3v9.9c0 1.1-.9 2-2 2H7c-1.1 0-2-.9-2-2v-13.5c0-1.1.9-2 2-2z"/><path class="k" d="M13.5 3.7V7c0 .8.6 1.5 1.5 1.5h3.3M8.5 13h7M8.5 16.5h4.5"/>',
+    music: '<path d="M9 17.5V6.4c0-.5.3-.9.8-1l8.4-1.7c.6-.1 1.2.3 1.2 1v10.8"/><circle class="b" cx="6.6" cy="17.5" r="2.5"/><circle class="b" cx="17" cy="15.5" r="2.5"/>',
+    camera: '<path class="b" d="M4 8.7c0-1 .8-1.8 1.8-1.8h2l1.2-1.8c.3-.4.8-.7 1.3-.7h3.4c.5 0 1 .3 1.3.7l1.2 1.8h2c1 0 1.8.8 1.8 1.8v9c0 1-.8 1.8-1.8 1.8H5.8c-1 0-1.8-.8-1.8-1.8z"/><circle class="k" cx="12" cy="13" r="3.2"/>',
+  };
+})();
+/** 아이콘 하나 (cls: "in" 글자 옆에 작게, "filled" 통째로 칠한 모양, "x" 칩의 지우기) */
+function ico(name, cls) {
+  const sp = document.createElement("span");
+  sp.innerHTML = `<svg class="ico${cls ? " " + cls : ""}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+  return sp.firstChild;
+}
+
 async function api(path, opts = {}) {
   const init = { method: opts.method || "GET", headers: {} };
   if (opts.body !== undefined) {
@@ -93,8 +186,86 @@ const TAB_GROUP = { videos: "media", photos: "media", media: "media", tags: "exp
 const SOURCE_LABEL = { mega: "MEGA", icloud: "iCloud", local: "이 기기" };
 function setTab(name) {
   const t = TAB_GROUP[name] || name;   // 사진·사람·태그·설정은 ‘보관함’ 탭 안에 있음
-  document.querySelectorAll(".tabs a").forEach((a) => a.classList.toggle("on", a.dataset.tab === t));
+  const prev = document.querySelector(".topbar .tabs a.on");
+  let changed = false;
+  document.querySelectorAll(".tabs a").forEach((a) => { const on = a.dataset.tab === t; if (on !== a.classList.contains("on")) changed = true; a.classList.toggle("on", on); });
+  placeTabBlob(!!prev && changed, prev);
 }
+/** 하단 바의 원: 고른 탭으로 통통 튀며 옮겨 감 (멀리 갈수록 잠깐 옆으로 늘어났다 돌아옴) */
+function placeTabBlob(animate, prev) {
+  const nav = document.querySelector(".topbar .tabs");
+  const blob = nav && nav.querySelector(".tab-blob");
+  if (!blob) return;
+  const on = nav.querySelector("a.on");
+  if (!on || !on.offsetWidth) { blob.classList.add("off"); return; }
+  const x = on.offsetLeft + on.offsetWidth / 2;
+  const first = blob.classList.contains("off") || !blob.dataset.placed;
+  blob.classList.remove("off");
+  if (!animate || first) {
+    blob.classList.add("still"); blob.style.setProperty("--tx", x + "px");
+    void blob.offsetWidth; blob.classList.remove("still"); blob.dataset.placed = "1";
+    return;
+  }
+  if (prev && prev.offsetWidth) {
+    const d = Math.abs(x - (prev.offsetLeft + prev.offsetWidth / 2));
+    blob.style.setProperty("--tw", Math.min(46 + d * 0.35, 92) + "px");
+    clearTimeout(blob._w); blob._w = setTimeout(() => blob.style.setProperty("--tw", "46px"), 170);
+  }
+  blob.style.setProperty("--tx", x + "px");
+}
+window.addEventListener("resize", () => placeTabBlob(false));
+(function tabBar() {
+  const nav = document.querySelector(".topbar .tabs");
+  const blob = nav && nav.querySelector(".tab-blob");
+  if (!blob) return;
+  const buzz = () => { try { if (window.VidShelfApp && VidShelfApp.haptic) VidShelfApp.haptic(); } catch (e) {} };
+  let dragEnded = false;
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest && e.target.closest(".tabs a[data-tab]");
+    if (!a) return;
+    if (dragEnded) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+    buzz();
+    // 지금 탭을 한 번 더 누르면 원이 꾹 눌렸다 펴지며 맨 위로 (숏폼은 새로 섞어 보여 줌)
+    if (a.classList.contains("on") && currentRootTab() === a.dataset.tab && a.dataset.tab !== "shorts") {
+      e.preventDefault(); e.stopImmediatePropagation();
+      blob.classList.remove("press"); void blob.offsetWidth; blob.classList.add("press");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, true);
+  // 바 위를 옆으로 훑으면 원이 손가락을 따라오고, 놓으면 가장 가까운 탭으로
+  let down = null, dragging = false;
+  const center = (a) => a.offsetLeft + a.offsetWidth / 2;
+  const nearest = (x) => [...nav.querySelectorAll("a[data-tab]")].reduce((b, a) => (!b || Math.abs(center(a) - x) < Math.abs(center(b) - x) ? a : b), null);
+  nav.addEventListener("pointerdown", (e) => {
+    if (document.body.classList.contains("selecting")) return;
+    down = { x: e.clientX, y: e.clientY }; dragging = false;
+  });
+  nav.addEventListener("pointermove", (e) => {
+    if (!down) return;
+    const dx = e.clientX - down.x, dy = e.clientY - down.y;
+    if (!dragging) {
+      if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy)) return;
+      dragging = true; blob.classList.add("drag");
+      try { nav.setPointerCapture(e.pointerId); } catch (er) {}
+    }
+    const r = nav.getBoundingClientRect(), x = Math.max(26, Math.min(r.width - 26, e.clientX - r.left));
+    blob.style.setProperty("--tx", x + "px");
+    const n = nearest(x);
+    nav.querySelectorAll("a[data-tab]").forEach((a) => a.classList.toggle("near", a === n));
+  });
+  const end = () => {
+    if (dragging) {
+      const n = nearest(parseFloat(blob.style.getPropertyValue("--tx")) || 0);
+      blob.classList.remove("drag");
+      nav.querySelectorAll("a.near").forEach((a) => a.classList.remove("near"));
+      dragEnded = true;
+      setTimeout(() => { dragEnded = false; if (n && !n.classList.contains("on")) n.click(); else placeTabBlob(true); }, 0);
+    }
+    down = null; dragging = false;
+  };
+  nav.addEventListener("pointerup", end);
+  nav.addEventListener("pointercancel", end);
+})();
 
 // ---------------------------------------------------------------- 테마 (시스템 / 라이트 / 다크)
 function themePref() { try { return localStorage.getItem("vs-theme") || "system"; } catch (e) { return "system"; } }
@@ -228,7 +399,7 @@ function errorView(e, retry) {
 /** 칸의 ♥ 표시를 바로 바꿈 (목록을 다시 그리지 않고) */
 function markFav(el, on) {
   let mark = el.querySelector(".sq-fav, .badge.fav");
-  if (on && !mark) { mark = h("span", { class: "sq-fav", "aria-label": "즐겨찾기" }, "♥"); (el.querySelector(".yt-thumb, .tile-img, .thumb") || el).append(mark); }
+  if (on && !mark) { mark = h("span", { class: "sq-fav", "aria-label": "즐겨찾기" }, ico("heart", "filled")); (el.querySelector(".yt-thumb, .tile-img, .thumb") || el).append(mark); }
   if (!on && mark) mark.remove();
 }
 
@@ -570,10 +741,10 @@ function longPressFav(el, it) {
         await api(`${it.kind === "photo" ? "photos" : "videos"}/${it.id}`, { method: "PATCH", body: { favorite: fav } });
         it.favorite = fav ? 1 : 0;
         let mark = el.querySelector(".sq-fav, .badge.fav");
-        if (fav && !mark) { mark = h("span", { class: "sq-fav", "aria-label": "즐겨찾기" }, "♥"); (el.querySelector(".tile-img, .thumb") || el).append(mark); }
+        if (fav && !mark) { mark = h("span", { class: "sq-fav", "aria-label": "즐겨찾기" }, ico("heart", "filled")); (el.querySelector(".tile-img, .thumb") || el).append(mark); }
         if (!fav && mark) mark.remove();
         el.classList.remove("fav-pop"); void el.offsetWidth; el.classList.add("fav-pop");
-        toast(fav ? "♥ 즐겨찾기에 넣었습니다" : "즐겨찾기에서 뺐습니다");
+        toast(fav ? "즐겨찾기에 넣었습니다" : "즐겨찾기에서 뺐습니다");
       } catch (er) { toast(er.message); }
     }, 520);
   }, { passive: true });
@@ -606,7 +777,7 @@ async function pollStatus() {
     const busy = s.scanning || s.thumb_pending > 0;
     const quota = megaQuotaText(s);
     bar.hidden = !busy && !quota;
-    if (!busy && quota) bar.replaceChildren(h("span", { class: "warn" }, "⚠ " + quota));
+    if (!busy && quota) bar.replaceChildren(h("span", { class: "warn" }, ico("warn", "in"), quota));
     if (busy) {
       const txt = s.scanning
         ? (s.scan_found || s.scan_new ? `스캔 중… ${s.scan_found}개 발견, 새 영상 ${s.scan_new}개 · ${s.scan_current || ""}` : (s.scan_current || "작업 중…"))
@@ -752,13 +923,13 @@ async function renderLibrary(params) {
   for (const [key, ep] of [["tag", "tags"], ["performer", "performers"]]) {
     for (const id of params.getAll(key)) {
       const e = await api(`${ep}/${id}`).catch(() => ({ name: "#" + id }));
-      filterChips.push(h("span", { class: "chip on" }, (key === "tag" ? "# " : "👤 ") + e.name,
+      filterChips.push(h("span", { class: "chip on" }, key === "tag" ? "# " + e.name : [ico("person", "in"), e.name],
         h("button", { title: "필터 해제", onclick: () => {
           const p = new URLSearchParams(params);
           const rest = p.getAll(key).filter((x) => x !== id);
           p.delete(key); rest.forEach((x) => p.append(key, x));
           location.hash = libHash(p);
-        } }, "×")));
+        } }, ico("close", "x"))));
     }
   }
 
@@ -771,10 +942,10 @@ async function renderLibrary(params) {
   const orderBtn = h("button", { class: "btn", title: "정렬 방향", hidden: sort === "random",
     onclick: () => update({ order: order === "asc" ? "desc" : "asc" }) }, order === "asc" ? "↑ 오름차순" : "↓ 내림차순");
   const toggles = [
-    ["fav", "♥ 즐겨찾기"], ["unwatched", "안 본 영상"], ["missing", "찾을 수 없는 파일"],
+    ["fav", "즐겨찾기"], ["unwatched", "안 본 영상"], ["missing", "찾을 수 없는 파일"],
   ].map(([k, l]) => h("button", { class: "chip" + (params.get(k) === "1" ? " on" : ""),
     onclick: () => update({ [k]: params.get(k) === "1" ? null : "1" }) }, l));
-  const reshuffle = sort === "random" ? h("button", { class: "btn", onclick: () => update({ seed: Date.now() % 100000 }) }, "🔀 섞기") : null;
+  const reshuffle = sort === "random" ? h("button", { class: "btn", onclick: () => update({ seed: Date.now() % 100000 }) }, ico("shuffle", "in"), "섞기") : null;
 
   const countEl = h("span", { class: "meta" });
   const mode = viewMode("videos");
@@ -996,14 +1167,14 @@ const selBar = h("div", { class: "sel-bar", hidden: true },
   h("button", { class: "round-btn", "aria-label": "선택 취소", onclick: () => endSelect() }, icon("close")),
   h("span", { class: "sel-count" }, selCount, "개 선택"),
   h("button", { class: "btn sm", onclick: () => { cells.forEach((el, k) => { if (!selected.has(k)) toggleSel(el._item, el); }); } }, "모두 선택"));
-const act = (label, ico, fn) => { const b = h("button", { class: "sel-act", onclick: fn }); b.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ico}</svg>`; b.append(label); return b; };
+const act = (label, name, fn) => h("button", { class: "sel-act", onclick: fn }, ico(name), label);
 const actBar = h("div", { class: "sel-actions", hidden: true },
-  act("태그", '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.4"/>', () => editLinks("tags")),
-  act("사람", '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5"/>', () => editLinks("performers")),
-  act("날짜", '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>', () => editDate()),
-  act("즐겨찾기", '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>', () => editFav()),
-  act("정리 완료", '<path d="M5 12.5l4.5 4.5L19 7.5"/>', () => applyBatch({ organized: true }, "{n}개를 정리 완료로 표시했습니다")),
-  act("삭제", '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>', () => editDelete()));
+  act("태그", "tag", () => editLinks("tags")),
+  act("사람", "person", () => editLinks("performers")),
+  act("날짜", "calendar", () => editDate()),
+  act("즐겨찾기", "heart", () => editFav()),
+  act("정리 완료", "done", () => applyBatch({ organized: true }, "{n}개를 정리 완료로 표시했습니다")),
+  act("삭제", "trash", () => editDelete()));
 opts.holder.append(selBar);   // 아래 버튼 막대는 움직임 효과가 걸린 화면 밖(body)에 붙여야 화면 맨 아래에 고정됨
 let selecting = false;
 function onSelPop() { if (selecting) endSelect(false, true, true); }
@@ -1089,12 +1260,12 @@ async function editLinks(field) {
     const off = remove.has(t.id);
     return h("button", { class: "chip" + (off ? " struck" : ""), "aria-pressed": off ? "true" : "false",
       onclick: () => { off ? remove.delete(t.id) : remove.add(t.id); drawCur(); } },
-      (field === "tags" ? "#" : "") + t.name, h("span", { class: "meta" }, ` ${t.count}/${info.total}`), off ? " ✕" : "");
+      (field === "tags" ? "#" : "") + t.name, h("span", { class: "meta" }, ` ${t.count}/${info.total}`), off ? ico("close", "in") : null);
   }) : [h("span", { class: "meta" }, `선택한 항목에 붙은 ${label}이(가) 없습니다.`)]));
   const all = (field === "tags" ? opts.tags : opts.performers) || [];
   const addBox = h("div", { class: "chips" });
   const drawAdd = () => addBox.replaceChildren(...[...add].map((n) => h("span", { class: "chip on" }, (field === "tags" ? "#" : "") + n,
-    h("button", { "aria-label": `${n} 빼기`, onclick: () => { add.delete(n); drawAdd(); } }, "×"))));
+    h("button", { "aria-label": `${n} 빼기`, onclick: () => { add.delete(n); drawAdd(); } }, ico("close", "x")))));
   const listId = "dl-batch-" + field;
   const input = h("input", { type: "text", list: listId, placeholder: `추가할 ${label} 이름 (Enter)`, "aria-label": `추가할 ${label}` });
   const addName = () => { input.value.split(",").map((x) => x.trim()).filter(Boolean).forEach((n) => add.add(n)); input.value = ""; drawAdd(); };
@@ -1143,7 +1314,7 @@ function editFav() {
     h("p", { class: "meta", style: "margin:0" }, "기기 사진·영상은 갤러리 즐겨찾기에도 반영됩니다."),
   ], [
     h("button", { class: "btn", onclick: () => close(() => applyBatch({ favorite: false }, "{n}개를 즐겨찾기에서 뺐습니다")) }, "즐겨찾기에서 빼기"),
-    h("button", { class: "btn primary sheet-go", onclick: () => close(() => applyBatch({ favorite: true }, "♥ {n}개를 즐겨찾기에 넣었습니다")) }, allFav ? "이미 모두 즐겨찾기" : "♥ 즐겨찾기에 넣기"),
+    h("button", { class: "btn primary sheet-go", onclick: () => close(() => applyBatch({ favorite: true }, "{n}개를 즐겨찾기에 넣었습니다")) }, ico("heart", "in"), allFav ? "이미 모두 즐겨찾기" : "즐겨찾기에 넣기"),
   ]);
 }
 
@@ -1190,18 +1361,18 @@ function editDelete() {
       media.muted = true;
       media.addEventListener("loadedmetadata", () => { if (isFinite(media.duration) && media.duration > 20) { try { media.currentTime = media.duration * 0.15; } catch (e) {} } }, { once: true });
     }
-    const qa = (ico, label, fn, on) => h("button", { class: "peek-act" + (on ? " on" : ""), onclick: fn }, h("i", { "aria-hidden": "true" }, ico), label);
+    const qa = (name, label, fn, on) => h("button", { class: "peek-act" + (on ? " on" : ""), onclick: fn }, h("i", { "aria-hidden": "true" }, ico(name)), label);
     const recent = recentTags().slice(0, 8);
     const close = openSheet(it.title || (ph ? "사진" : "영상"), [
       h("div", { class: "peek-media" + (ph ? " photo" : "") }, media,
-        !ph ? h("span", { class: "peek-note" }, "▶ 미리보기 · 소리 없음") : null),
+        !ph ? h("span", { class: "peek-note" }, ico("play", "in"), "미리보기 · 소리 없음") : null),
       h("div", { class: "peek-acts" },
-        qa("♥", it.favorite ? "즐겨찾기 빼기" : "즐겨찾기", () => close(() => { one(); applyBatch({ favorite: !it.favorite }, it.favorite ? "즐겨찾기에서 뺐습니다" : "♥ 즐겨찾기에 넣었습니다", true); it.favorite = it.favorite ? 0 : 1; markFav(el, it.favorite); }), !!it.favorite),
-        qa("#", "태그", () => close(() => { one(); editLinks("tags"); })),
-        qa("👤", "사람", () => close(() => { one(); editLinks("performers"); })),
-        qa("✓", "정리 완료", () => close(() => { one(); applyBatch({ organized: true }, "정리 완료로 표시했습니다", true); if (opts.onOrganized) opts.onOrganized(el.closest(".swipe-wrap") || el); })),
-        qa("☑", "선택", () => close(() => { startSelect(); toggleSel(it, el); })),
-        qa("▶", "열기", () => close(() => { if (ph) { if (el._unfire) el._unfire(); el.dispatchEvent(new MouseEvent("click", { bubbles: true })); } else location.hash = `#/v/${it.id}`; }))),
+        qa("heart", it.favorite ? "즐겨찾기 빼기" : "즐겨찾기", () => close(() => { one(); applyBatch({ favorite: !it.favorite }, it.favorite ? "즐겨찾기에서 뺐습니다" : "즐겨찾기에 넣었습니다", true); it.favorite = it.favorite ? 0 : 1; markFav(el, it.favorite); }), !!it.favorite),
+        qa("tag", "태그", () => close(() => { one(); editLinks("tags"); })),
+        qa("person", "사람", () => close(() => { one(); editLinks("performers"); })),
+        qa("done", "정리 완료", () => close(() => { one(); applyBatch({ organized: true }, "정리 완료로 표시했습니다", true); if (opts.onOrganized) opts.onOrganized(el.closest(".swipe-wrap") || el); })),
+        qa("select", "선택", () => close(() => { startSelect(); toggleSel(it, el); })),
+        qa("play", "열기", () => close(() => { if (ph) { if (el._unfire) el._unfire(); el.dispatchEvent(new MouseEvent("click", { bubbles: true })); } else location.hash = `#/v/${it.id}`; }))),
       recent.length ? h("div", { class: "sheet-sec" }, h("h3", {}, "최근 쓴 태그 · 누르면 바로 붙음"),
         h("div", { class: "chips" }, ...recent.map((n) => h("button", { class: "chip dashed", onclick: () => close(() => { one(); applyBatch({ add_tags: [n] }, `#${n} 태그를 붙였습니다`, true); }) }, "+ #" + n)))) : null,
     ]);
@@ -1209,7 +1380,7 @@ function editDelete() {
 
   // ---- 목록에서 옆으로 밀기: 오른쪽 = 즐겨찾기, 왼쪽 = 정리 완료
   function swipeActions(cell, it) {
-    const under = h("div", { class: "swipe-under", "aria-hidden": "true" }, h("span", { class: "su-fav" }, "♥ 즐겨찾기"), h("span", { class: "su-done" }, "✓ 정리 완료"));
+    const under = h("div", { class: "swipe-under", "aria-hidden": "true" }, h("span", { class: "su-fav" }, ico("heart", "in filled"), "즐겨찾기"), h("span", { class: "su-done" }, ico("done", "in"), "정리 완료"));
     const wrap = h("div", { class: "swipe-wrap" }, under, cell);
     let sx = 0, sy = 0, dx = 0, mode = null, moved = false;
     wrap.addEventListener("touchstart", (e) => { if (selecting || e.touches.length !== 1) { mode = "x"; return; } sx = e.touches[0].clientX; sy = e.touches[0].clientY; dx = 0; mode = null; moved = false; }, { passive: true });
@@ -1233,7 +1404,7 @@ function editDelete() {
       if (Math.abs(dx) > 80) {
         try { if (window.VidShelfApp && VidShelfApp.haptic) VidShelfApp.haptic(); } catch (e) {}
         selected.clear(); selected.set(keyOf(it), it);
-        if (dx > 0) { applyBatch({ favorite: !it.favorite }, it.favorite ? "즐겨찾기에서 뺐습니다" : "♥ 즐겨찾기에 넣었습니다", true); it.favorite = it.favorite ? 0 : 1; markFav(cell, it.favorite); }
+        if (dx > 0) { applyBatch({ favorite: !it.favorite }, it.favorite ? "즐겨찾기에서 뺐습니다" : "즐겨찾기에 넣었습니다", true); it.favorite = it.favorite ? 0 : 1; markFav(cell, it.favorite); }
         else {
           applyBatch({ organized: true }, "정리 완료로 표시했습니다", true);
           if (opts.onOrganized) opts.onOrganized(wrap);
@@ -1326,10 +1497,8 @@ async function renderMedia(params0, type0) {
     viewBtn.hidden = type === "photo";   // 사진은 항상 이미지 벽
     viewBtn.setAttribute("aria-label", mode === "wall" ? "목록으로 보기" : "이미지 벽으로 보기");
     viewBtn.title = viewBtn.getAttribute("aria-label");
-    viewBtn.innerHTML = mode === "wall"
-      ? '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3.5" width="18" height="10" rx="2"/><path d="M3 17h12M3 20.5h8"/></svg>'
-      : '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="10" height="7" rx="1.5"/><rect x="15" y="4" width="6" height="7" rx="1.5"/><rect x="3" y="13" width="6" height="7" rx="1.5"/><rect x="11" y="13" width="10" height="7" rx="1.5"/></svg>';
-    filterBtn.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>';
+    viewBtn.replaceChildren(ico(mode === "wall" ? "viewList" : "viewWall"));
+    filterBtn.replaceChildren(ico("filter"));
     filterBtn.append("필터", nFilters() ? h("span", { class: "fbadge" }, nFilters()) : "");
     segBtns.forEach((b, i) => { const on = TYPES[i] === type; b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
     segInd.style.transform = `translateX(${TYPES.indexOf(type) * 100}%)`;   // 선택 표시가 미끄러지듯 이동
@@ -1340,18 +1509,18 @@ async function renderMedia(params0, type0) {
   function drawChips() {
     const without = (key, val) => { const p = new URLSearchParams(params); const rest = p.getAll(key).filter((x) => x !== val); p.delete(key); rest.forEach((x) => p.append(key, x)); update({ p }); };
     const chips = [];
-    if (params.get("q")) chips.push(h("span", { class: "fchip" }, `“${params.get("q")}”`, h("button", { "aria-label": "검색어 지우기", onclick: () => without("q", params.get("q")) }, "×")));
+    if (params.get("q")) chips.push(h("span", { class: "fchip" }, `“${params.get("q")}”`, h("button", { "aria-label": "검색어 지우기", onclick: () => without("q", params.get("q")) }, ico("close", "x"))));
     for (const id of params.getAll("performer")) {
       const pf = performers.find((x) => String(x.id) === id) || {};
-      chips.push(h("span", { class: "fchip" }, h("span", { class: "fc-av" }, entityCover(pf, "")), perfName(id), h("button", { "aria-label": `${perfName(id)} 필터 해제`, onclick: () => without("performer", id) }, "×")));
+      chips.push(h("span", { class: "fchip" }, h("span", { class: "fc-av" }, entityCover(pf, "")), perfName(id), h("button", { "aria-label": `${perfName(id)} 필터 해제`, onclick: () => without("performer", id) }, ico("close", "x"))));
     }
-    for (const id of params.getAll("tag")) chips.push(h("span", { class: "fchip" }, "#" + tagName(id), h("button", { "aria-label": `${tagName(id)} 필터 해제`, onclick: () => without("tag", id) }, "×")));
-    if (params.get("fav") === "1") chips.push(h("span", { class: "fchip" }, "♥ 즐겨찾기", h("button", { "aria-label": "즐겨찾기 필터 해제", onclick: () => without("fav", "1") }, "×")));
-    if (params.get("unwatched") === "1") chips.push(h("span", { class: "fchip" }, "안 본 영상", h("button", { "aria-label": "안 본 영상 필터 해제", onclick: () => without("unwatched", "1") }, "×")));
-    for (const id of params.getAll("xperformer")) chips.push(h("span", { class: "fchip ex" }, "− " + perfName(id), h("button", { "aria-label": `${perfName(id)} 빼기 해제`, onclick: () => without("xperformer", id) }, "×")));
-    for (const id of params.getAll("xtag")) chips.push(h("span", { class: "fchip ex" }, "− #" + tagName(id), h("button", { "aria-label": `${tagName(id)} 빼기 해제`, onclick: () => without("xtag", id) }, "×")));
-    for (const k of ["dur", "when", "res", "rating"]) if (params.get(k)) chips.push(h("span", { class: "fchip" }, rangeLabel(k, params.get(k)), h("button", { "aria-label": "조건 해제", onclick: () => without(k, params.get(k)) }, "×")));
-    if (params.get("unorganized") === "1") chips.push(h("span", { class: "fchip" }, "정리 안 된 항목", h("button", { "aria-label": "정리 안 된 항목 필터 해제", onclick: () => without("unorganized", "1") }, "×")));
+    for (const id of params.getAll("tag")) chips.push(h("span", { class: "fchip" }, "#" + tagName(id), h("button", { "aria-label": `${tagName(id)} 필터 해제`, onclick: () => without("tag", id) }, ico("close", "x"))));
+    if (params.get("fav") === "1") chips.push(h("span", { class: "fchip" }, ico("heart", "in filled"), "즐겨찾기", h("button", { "aria-label": "즐겨찾기 필터 해제", onclick: () => without("fav", "1") }, ico("close", "x"))));
+    if (params.get("unwatched") === "1") chips.push(h("span", { class: "fchip" }, "안 본 영상", h("button", { "aria-label": "안 본 영상 필터 해제", onclick: () => without("unwatched", "1") }, ico("close", "x"))));
+    for (const id of params.getAll("xperformer")) chips.push(h("span", { class: "fchip ex" }, "− " + perfName(id), h("button", { "aria-label": `${perfName(id)} 빼기 해제`, onclick: () => without("xperformer", id) }, ico("close", "x"))));
+    for (const id of params.getAll("xtag")) chips.push(h("span", { class: "fchip ex" }, "− #" + tagName(id), h("button", { "aria-label": `${tagName(id)} 빼기 해제`, onclick: () => without("xtag", id) }, ico("close", "x"))));
+    for (const k of ["dur", "when", "res", "rating"]) if (params.get(k)) chips.push(h("span", { class: "fchip" }, rangeLabel(k, params.get(k)), h("button", { "aria-label": "조건 해제", onclick: () => without(k, params.get(k)) }, ico("close", "x"))));
+    if (params.get("unorganized") === "1") chips.push(h("span", { class: "fchip" }, "정리 안 된 항목", h("button", { "aria-label": "정리 안 된 항목 필터 해제", onclick: () => without("unorganized", "1") }, ico("close", "x"))));
     if (chips.length > 1) chips.push(h("button", { class: "fclear", onclick: () => { const p = new URLSearchParams(params); FILTER_KEYS.forEach((k) => p.delete(k)); update({ p }); } }, "모두 지우기"));
     chipsBox.replaceChildren(...chips);
     chipsBox.hidden = !chips.length;
@@ -1468,10 +1637,10 @@ async function renderMedia(params0, type0) {
       h("div", { class: "yt-thumb", style: `aspect-ratio:${ratio}` }, img,
         !isPhoto && (it.duration || res) ? h("span", { class: "yt-badges" },   // 화질 · 길이를 같은 검은 상자로
           res ? h("span", { class: "badge" }, res) : null, it.duration ? h("span", { class: "badge" }, fmtDur(it.duration)) : null) : null,
-        it.favorite ? h("span", { class: "sq-fav", "aria-label": "즐겨찾기" }, "♥") : null,
+        it.favorite ? h("span", { class: "sq-fav", "aria-label": "즐겨찾기" }, ico("heart", "filled")) : null,
         !isPhoto && it.resume_pos > 5 && it.duration ? h("div", { class: "progress", style: `width:${Math.min(100, (it.resume_pos / it.duration) * 100)}%` }) : null),
       h("div", { class: "yt-info" },
-        h("span", { class: "yt-av" }, pf ? entityCover(pf, pname.slice(0, 1)) : h("span", {}, pname ? pname.slice(0, 1) : isPhoto ? "▣" : "▶")),
+        h("span", { class: "yt-av" }, pf ? entityCover(pf, pname.slice(0, 1)) : pname ? h("span", {}, pname.slice(0, 1)) : ico(isPhoto ? "image" : "play")),
         h("div", { class: "yt-text" }, h("div", { class: "yt-title" }, it.title || ""), h("div", { class: "meta" }, sub))),
     ];
     return isPhoto ? h("button", { class: "yt", onclick: open, "aria-label": it.title || "사진" }, ...kids)
@@ -1487,8 +1656,8 @@ async function renderMedia(params0, type0) {
     img.onload = () => (img.hidden = false);
     img.onerror = () => (img.hidden = true);
     const kids = [img,
-      !isPhoto ? h("span", { class: "sq-dur" }, "▶ " + (it.duration ? fmtDur(it.duration) : "")) : null,
-      it.favorite ? h("span", { class: "sq-fav", "aria-label": "즐겨찾기" }, "♥") : null];
+      !isPhoto ? h("span", { class: "sq-dur" }, ico("play", "in"), it.duration ? fmtDur(it.duration) : "") : null,
+      it.favorite ? h("span", { class: "sq-fav", "aria-label": "즐겨찾기" }, ico("heart", "filled")) : null];
     return isPhoto
       ? h("button", { class: "sq", onclick: open, "aria-label": it.title || "사진" }, ...kids)
       : h("a", { class: "sq", href: `#/v/${it.id}`, "aria-label": it.title || "영상" }, ...kids);
@@ -1536,7 +1705,7 @@ async function renderMedia(params0, type0) {
       if (!q) {
         const rq = recentQ();
         if (rq.length) chips = [h("span", { class: "meta ss-title" }, "최근 검색"),
-          ...rq.map((w) => h("button", { class: "chip", onclick: () => { draft.q = w; search.value = w; refreshCount(); drawSuggest(); } }, "🕘 " + w)),
+          ...rq.map((w) => h("button", { class: "chip", onclick: () => { draft.q = w; search.value = w; refreshCount(); drawSuggest(); } }, ico("history", "in"), w)),
           h("button", { class: "linkbtn", onclick: () => { try { localStorage.removeItem("vs-recent-q"); } catch (e) {} drawSuggest(); } }, "지우기")];
       } else {
         const ps = performers.filter((pf) => pf.name.toLowerCase().includes(q) && !draft.performer.has(String(pf.id))).slice(0, 6);
@@ -1625,7 +1794,7 @@ async function renderMedia(params0, type0) {
     function drawSaved() {
       const chips = savedFilters.map((f) => {
         const chip = h("button", { class: "chip saved" + (f.default ? " is-default" : ""), title: "누르면 적용 · 길게 누르면 기본 필터 지정·삭제" },
-          f.default ? h("span", { class: "sf-star", "aria-label": "기본 필터" }, "★") : null,
+          f.default ? h("span", { class: "sf-star", "aria-label": "기본 필터" }, ico("star", "filled")) : null,
           h("span", {}, f.name), f.type && f.type !== "all" ? h("small", {}, TYPE_LABEL[f.type] || "") : null);
         let timer = null, long = false;
         chip.addEventListener("touchstart", () => { long = false; timer = setTimeout(() => {
@@ -1636,13 +1805,13 @@ async function renderMedia(params0, type0) {
               savedFilters = await api(`saved_filters/${f.id}/default`, { method: "POST", body: { on: !f.default } }).catch(() => savedFilters);
               toast(f.default ? "기본 필터를 해제했습니다" : `‘${f.name}’을(를) 기본 필터로 정했습니다. 미디어 탭을 열면 이 조건으로 보입니다.`);
               drawSaved();
-            }) }, h("b", {}, f.default ? "기본 필터 해제" : "★ 기본 필터로 지정"),
+            }) }, h("b", {}, ico("star", "in"), f.default ? "기본 필터 해제" : "기본 필터로 지정"),
               h("span", { class: "meta" }, f.default ? "미디어 탭을 열면 조건 없이 전체가 보입니다." : "미디어 탭을 열 때마다 이 조건이 자동으로 걸립니다.")),
             h("button", { class: "del-opt", onclick: () => closeOpts(async () => {
               savedFilters = await api(`saved_filters/${f.id}/home`, { method: "POST", body: { on: !f.home } }).catch(() => savedFilters);
               toast(f.home ? "홈에서 뺐습니다" : `‘${f.name}’ 줄을 홈에 넣었습니다`);
               drawSaved();
-            }) }, h("b", {}, f.home ? "홈에서 빼기" : "🏠 홈에 줄로 표시"),
+            }) }, h("b", {}, ico("pin", "in"), f.home ? "홈에서 빼기" : "홈에 줄로 표시"),
               h("span", { class: "meta" }, f.home ? "홈 화면에서 이 필터 줄을 없앱니다." : "홈 화면에 이 조건의 영상·사진이 한 줄로 나옵니다.")),
             h("button", { class: "del-opt danger", onclick: () => closeOpts(async () => {
               savedFilters = await api(`saved_filters/${f.id}`, { method: "DELETE" }).catch(() => savedFilters);
@@ -1661,8 +1830,8 @@ async function renderMedia(params0, type0) {
         return chip;
       });
       savedBox.replaceChildren(...chips,
-        h("button", { class: "chip add", onclick: () => { saveRow.hidden = !saveRow.hidden; if (!saveRow.hidden) nameIn.focus(); } }, "＋ 지금 조건 저장"),
-        ...(savedFilters.length ? [h("p", { class: "meta sf-hint" }, "길게 누르면 ★ 기본 필터로 정하거나 지울 수 있습니다. 기본 필터는 미디어 탭을 열 때 자동으로 걸립니다.")] : []));
+        h("button", { class: "chip add", onclick: () => { saveRow.hidden = !saveRow.hidden; if (!saveRow.hidden) nameIn.focus(); } }, ico("plus", "in"), "지금 조건 저장"),
+        ...(savedFilters.length ? [h("p", { class: "meta sf-hint" }, "길게 누르면 기본 필터로 정하거나 지울 수 있습니다. 기본 필터는 미디어 탭을 열 때 자동으로 걸립니다.")] : []));
     }
     api("saved_filters").then((l) => { savedFilters = l; drawSaved(); }).catch(() => {});
     drawSaved();
@@ -1671,7 +1840,7 @@ async function renderMedia(params0, type0) {
       h("div", { class: "sheet-grip", "aria-hidden": "true" }),
       h("div", { class: "sheet-head" }, h("h2", {}, "필터"), h("button", { class: "round-btn", "aria-label": "닫기", onclick: () => close(false) }, icon("close"))),
       h("div", { class: "sheet-body" },
-        h("label", { class: "sheet-search" }, h("span", { "aria-hidden": "true" }, "⌕"), search),
+        h("label", { class: "sheet-search" }, ico("search"), search),
         suggest,
         h("div", { class: "sheet-sec" }, h("h3", {}, "저장된 필터"), savedBox, saveRow),
         people.length ? h("div", { class: "sheet-sec" }, h("div", { class: "sheet-sec-head" }, h("h3", {}, "사람"), peopleMore), peopleBox) : null,
@@ -1736,8 +1905,8 @@ function modeToggle(kind, onChange) {
   const cur = viewMode(kind);
   const set = (m) => { try { localStorage.setItem("vs-mode-" + kind, m); } catch (e) {} onChange(); };
   return h("div", { class: "seg", role: "group", "aria-label": "보기 방식" },
-    h("button", { class: cur === "grid" ? "on" : "", onclick: () => set("grid") }, "▦ 그리드"),
-    h("button", { class: cur === "wall" ? "on" : "", onclick: () => set("wall") }, "▤ 이미지 벽"));
+    h("button", { class: cur === "grid" ? "on" : "", onclick: () => set("grid") }, ico("viewGrid", "in"), "그리드"),
+    h("button", { class: cur === "wall" ? "on" : "", onclick: () => set("wall") }, ico("viewWall", "in"), "이미지 벽"));
 }
 const wallHeight = () => (window.innerWidth < 560 ? 110 : 180);
 
@@ -1788,7 +1957,7 @@ function videoTile(v) {
   return wallTile({
     href: `#/v/${v.id}`, src: v.thumbs > 0 ? thumbUrl(v.id, 0, v.thumbs) : null,
     ratio: v.width && v.height ? v.width / v.height : 0, performers: v.performers,   // 모르면 썸네일의 실제 비율을 씀
-    badges: [v.duration ? h("span", { class: "badge dur" }, fmtDur(v.duration)) : null, v.favorite ? h("span", { class: "badge fav" }, "♥") : null],
+    badges: [v.duration ? h("span", { class: "badge dur" }, fmtDur(v.duration)) : null, v.favorite ? h("span", { class: "badge fav" }, ico("heart", "filled")) : null],
   });
 }
 
@@ -1807,20 +1976,20 @@ async function renderPhotos(params) {
   const chips = [];
   for (const id of params.getAll("performer")) {
     const e = await api(`performers/${id}`).catch(() => ({ name: "#" + id }));
-    chips.push(h("span", { class: "chip on" }, e.name, h("button", { title: "필터 해제", onclick: () => update({ performer: null }) }, "×")));
+    chips.push(h("span", { class: "chip on" }, e.name, h("button", { title: "필터 해제", onclick: () => update({ performer: null }) }, ico("close", "x"))));
   }
   for (const id of params.getAll("tag")) {
     const e = await api(`tags/${id}`).catch(() => ({ name: "" + id }));
-    chips.push(h("span", { class: "chip on" }, "# " + e.name, h("button", { title: "필터 해제", onclick: () => update({ tag: null }) }, "×")));
+    chips.push(h("span", { class: "chip on" }, "# " + e.name, h("button", { title: "필터 해제", onclick: () => update({ tag: null }) }, ico("close", "x"))));
   }
   let t;
   const search = h("input", { type: "search", class: "search", placeholder: "이름, 사람, 폴더 검색", value: params.get("q") || "",
     oninput: (e) => { clearTimeout(t); t = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 400); } });
   const sortSel = h("select", { "aria-label": "정렬", onchange: (e) => update({ sort: e.target.value, order: null }) },
     PHOTO_SORTS.map(([v, l]) => h("option", { value: v, selected: v === sort }, l)));
-  const orderBtn = sort === "random" ? h("button", { class: "btn", onclick: () => update({ seed: Date.now() % 100000 }) }, "🔀 섞기")
+  const orderBtn = sort === "random" ? h("button", { class: "btn", onclick: () => update({ seed: Date.now() % 100000 }) }, ico("shuffle", "in"), "섞기")
     : h("button", { class: "btn", onclick: () => update({ order: order === "asc" ? "desc" : "asc" }) }, order === "asc" ? "↑ 오름차순" : "↓ 내림차순");
-  const fav = h("button", { class: "chip" + (params.get("fav") === "1" ? " on" : ""), onclick: () => update({ fav: params.get("fav") === "1" ? null : "1" }) }, "♥ 즐겨찾기");
+  const fav = h("button", { class: "chip" + (params.get("fav") === "1" ? " on" : ""), onclick: () => update({ fav: params.get("fav") === "1" ? null : "1" }) }, ico("heart", "in"), "즐겨찾기");
   const mode = viewMode("photos");
   const count = h("span", { class: "meta" });
   const grid = h("div", { class: mode === "wall" ? "wall" : "pgrid" });
@@ -1858,27 +2027,18 @@ async function renderPhotos(params) {
 function photoCell(p, mode, open) {
   if (mode === "wall") {
     return wallTile({ onclick: open, src: `/photothumb/${p.id}.jpg`, ratio: p.width && p.height ? p.width / p.height : 0,
-      performers: p.performers, badges: [p.favorite ? h("span", { class: "badge fav" }, "♥") : null] });
+      performers: p.performers, badges: [p.favorite ? h("span", { class: "badge fav" }, ico("heart", "filled")) : null] });
   }
   const img = h("img", { src: `/photothumb/${p.id}.jpg`, loading: "lazy", alt: "" });
   img.onerror = () => (img.hidden = true);
   return h("div", { class: "pcard", onclick: open },
-    h("div", { class: "thumb" }, img, p.favorite ? h("span", { class: "badge fav" }, "♥") : null),
+    h("div", { class: "thumb" }, img, p.favorite ? h("span", { class: "badge fav" }, ico("heart", "filled")) : null),
     h("div", { class: "title", title: p.title }, p.title),
     p.performers.length ? h("div", { class: "sub" }, p.performers.join(", ")) : null);
 }
 
-const ICON = {
-  close: '<path d="M6 6l12 12M18 6L6 18"/>',
-  heart: '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>',
-  prev: '<path d="M15 5l-7 7 7 7"/>',
-  next: '<path d="M9 5l7 7-7 7"/>',
-};
-function icon(name) {
-  const span = document.createElement("span");
-  span.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
-  return span.firstChild;
-}
+const ICON_ALIAS = { prev: "back" };
+function icon(name) { return ico(ICON_ALIAS[name] || name); }
 
 /** 사진 크게 보기: 세로 화면에서는 가로를 꽉 채우고, 아래로 내리면 사진 정보. 좌우로 밀어 넘기기. */
 async function openViewer(items, start) {
@@ -1919,20 +2079,20 @@ async function openViewer(items, start) {
       h("dl", {}, ...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])),
       h("div", { class: "row", style: "justify-content:space-between" },
         h("div", { class: "stars" + (editing ? "" : " ro") }, ...[1, 2, 3, 4, 5].map((n) =>
-          editing ? h("button", { class: n <= (cur.rating || 0) ? "on" : "", title: `${n}점`, onclick: () => save({ rating: cur.rating === n ? 0 : n }) }, "★")
-            : n <= (cur.rating || 0) ? h("span", { class: "on" }, "★") : null)),
-        h("button", { class: "btn sm" + (editing ? " primary" : ""), onclick: () => { editing = !editing; draw(); } }, editing ? "완료" : "✎ 수정")),
+          editing ? h("button", { class: n <= (cur.rating || 0) ? "on" : "", title: `${n}점`, onclick: () => save({ rating: cur.rating === n ? 0 : n }) }, ico("star"))
+            : n <= (cur.rating || 0) ? h("span", { class: "on" }, ico("star", "filled")) : null)),
+        h("button", { class: "btn sm" + (editing ? " primary" : ""), onclick: () => { editing = !editing; draw(); } }, editing ? "완료" : [ico("edit", "in"), "수정"])),
       h("span", { class: "meta" }, "출연한 사람"),
       h("div", { class: "chips" }, ...(cur.performer_refs.length ? cur.performer_refs.map((p) => editing
         ? h("span", { class: "chip" }, p.name,
-            h("button", { "aria-label": `${p.name} 제거`, onclick: () => save({ performers: cur.performer_refs.filter((x) => x.id !== p.id).map((x) => x.name) }) }, "×"))
+            h("button", { "aria-label": `${p.name} 제거`, onclick: () => save({ performers: cur.performer_refs.filter((x) => x.id !== p.id).map((x) => x.name) }) }, ico("close", "x")))
         : h("button", { class: "chip", onclick: () => { close(); location.hash = `#/performer?id=${p.id}`; } }, p.name))
         : [h("span", { class: "meta" }, editing ? "출연한 사람 없음 — 아래에 이름을 입력하세요" : "출연한 사람 없음")])),
       ...(editing ? [input] : []),
       h("span", { class: "meta" }, "태그"),
       h("div", { class: "chips" }, ...((cur.tags || []).length ? cur.tags.map((t) => editing
         ? h("span", { class: "chip" }, "# " + t.name,
-            h("button", { "aria-label": `${t.name} 제거`, onclick: () => save({ tags: cur.tags.filter((x) => x.id !== t.id).map((x) => x.name) }) }, "×"))
+            h("button", { "aria-label": `${t.name} 제거`, onclick: () => save({ tags: cur.tags.filter((x) => x.id !== t.id).map((x) => x.name) }) }, ico("close", "x")))
         : h("button", { class: "chip", onclick: () => { close(); location.hash = `#/photos?tag=${t.id}`; } }, "# " + t.name))
         : [h("span", { class: "meta" }, "태그 없음")])),
       ...(editing ? [tagInput] : []),
@@ -2106,7 +2266,7 @@ function videoCard(v) {
   const scrub = h("div", { class: "scrub" }, Array.from({ length: nFrames }, () => h("i")));
   const thumb = h("div", { class: "thumb" }, img, noimg,
     resLabel(v.width, v.height) ? h("span", { class: "badge res" }, resLabel(v.width, v.height)) : null,
-    v.favorite ? h("span", { class: "badge fav" }, "♥") : null,
+    v.favorite ? h("span", { class: "badge fav" }, ico("heart", "filled")) : null,
     v.duration ? h("span", { class: "badge dur" }, fmtDur(v.duration)) : null,
     v.resume_pos > 5 && v.duration ? h("div", { class: "progress", style: `width:${Math.min(100, (v.resume_pos / v.duration) * 100)}%` }) : null,
     scrub);
@@ -2127,7 +2287,7 @@ function videoCard(v) {
   return h("a", { class: "card", href: `#/v/${v.id}` }, thumb,
     h("div", { class: "title", title: v.title }, v.title),
     h("div", { class: "sub" },
-      v.rating ? h("span", { class: "stars-mini" }, "★".repeat(v.rating)) : null,
+      v.rating ? h("span", { class: "stars-mini", "aria-label": `별점 ${v.rating}` }, Array.from({ length: v.rating }, () => ico("star", "filled"))) : null,
       v.play_count ? h("span", {}, `${v.play_count}회 재생`) : null,
       h("span", {}, fmtSize(v.size))));
 }
@@ -2237,18 +2397,18 @@ async function renderVideo(id, params) {
   const startAt = params.get("t") != null ? +params.get("t") : 0;
   setMode(mode, startAt, true);   // 영상을 누르고 들어오면 바로 재생
   const resume = v.resume_pos > 5 && !params.get("t")
-    ? h("button", { class: "btn sm", onclick: (e) => { e.target.remove(); seekTo(v.resume_pos); } }, `▶ ${fmtDur(v.resume_pos)}부터 이어보기`)
+    ? h("button", { class: "btn sm", onclick: (e) => { e.target.remove(); seekTo(v.resume_pos); } }, ico("play", "in"), `${fmtDur(v.resume_pos)}부터 이어보기`)
     : null;
 
   // --- 재생 조작부: 처음에는 아무것도 가리지 않고, 화면을 누르면 나타났다가 잠시 뒤 사라짐
-  const svgIco = (d) => { const sp = document.createElement("span"); sp.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`; return sp.firstChild; };
-  const PLAY = '<path d="M7 4.5l13 7.5-13 7.5z" fill="currentColor" stroke="none"/>', PAUSE = '<rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/>';
+  const svgIco = (name) => ico(name);
+  const PLAY = "play", PAUSE = "pause";
   const centerBtn = h("button", { class: "vp-center", "aria-label": "재생/일시정지" });
   const playBtn = h("button", { class: "vp-btn", "aria-label": "재생/일시정지" });
   const timeEl = h("span", { class: "vp-time" }, "0:00");
   const fill = h("div", { class: "vp-fill" });
   const track = h("div", { class: "vp-track" }, h("div", { class: "vp-rail" }, fill));
-  const fsBtn = h("button", { class: "vp-btn", "aria-label": "전체 화면" }, svgIco('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'));
+  const fsBtn = h("button", { class: "vp-btn", "aria-label": "전체 화면" }, svgIco("full"));
   const remainEl = h("span", { class: "vp-time" }, "");
   // 이전·다음 영상: 영상을 연 목록의 순서대로
   let queue = [];
@@ -2257,9 +2417,9 @@ async function renderVideo(id, params) {
   const prevId = qi > 0 ? queue[qi - 1] : null, nextId = qi >= 0 && qi < queue.length - 1 ? queue[qi + 1] : null;
   const goVideo = (id) => { if (id) location.replace(`#/v/${id}`); };   // 뒤로 가기는 목록으로 바로 돌아가도록 기록을 바꿈
   const prevBtn = h("button", { class: "vp-skip", "aria-label": "이전 영상", disabled: !prevId, onclick: (e) => { e.stopPropagation(); goVideo(prevId); } },
-    svgIco('<path d="M6 5v14" stroke-width="2.4"/><path d="M19 5.5L8.5 12 19 18.5z" fill="currentColor" stroke="none"/>'));
+    svgIco("prev"));
   const nextBtn = h("button", { class: "vp-skip", "aria-label": "다음 영상", disabled: !nextId, onclick: (e) => { e.stopPropagation(); goVideo(nextId); } },
-    svgIco('<path d="M18 5v14" stroke-width="2.4"/><path d="M5 5.5L15.5 12 5 18.5z" fill="currentColor" stroke="none"/>'));
+    svgIco("nextv"));
   // 연속 재생: 영상이 끝나면 목록의 다음 영상으로 (몇 초 기다리는 동안 취소 가능)
   const upNext = h("div", { class: "vp-upnext", hidden: true });
   let upTimer = null;
@@ -2380,7 +2540,7 @@ async function renderVideo(id, params) {
     return h("img", { src: thumbUrl(v.id, i + 1, v.thumbs), loading: "lazy", title: fmtDur(t), onclick: () => seekTo(t) });
   })) : null;
 
-  const favBtn = () => h("button", { class: "favbtn" + (v.favorite ? " on" : ""), onclick: () => save({ favorite: !v.favorite }) }, v.favorite ? "♥ 즐겨찾기" : "♡ 즐겨찾기");
+  const favBtn = () => h("button", { class: "favbtn" + (v.favorite ? " on" : ""), onclick: () => save({ favorite: !v.favorite }) }, ico("heart", v.favorite ? "in filled" : "in"), "즐겨찾기");
   const dlBtn = () => v.source === "mega" || v.source === "icloud" ? h("a", { class: "btn sm", href: `/media/${v.id}?dl=1` }, "휴대폰에 저장")
     : v.can_delete === false ? null : h("a", { class: "btn sm", href: `/media/${v.id}`, download: v.filename }, "다운로드");
   const addMarker = async (titleIn) => {
@@ -2401,13 +2561,13 @@ async function renderVideo(id, params) {
     });
     const tags = v.tags.map((t) => h("a", { class: "chip", href: `#/?tag=${t.id}` }, "#" + t.name));
     // 영상 바로 아래 큰 버튼 줄: 누르면 작은 창에서 바로 고침 (‘수정’ 화면을 거치지 않음)
-    const vact = (ico, label, fn, on) => h("button", { class: "vact" + (on ? " on" : ""), onclick: fn }, h("i", { "aria-hidden": "true" }, ico), label);
+    const vact = (name, label, fn, on) => h("button", { class: "vact" + (on ? " on" : ""), onclick: fn }, h("i", { "aria-hidden": "true" }, ico(name)), label);
     const actRow = h("div", { class: "vacts" },
-      vact("♥", "즐겨찾기", () => save({ favorite: !v.favorite }), !!v.favorite),
-      vact("#", "태그", () => quickLinks("tags")),
-      vact("👤", "사람", () => quickLinks("performers")),
-      vact("🔖", "북마크", () => addMarker(null)),
-      vact("⋯", "더보기", () => moreSheet()));
+      vact("heart", "즐겨찾기", () => save({ favorite: !v.favorite }), !!v.favorite),
+      vact("tag", "태그", () => quickLinks("tags")),
+      vact("person", "사람", () => quickLinks("performers")),
+      vact("bookmark", "북마크", () => addMarker(null)),
+      vact("more", "더보기", () => moreSheet()));
     return [
       actRow,
       h("div", { class: "vcard" },
@@ -2450,7 +2610,7 @@ async function renderVideo(id, params) {
         .filter((t) => !curNames.has(t.name)).slice(0, 10);
       box.replaceChildren(
         h("div", { class: "chips" }, ...(cur.length ? cur.map((t) => h("span", { class: "chip" }, (isTag ? "#" : "") + t.name,
-          h("button", { "aria-label": `${t.name} 빼기`, onclick: async () => { await save({ [field]: cur.filter((x) => x.id !== t.id).map((x) => x.name) }); draw(); } }, "×")))
+          h("button", { "aria-label": `${t.name} 빼기`, onclick: async () => { await save({ [field]: cur.filter((x) => x.id !== t.id).map((x) => x.name) }); draw(); } }, ico("close", "x"))))
           : [h("span", { class: "meta" }, `아직 ${label}이(가) 없습니다`)])),
         h("div", { class: "taginput" }, input, h("button", { class: "btn primary", onclick: () => add(input.value.split(",")) }, "추가")),
         sugg.length ? h("div", { class: "sheet-sec" }, h("h3", {}, isTag ? "최근 쓴 태그" : "자주 나오는 사람"),
@@ -2464,7 +2624,7 @@ async function renderVideo(id, params) {
   function moreSheet() {
     const dl = dlBtn();
     const close = openSheet("더보기", [
-      h("button", { class: "del-opt", onclick: () => close(() => setEditing(true)) }, h("b", {}, "✎ 정보 수정"), h("span", { class: "meta" }, "제목 · 별점 · 썸네일 · 메모 · 북마크 정리 · 파일 정보")),
+      h("button", { class: "del-opt", onclick: () => close(() => setEditing(true)) }, h("b", {}, ico("edit", "in"), "정보 수정"), h("span", { class: "meta" }, "제목 · 별점 · 썸네일 · 메모 · 북마크 정리 · 파일 정보")),
       dl ? h("div", { class: "row" }, dl) : null,
     ]);
   }
@@ -2472,7 +2632,7 @@ async function renderVideo(id, params) {
   function editView() {
     const titleIn = h("input", { type: "text", value: v.title, onchange: (e) => save({ title: e.target.value.trim() || v.title }) });
     const stars = h("div", { class: "stars" }, ...[1, 2, 3, 4, 5].map((n) =>
-      h("button", { class: n <= v.rating ? "on" : "", title: `${n}점`, onclick: () => save({ rating: v.rating === n ? 0 : n }) }, "★")));
+      h("button", { class: n <= v.rating ? "on" : "", title: `${n}점`, onclick: () => save({ rating: v.rating === n ? 0 : n }) }, ico("star"))));
     const editor = (field, all, label, prefix) => {
       const listId = "dl-" + field;
       const input = h("input", { type: "text", list: listId, placeholder: `${label} 추가 (Enter)` });
@@ -2483,7 +2643,7 @@ async function renderVideo(id, params) {
       input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
       return h("div", { class: "panel" }, h("h3", {}, label),
         h("div", { class: "chips" }, ...(v[field].length ? v[field].map((t) => h("span", { class: "chip" }, prefix + t.name,
-          h("button", { title: "제거", "aria-label": `${t.name} 제거`, onclick: () => save({ [field]: v[field].filter((x) => x.id !== t.id).map((x) => x.name) }) }, "×")))
+          h("button", { title: "제거", "aria-label": `${t.name} 제거`, onclick: () => save({ [field]: v[field].filter((x) => x.id !== t.id).map((x) => x.name) }) }, ico("close", "x"))))
           : [h("span", { class: "meta" }, "없음")])),
         h("div", { class: "taginput" }, input, h("button", { class: "btn", onclick: add }, "추가")),
         h("datalist", { id: listId }, all.map((t) => h("option", { value: t.name }))));
@@ -2495,7 +2655,7 @@ async function renderVideo(id, params) {
       h("button", { class: "btn sm danger", title: "삭제", onclick: async () => {
         await api(`markers/${m.id}`, { method: "DELETE" });
         v.markers = v.markers.filter((x) => x.id !== m.id); drawInfo();
-      } }, "×"))) : [h("li", { class: "meta" }, "북마크가 없습니다.")]));
+      } }, ico("close", "x")))) : [h("li", { class: "meta" }, "북마크가 없습니다.")]));
     const details = h("textarea", { rows: 3, placeholder: "메모", onchange: (e) => save({ details: e.target.value }) });
     details.value = v.details || "";
     const info = h("dl", { class: "info" },
@@ -2523,7 +2683,7 @@ async function renderVideo(id, params) {
         video.poster = cv.toDataURL("image/jpeg", 0.6);
         toast(`${fmtDur(currentTime())} 장면을 썸네일로 정했습니다`);
       } catch (e) { toast("썸네일을 만들지 못했습니다: " + e.message); }
-    } }, "🖼 지금 장면을 썸네일로");
+    } }, ico("frame", "in"), "지금 장면을 썸네일로");
     const coverFile = h("input", { type: "file", accept: "image/*", hidden: true });
     coverFile.onchange = async () => {   // 기기의 사진으로 썸네일 정하기
       const f = coverFile.files && coverFile.files[0];
@@ -2541,7 +2701,7 @@ async function renderVideo(id, params) {
         toast("고른 사진을 썸네일로 정했습니다");
       } catch (e) { toast("썸네일을 바꾸지 못했습니다: " + e.message); }
     };
-    const coverPickBtn = h("button", { class: "btn sm", onclick: () => coverFile.click() }, "📷 기기 사진으로");
+    const coverPickBtn = h("button", { class: "btn sm", onclick: () => coverFile.click() }, ico("camera", "in"), "기기 사진으로");
     const coverResetBtn = h("button", { class: "btn sm", onclick: async () => {
       await api(`videos/${v.id}/cover`, { method: "DELETE" }); toast("기본 썸네일로 되돌렸습니다");
     } }, "기본 썸네일로");
@@ -2599,22 +2759,11 @@ function entityCover(e, fallback) {
 
 // ---------------------------------------------------------------- settings
 /** 설정 아이콘 (선 그림) */
-const SET_ICON = {
-  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
-  display: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/>',
-  folder: '<path d="M3 7.5a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
-  cloud: '<path d="M17.5 19H7.2a4.7 4.7 0 0 1-.8-9.3A6 6 0 0 1 18 9.6a4.7 4.7 0 0 1-.5 9.4z"/>',
-  heart: '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>',
-  broom: '<path d="M14.5 3.5l6 6"/><path d="M17.5 6.5l-7 7"/><path d="M10.5 13.5c-3 0-6 2-7 7 5-1 7-4 7-7z"/>',
-  backup: '<path d="M12 3v12"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
-  lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>',
-  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
-};
+const SET_ALIAS = { display: "theme", broom: "tidy" };
+const SET_TINT = { theme: 1, folder: 4, cloud: 3, heart: 2, tidy: 5, backup: 3, lock: 4, info: 1, gear: 1, history: 1, stats: 5, dup: 4, hidden: 2 };
 function setIcon(name) {
-  const span = document.createElement("span");
-  span.className = "set-ico";
-  span.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${SET_ICON[name]}</svg>`;
-  return span;
+  const n = SET_ALIAS[name] || name;
+  return h("span", { class: "set-ico t" + (SET_TINT[n] || 1) }, ico(n));
 }
 
 /** 설정: 첫 화면은 항목 목록, 항목을 누르면 그 항목만 보이는 화면 */
@@ -2647,13 +2796,13 @@ async function renderSettings(opts = {}) {
     const quota = megaQuotaText(status);
     $app.replaceChildren(h("div", { class: "settings" },
       h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "VidShelf"), h("h1", {}, "설정"))),
-      quota ? h("a", { class: "panel warn set-alert", href: "#/settings?section=cloud" }, "⚠ " + quota) : null,
+      quota ? h("a", { class: "panel warn set-alert", href: "#/settings?section=cloud" }, ico("warn", "in"), quota) : null,
       ...SECTIONS.map((g) => h("section", { class: "set-group" },
         h("h2", { class: "set-group-title" }, g.group),
         h("div", { class: "lib-list set-list" }, g.items.filter(Boolean).map((it) =>
           h("a", { href: `#/settings?section=${it.id}` }, setIcon(it.icon),
             h("div", { class: "set-text" }, h("div", { class: "set-title" }, it.title), h("div", { class: "meta" }, it.sub)),
-            h("span", { class: "chev", "aria-hidden": "true" }, "›")))))),
+            h("span", { class: "chev", "aria-hidden": "true" }, ico("next"))))))),
       h("p", { class: "meta about-line" }, "VidShelf · ", h("a", { href: "https://yeezyismygoat-pixel.github.io/ClaudeRep/vidshelf/privacy/", target: "_blank", rel: "noopener" }, "개인정보처리방침"),
         " · 모든 정보는 이 휴대폰 안에만 저장됩니다")));
     return;
@@ -2662,7 +2811,7 @@ async function renderSettings(opts = {}) {
   // ---- 하위 화면
   const info = SECTIONS.flatMap((g) => g.items).find((x) => x && x.id === section) || { title: "설정" };
   const page = (...kids) => $app.replaceChildren(h("div", { class: "settings sub" + (kids.filter(Boolean).length === 1 ? " solo" : "") },
-    h("a", { class: "btn sm back-btn", href: "#/settings" }, "‹ 설정"),
+    h("a", { class: "btn sm back-btn", href: "#/settings" }, ico("back", "in"), "설정"),
     h("h1", { class: "set-page-title" }, info.title),
     ...kids.filter(Boolean)));
 
@@ -2701,7 +2850,7 @@ async function renderSettings(opts = {}) {
         h("p", { class: "meta", style: "margin-top:0" }, "이 기기에서 영상과 사진을 가져올 폴더입니다. ‘폴더 찾아보기’에서 휴대폰의 모든 폴더를 고를 수 있습니다."),
         pathList,
         h("div", { class: "row" },
-          h("button", { class: "btn", onclick: () => folderPicker((p) => savePaths(paths.concat([p]))) }, "📁 폴더 찾아보기"),
+          h("button", { class: "btn", onclick: () => folderPicker((p) => savePaths(paths.concat([p]))) }, ico("folder", "in"), "폴더 찾아보기"),
           h("button", { class: "btn primary", disabled: status.scanning || !paths.length, onclick: async () => {
             await api("scan", { method: "POST" }); toast("스캔을 시작했습니다"); setTimeout(reload, 800);
           } }, status.scanning ? "스캔 중…" : "지금 스캔")),
@@ -2770,7 +2919,7 @@ async function renderPerformer(id) {
   const setEdit = (on) => { location.hash = `#/performer?id=${id}` + (on ? "&edit=1" : ""); };
 
   // --- 대표 이미지 + 이름 + 정보
-  const avatar = h("div", { class: "pf-avatar" }, h("span", {}, "👤"));
+  const avatar = h("div", { class: "pf-avatar" }, ico("person"));
   let avatarSet = false;   // 처음 정한 그림만 씀 (직접 고른 대표 사진이 먼저)
   const setAvatar = (src) => {
     if (!src || avatarSet) return;
@@ -2788,7 +2937,7 @@ async function renderPerformer(id) {
     if (p.height) facts.push(["키", `${p.height}cm`]);
   }
   const counts = h("p", { class: "meta", style: "margin:4px 0 0" });
-  const editBtn = h("button", { class: "btn sm" + (editing ? " primary" : ""), onclick: () => setEdit(!editing) }, editing ? "수정 닫기" : "✎ 수정");
+  const editBtn = h("button", { class: "btn sm" + (editing ? " primary" : ""), onclick: () => setEdit(!editing) }, editing ? "수정 닫기" : [ico("edit", "in"), "수정"]);
   const shuffleBtn = h("button", { class: "btn sm primary", onclick: async () => {   // 이 사람 영상만 무작위로 이어서
     try {
       const d = await api(`videos?performer=${id}&sort=random&seed=${Date.now() % 100000}&per=200`);
@@ -2796,7 +2945,7 @@ async function renderPerformer(id) {
       sessionStorage.setItem("vs_queue", JSON.stringify(d.items.map((x) => String(x.id))));
       location.hash = `#/v/${d.items[0].id}`;
     } catch (e) { toast(e.message); }
-  } }, "▶ 무작위 재생");
+  } }, ico("play", "in"), "무작위 재생");
   const head = h("div", { class: "panel pf-head" }, avatar,
     h("div", { class: "pf-main" },
       h("div", { class: "row", style: "justify-content:space-between;flex-wrap:nowrap;align-items:flex-start" },
@@ -2841,7 +2990,7 @@ async function renderPerformer(id) {
       toast("삭제했습니다");
       location.hash = "#/explore";
     } }, "사람 삭제");
-    const coverBtn = h("button", { class: "btn", onclick: () => pickCover() }, "🖼 대표 사진 고르기");
+    const coverBtn = h("button", { class: "btn", onclick: () => pickCover() }, ico("image", "in"), "대표 사진 고르기");
     editPanel = h("div", { class: "panel" }, h("h3", {}, "수정"),
       form,
       h("div", { class: "row", style: "margin-top:10px" }, coverBtn),
@@ -2968,7 +3117,7 @@ function cloudPanel(st) {
     h("details", { class: "cloud-help" }, h("summary", {}, "링크 만드는 방법"),
       h("p", { class: "meta" }, "MEGA: 앱이나 웹에서 폴더 → 공유 → 링크 복사. 링크에 열쇠(# 뒤 부분)가 있어야 합니다."),
       h("p", { class: "meta" }, "iCloud: 아이폰 사진 앱 → 앨범 → 공유 앨범 → 사람 아이콘 → ‘공개 웹사이트’ 켜기 → 링크 복사. iCloud Drive 와 일반 사진 보관함은 로그인이 필요해서 지원하지 않습니다.")),
-    rows.length ? h("a", { class: "btn", href: "#/cloud", style: "margin-top:8px;display:inline-block" }, "☁ 클라우드 파일 보기") : null,
+    rows.length ? h("a", { class: "btn", href: "#/cloud", style: "margin-top:8px;display:inline-block" }, ico("cloud", "in"), "클라우드 파일 보기") : null,
     mega.length && st.mega_thumbs !== undefined ? megaThumbToggle(st) : null,
     rows.length && st.mega_refresh_hours !== undefined ? megaRefreshSelect(st) : null,
     rows.length ? h("button", { class: "btn sm", style: "margin-top:8px", onclick: async (e) => {
@@ -3017,11 +3166,11 @@ async function renderCloud() {
   setTab("cloud");
   const st = await api("settings");
   const mega = st.mega || [], icloud = st.icloud || [];
-  const row = (href, title, sub, err) => h("a", { href }, h("div", {}, h("div", {}, title), h("div", { class: "meta" }, sub), err ? h("div", { class: "warn" }, err) : null), h("span", {}, "›"));
+  const row = (href, title, sub, err) => h("a", { href }, h("div", {}, h("div", {}, title), h("div", { class: "meta" }, sub), err ? h("div", { class: "warn" }, err) : null), h("span", {}, ico("next")));
   $app.replaceChildren(h("div", {},
     h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "MEGA · iCloud"), h("h1", {}, "클라우드 파일"))),
     h("h2", { class: "pf-sec" }, "MEGA 폴더"),
-    mega.length ? h("div", { class: "lib-list" }, mega.map((l) => row(`#/mega?link=${l.index}`, "☁ " + l.name, `파일 ${l.files}개 · 영상 ${l.videos}개`, l.error)))
+    mega.length ? h("div", { class: "lib-list" }, mega.map((l) => row(`#/mega?link=${l.index}`, [ico("cloud", "in"), l.name], `파일 ${l.files}개 · 영상 ${l.videos}개`, l.error)))
       : h("p", { class: "meta" }, "연결된 MEGA 폴더가 없습니다."),
     h("h2", { class: "pf-sec" }, "iCloud 공유 앨범"),
     icloud.length ? h("div", { class: "lib-list" }, icloud.map((a) => row(`#/icloud?a=${a.index}`, " " + a.name, `사진 ${a.photos}장 · 영상 ${a.videos}개`, a.error)))
@@ -3039,10 +3188,10 @@ async function renderICloudAlbum(i) {
     img.onerror = () => (img.hidden = true);
     return isPhoto
       ? h("button", { class: "sq", "aria-label": it.title, onclick: () => openViewer(photos, photos.indexOf(it)) }, img)
-      : h("a", { class: "sq", href: `#/v/${it.id}`, "aria-label": it.title }, img, h("span", { class: "sq-dur" }, "▶ " + (it.duration ? fmtDur(it.duration) : "")));
+      : h("a", { class: "sq", href: `#/v/${it.id}`, "aria-label": it.title }, img, h("span", { class: "sq-dur" }, ico("play", "in"), it.duration ? fmtDur(it.duration) : ""));
   }));
   $app.replaceChildren(h("div", {},
-    h("a", { class: "btn sm", href: "#/cloud", style: "margin-bottom:12px;display:inline-block" }, "‹ 클라우드 파일"),
+    h("a", { class: "btn sm", href: "#/cloud", style: "margin-bottom:12px;display:inline-block" }, ico("back", "in"), "클라우드 파일"),
     h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, `iCloud 공유 앨범 · ${d.items.length}개`), h("h1", {}, d.name))),
     d.error ? h("div", { class: "panel warn" }, d.error) : null,
     d.items.length ? grid : h("div", { class: "empty" }, "이 앨범은 비어 있습니다.")));
@@ -3061,17 +3210,17 @@ async function renderMega(params) {
   const data = await api(`mega/${idx}/browse?folder=${encodeURIComponent(params.get("folder") || "")}`);
   const go = (folder) => { location.hash = `#/mega?link=${idx}` + (folder ? `&folder=${folder}` : ""); };
   const linkChips = links.length > 1 ? h("div", { class: "chips", style: "margin-bottom:10px" }, links.map((l) =>
-    h("a", { class: "chip" + (l.index === idx ? " on" : ""), href: `#/mega?link=${l.index}` }, "☁ " + l.name))) : null;
+    h("a", { class: "chip" + (l.index === idx ? " on" : ""), href: `#/mega?link=${l.index}` }, ico("cloud", "in"), l.name))) : null;
   const crumbs = h("div", { class: "chips", style: "margin-bottom:12px" }, (data.crumbs || []).map((c, i, arr) =>
     i === arr.length - 1 ? h("span", { class: "chip on" }, c.name) : h("button", { class: "chip", onclick: () => go(c.handle) }, c.name)));
-  const folders = (data.folders || []).map((f) => h("button", { class: "chip", onclick: () => go(f.handle) }, "📁 " + f.name));
+  const folders = (data.folders || []).map((f) => h("button", { class: "chip", onclick: () => go(f.handle) }, ico("folder", "in"), f.name));
   const media = [], others = [];
   for (const f of data.files || []) {
     if (f.kind === "video") {
       const img = h("img", { loading: "lazy", alt: "", hidden: !f.thumb, src: f.thumb ? `/thumbs/${f.id}/0.jpg?v=1` : null });
       img.onerror = () => (img.hidden = true);
       media.push(h("a", { class: "card", href: `#/v/${f.id}` },
-        h("div", { class: "thumb" }, img, h("div", { class: "noimg" }, "▶ 영상")),
+        h("div", { class: "thumb" }, img, h("div", { class: "noimg" }, ico("play"))),
         h("div", { class: "title", title: f.name }, f.name), h("div", { class: "sub" }, h("span", {}, fmtSize(f.size)))));
     } else if (f.kind === "image") {
       media.push(h("a", { class: "card", href: f.url, target: "_blank", rel: "noopener" },
@@ -3079,13 +3228,13 @@ async function renderMega(params) {
         h("div", { class: "title", title: f.name }, f.name), h("div", { class: "sub" }, h("span", {}, fmtSize(f.size)))));
     } else {
       others.push(h("li", {},
-        h("span", { class: "p" }, (f.kind === "audio" ? "🎵 " : "📄 ") + f.name, h("div", { class: "meta" }, fmtSize(f.size))),
+        h("span", { class: "p" }, ico(f.kind === "audio" ? "music" : "doc", "in"), f.name, h("div", { class: "meta" }, fmtSize(f.size))),
         h("a", { class: "btn sm", href: f.url, target: "_blank", rel: "noopener" }, "열기"),
         h("a", { class: "btn sm", href: f.url + "?dl=1" }, "받기")));
     }
   }
   $app.replaceChildren(h("div", {},
-    h("a", { class: "btn sm", href: "#/cloud", style: "margin-bottom:12px;display:inline-block" }, "‹ 클라우드 파일"),
+    h("a", { class: "btn sm", href: "#/cloud", style: "margin-bottom:12px;display:inline-block" }, ico("back", "in"), "클라우드 파일"),
     linkChips, crumbs,
     data.error ? h("div", { class: "panel warn" }, data.error) : null,
     folders.length ? h("div", { class: "chips", style: "margin-bottom:14px" }, folders) : null,
@@ -3113,12 +3262,12 @@ async function renderShorts(params) {
     video.muted = shortsMuted;
     if (v.width && v.height && v.width > v.height) video.classList.add("wide");   // 가로 영상은 잘리지 않게
     const bar = h("div", { class: "sbar" });
-    const icon = h("div", { class: "splay" }, "▶");
-    const muteBtn = h("button", { class: "sbtn", "aria-label": "소리" }, shortsMuted ? "🔇" : "🔊");
+    const icon = h("div", { class: "splay" }, ico("play"));
+    const muteBtn = h("button", { class: "sbtn", "aria-label": "소리" }, ico(shortsMuted ? "mute" : "sound"));
     muteBtn.onclick = (e) => {
       e.stopPropagation();
       shortsMuted = !shortsMuted;
-      items.forEach((it) => { it.video.muted = shortsMuted; it.mute.textContent = shortsMuted ? "🔇" : "🔊"; });
+      items.forEach((it) => { it.video.muted = shortsMuted; it.mute.replaceChildren(ico(shortsMuted ? "mute" : "sound")); });
     };
     let counted = false, watched = 0, lastT = null;
     video.addEventListener("timeupdate", () => {   // 본 시간 (통계용)
@@ -3144,7 +3293,7 @@ async function renderShorts(params) {
       if (!video.getAttribute("src") || !video.error) return;
       const show = (msg) => {
         errBox.replaceChildren(h("p", {}, msg),
-          hasNativePlayer() ? h("button", { class: "btn primary", onclick: (e) => { e.stopPropagation(); playNative(v, 0); } }, "▶ 앱 플레이어로 재생") : null);
+          hasNativePlayer() ? h("button", { class: "btn primary", onclick: (e) => { e.stopPropagation(); playNative(v, 0); } }, ico("external", "in"), "앱 플레이어로 재생") : null);
         errBox.hidden = false;
       };
       const unplayable = () => {   // 형식 문제: 기억해 두고 숏폼에서 빼고 다음 영상으로
@@ -3158,8 +3307,8 @@ async function renderShorts(params) {
       else show("재생하지 못했습니다.");
     });
     // 하트(즐겨찾기)와 삭제
-    const HEART = '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>';
-    const svg = (d, cls) => { const sp = document.createElement("span"); sp.innerHTML = `<svg class="ico ${cls || ""}" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`; return sp.firstChild; };
+    const HEART = "heart";
+    const svg = (name, cls) => ico(name, cls);
     const favBtn = h("button", { class: "sbtn sfav", "aria-label": "즐겨찾기" }, svg(HEART));
     const drawFav = () => { favBtn.classList.toggle("on", !!v.favorite); favBtn.setAttribute("aria-pressed", v.favorite ? "true" : "false"); };
     const setFav = async (on) => {
@@ -3172,7 +3321,7 @@ async function renderShorts(params) {
     favBtn.onclick = (e) => { e.stopPropagation(); setFav(!v.favorite); };
     drawFav();
     const delBtn = h("button", { class: "sbtn", "aria-label": "삭제", onclick: (e) => { e.stopPropagation(); askDelete(); } },
-      svg('<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5"/>'));
+      svg("trash"));
     function askDelete() {
       const cloud = v.source && v.source !== "local";
       const run = async (mode) => {
@@ -3214,7 +3363,7 @@ async function renderShorts(params) {
         h("a", { class: "stitle", href: `#/v/${v.id}` }, v.title),
         v.performers && v.performers.length ? h("div", { class: "sperf" }, v.performers.join(", ")) : null),
       h("div", { class: "sside" }, favBtn, delBtn, muteBtn,
-        h("a", { class: "sbtn", href: `#/v/${v.id}`, "aria-label": "자세히" }, "ⓘ")),
+        h("a", { class: "sbtn", href: `#/v/${v.id}`, "aria-label": "자세히" }, ico("info"))),
       sbarWrap);
     loadingEl.replaceWith(attachLoading(video, h("div")));
     holdFast(el, video);
@@ -3262,7 +3411,7 @@ async function renderShorts(params) {
     });
     const it = items[i];
     it.video.play().catch(() => {   // 소리가 있는 자동 재생이 막히면 소리 없이
-      shortsMuted = true; items.forEach((x) => { x.video.muted = true; x.mute.textContent = "🔇"; });
+      shortsMuted = true; items.forEach((x) => { x.video.muted = true; x.mute.replaceChildren(ico("mute")); });
       it.video.play().catch(() => {});
     });
     if (i >= items.length - 4) load();
@@ -3291,37 +3440,25 @@ async function renderShorts(params) {
 }
 
 // ---------------------------------------------------------------- 보관함 (사진·사람·태그·설정 모음)
-const LIB_ICON = {
-  heart: '<path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.4 1.1 5 3 1.6-1.9 3-3 5-3 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/>',
-  photos: '<rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="9" cy="9" r="1.8"/><path d="M21 15.5l-5-5L4.5 21"/>',
-  people: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5"/>',
-  tags: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.4"/>',
-  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
-};
-function libIcon(name) {
-  const span = document.createElement("span");
-  span.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${LIB_ICON[name]}</svg>`;
-  return span.firstChild;
-}
 async function renderLibraryHub() {
   setTab("library");
   if (!Object.keys(serverCaps).length) serverCaps = await api("settings").catch(() => ({}));
   const cloudN = (serverCaps.mega || []).length + (serverCaps.icloud || []).length;
   const todoN = h("span", {}, "사람·태그가 없고 ‘정리 완료’ 표시도 안 된 영상·사진");
-  api("media?type=all&unorganized=1&per=1").then((d) => { todoN.textContent = d.total ? `${d.total.toLocaleString()}개 남음 · 사람·태그를 붙이거나 ‘정리 완료’로 표시하세요` : "모두 정리했습니다 ✓"; }).catch(() => {});
-  const row = (href, icon, title, sub) => h("a", { href }, setIcon(icon), h("div", { class: "set-text" }, h("div", { class: "set-title" }, title), sub ? h("div", { class: "meta" }, sub) : null), h("span", { class: "chev", "aria-hidden": "true" }, "›"));
+  api("media?type=all&unorganized=1&per=1").then((d) => { todoN.textContent = d.total ? `${d.total.toLocaleString()}개 남음 · 사람·태그를 붙이거나 ‘정리 완료’로 표시하세요` : "모두 정리했습니다"; }).catch(() => {});
+  const row = (href, icon, title, sub) => h("a", { href }, setIcon(icon), h("div", { class: "set-text" }, h("div", { class: "set-title" }, title), sub ? h("div", { class: "meta" }, sub) : null), h("span", { class: "chev", "aria-hidden": "true" }, ico("next")));
   $app.replaceChildren(h("div", { class: "libhub" },
     h("h2", { class: "set-group-title" }, "정리"),
     h("div", { class: "lib-list set-list" },
       row("#/media?unorganized=1", "broom", "정리할 항목", todoN)),
     h("h2", { class: "set-group-title" }, "기록"),
     h("div", { class: "lib-list set-list" },
-      row("#/stats", "info", "시청 기록 · 통계", "최근 본 영상 · 시청 시간 · 많이 본 사람")),
+      row("#/stats", "history", "시청 기록 · 통계", "최근 본 영상 · 시청 시간 · 많이 본 사람")),
     h("h2", { class: "set-group-title" }, "파일"),
     h("div", { class: "lib-list set-list" },
       serverCaps.mega_supported ? row("#/cloud", "cloud", "클라우드 파일", cloudN ? `MEGA ${(serverCaps.mega || []).length} · iCloud ${(serverCaps.icloud || []).length}` : "MEGA · iCloud 링크 연결") : null,
-      serverCaps.duplicates ? row("#/duplicates", "broom", "중복 영상·사진", "같은 영상·사진이 여러 곳에 있는지 찾기") : null,
-      serverCaps.hidden_count !== undefined ? row("#/hidden", "info", "숨긴 영상", `${serverCaps.hidden_count}개`) : null),
+      serverCaps.duplicates ? row("#/duplicates", "dup", "중복 영상·사진", "같은 영상·사진이 여러 곳에 있는지 찾기") : null,
+      serverCaps.hidden_count !== undefined ? row("#/hidden", "hidden", "숨긴 영상", `${serverCaps.hidden_count}개`) : null),
     h("h2", { class: "set-group-title" }, "앱"),
     h("div", { class: "lib-list set-list" }, row("#/settings", "gear", "설정", "화면 · 폴더 · 클라우드 · 백업"))));
 }
@@ -3411,8 +3548,8 @@ async function renderExplore(params0) {
   function drawChips() {
     const without = (key, val) => { const p = new URLSearchParams(params); const rest = p.getAll(key).filter((x) => x !== val); p.delete(key); rest.forEach((x) => p.append(key, x)); update(p); };
     const chips = [];
-    for (const t of params.getAll("tag")) chips.push(h("span", { class: "fchip" }, "#" + tagName(t), h("button", { "aria-label": "태그 필터 해제", onclick: () => without("tag", t) }, "×")));
-    for (const k of params.getAll("age")) { const r = EX_AGES.find((x) => x[0] === k); if (r) chips.push(h("span", { class: "fchip" }, r[1], h("button", { "aria-label": "나이 필터 해제", onclick: () => without("age", k) }, "×"))); }
+    for (const t of params.getAll("tag")) chips.push(h("span", { class: "fchip" }, "#" + tagName(t), h("button", { "aria-label": "태그 필터 해제", onclick: () => without("tag", t) }, ico("close", "x"))));
+    for (const k of params.getAll("age")) { const r = EX_AGES.find((x) => x[0] === k); if (r) chips.push(h("span", { class: "fchip" }, r[1], h("button", { "aria-label": "나이 필터 해제", onclick: () => without("age", k) }, ico("close", "x")))); }
     if (chips.length > 1) chips.push(h("button", { class: "fclear", onclick: () => { const p = new URLSearchParams(params); p.delete("tag"); p.delete("age"); update(p); } }, "모두 지우기"));
     chipsBox.replaceChildren(...chips); chipsBox.hidden = !chips.length;
     filterBtn.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>';
@@ -3437,7 +3574,7 @@ async function renderExplore(params0) {
     const kids = [h("span", { class: "ex-hash", "aria-hidden": "true" }, depth ? "↳" : "#"),
       h("div", { class: "ex-tmain" }, h("b", {}, t.name), h("span", { class: "meta" }, n + (t.aliases ? ` · 다른 이름: ${t.aliases}` : "")))];
     const style = depth ? `margin-left:${Math.min(3, depth) * 22}px` : null;
-    if (!editingTags) return h("a", { class: "ex-tag", style, href: `#/?tag=${t.id}` }, ...kids, h("span", { class: "chev", "aria-hidden": "true" }, "›"));
+    if (!editingTags) return h("a", { class: "ex-tag", style, href: `#/?tag=${t.id}` }, ...kids, h("span", { class: "chev", "aria-hidden": "true" }, ico("next")));
     return h("div", { class: "ex-tag editing", style }, ...kids,
       h("button", { class: "btn sm", onclick: () => editTag(t) }, "설정"),
       h("button", { class: "btn sm danger", onclick: async () => {
@@ -3482,7 +3619,7 @@ async function renderExplore(params0) {
       chipsBox.replaceChildren(); chipsBox.hidden = true;
       filterBtn.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>';
       filterBtn.append("정렬");
-      const editBtn = h("button", { class: "btn sm" + (editingTags ? " primary" : ""), onclick: () => { editingTags = !editingTags; draw(); } }, editingTags ? "완료" : "✎ 편집");
+      const editBtn = h("button", { class: "btn sm" + (editingTags ? " primary" : ""), onclick: () => { editingTags = !editingTags; draw(); } }, editingTags ? "완료" : [ico("edit", "in"), "편집"]);
       grid.className = "ex-tags";
       grid.replaceChildren(h("div", { class: "ex-tags-head" }, h("span", { class: "meta" }, "누르면 그 태그의 영상·사진을 봅니다"), tags.length ? editBtn : null),
         ...(tl.length ? tl.map(tagRow) : [h("div", { class: "empty" }, tags.length ? "검색과 맞는 태그가 없습니다." : "아직 태그가 없습니다.")]));
@@ -3560,7 +3697,7 @@ async function renderExplore(params0) {
     h("div", { class: "home-head media-title" }, h("div", {}, countLine, h("h1", {}, "탐색"))),
     h("div", { class: "media-bar" },
       h("div", { class: "media-bar-row" }, typeSeg, filterBtn),
-      h("label", { class: "ex-search-box" }, h("span", { "aria-hidden": "true" }, "⌕"), search),
+      h("label", { class: "ex-search-box" }, ico("search"), search),
       chipsBox),
     content));
 
@@ -3580,7 +3717,7 @@ async function renderSearch(params) {
   const recentQ = () => { try { return JSON.parse(localStorage.getItem("vs-recent-q") || "[]"); } catch (e) { return []; } };
   const remember = (q) => { try { const r = recentQ().filter((w) => w !== q); r.unshift(q); localStorage.setItem("vs-recent-q", JSON.stringify(r.slice(0, 8))); } catch (e) {} };
   let token = 0, timer = null;
-  const row = (icon, title, sub, href, onGo) => h("a", { class: "s-row", href, onclick: onGo }, icon, h("div", { class: "s-main" }, h("b", {}, title), sub ? h("span", { class: "meta" }, sub) : null), h("span", { class: "chev", "aria-hidden": "true" }, "›"));
+  const row = (icon, title, sub, href, onGo) => h("a", { class: "s-row", href, onclick: onGo }, icon, h("div", { class: "s-main" }, h("b", {}, title), sub ? h("span", { class: "meta" }, sub) : null), h("span", { class: "chev", "aria-hidden": "true" }, ico("next")));
   async function draw() {
     const q = input.value.trim(), ql = q.toLowerCase(), my = ++token;
     history.replaceState(history.state, "", "#/search" + (q ? "?q=" + encodeURIComponent(q) : ""));
@@ -3588,7 +3725,7 @@ async function renderSearch(params) {
     if (!q) {
       const rq = recentQ();
       out.replaceChildren(rq.length ? h("section", {}, h("h3", { class: "s-h" }, "최근 검색"),
-        h("div", { class: "chips" }, ...rq.map((w) => h("button", { class: "chip", onclick: () => { input.value = w; draw(); } }, "🕘 " + w)),
+        h("div", { class: "chips" }, ...rq.map((w) => h("button", { class: "chip", onclick: () => { input.value = w; draw(); } }, ico("history", "in"), w)),
           h("button", { class: "linkbtn", onclick: () => { try { localStorage.removeItem("vs-recent-q"); } catch (e) {} draw(); } }, "지우기")))
         : h("p", { class: "meta s-empty" }, "사람 이름, 다른 이름(영문명 등), 태그, 영상 제목으로 찾을 수 있습니다."));
       return;
@@ -3620,7 +3757,7 @@ async function renderSearch(params) {
   $app.replaceChildren(h("div", { class: "search-page" },
     h("div", { class: "search-top" },
       h("button", { class: "round-btn", "aria-label": "뒤로", onclick: () => history.back() }, icon("prev")),
-      h("label", { class: "ex-search-box" }, h("span", { "aria-hidden": "true" }, "⌕"), input)),
+      h("label", { class: "ex-search-box" }, ico("search"), input)),
     out));
   draw();
   setTimeout(() => input.focus(), 60);
@@ -3696,7 +3833,7 @@ function favSyncPanel(st) {
       : "안드로이드 11 이상에서만 갤러리 즐겨찾기와 연동됩니다. 이 기기에서는 앱 안에서만 즐겨찾기가 저장됩니다."),
     h("p", { class: "meta" }, "MEGA·iCloud 항목은 공유 링크가 읽기 전용이라, 즐겨찾기가 앱 안에만 저장됩니다. 목록이나 홈에서 사진·영상을 길게 누르면 즐겨찾기에 넣거나 뺄 수 있습니다."),
     st.fav_sync && st.manage_media_supported ? (st.manage_media
-      ? h("p", { class: "meta" }, "✓ ‘미디어 관리’ 권한이 켜져 있어 확인 창 없이 바로 반영됩니다.")
+      ? h("p", { class: "meta" }, ico("done", "in"), "‘미디어 관리’ 권한이 켜져 있어 확인 창 없이 바로 반영됩니다.")
       : h("div", {}, h("p", { class: "meta" }, "지금은 앱에서 즐겨찾기를 바꿀 때마다 안드로이드가 확인 창을 띄웁니다. 아래 버튼으로 ‘미디어 관리’ 권한을 켜면 묻지 않고 바로 반영됩니다."),
           h("a", { class: "btn", href: "vidshelf://manage-media" }, "‘미디어 관리’ 권한 켜기"))) : null);
 }
@@ -3753,7 +3890,7 @@ function openHomeEditor() {
         await api(`saved_filters/${x.k.slice(3)}/home`, { method: "POST", body: { on: false } }).catch(() => null);
         homeExtra = homeExtra.filter(([k]) => k !== x.k); layout = layout.filter((y) => y.k !== x.k);
         saveLayout(); draw(); drawAdd();
-      } }, "×") : null, sw);
+      } }, ico("close", "x")) : null, sw);
   }));
   draw();
   // 저장된 필터를 홈 줄로 추가
@@ -3764,7 +3901,7 @@ function openHomeEditor() {
     if (!all.length) { addBox.replaceChildren(h("p", { class: "meta", style: "margin:0" }, "저장된 필터가 없습니다. 미디어 탭의 필터에서 조건을 고른 뒤 ‘필터 저장’을 누르면 여기에 나옵니다.")); return; }
     addBox.replaceChildren(h("div", { class: "he-sub" }, "저장된 필터 추가"),
       ...(rest.length ? rest.map((f) => h("div", { class: "home-edit-row" },
-        h("span", { class: "he-name" }, (f.default ? "★ " : "") + f.name),
+        h("span", { class: "he-name" }, f.default ? ico("star", "in filled") : null, f.name),
         h("button", { class: "btn sm primary", onclick: async (e) => {
           e.currentTarget.disabled = true;
           await api(`saved_filters/${f.id}/home`, { method: "POST", body: { on: true } }).catch(() => null);
@@ -3786,7 +3923,7 @@ function homeSquare(it, photos) {
   const isPhoto = it.kind === "photo";
   const img = h("img", { loading: "lazy", alt: it.title || "", src: isPhoto ? `/photothumb/${it.id}.jpg` : it.thumbs > 0 ? thumbUrl(it.id, 0, it.thumbs) : null });
   img.onerror = () => (img.hidden = true);
-  const kids = [img, !isPhoto ? h("span", { class: "sq-dur" }, "▶ " + (it.duration ? fmtDur(it.duration) : "")) : null];
+  const kids = [img, !isPhoto ? h("span", { class: "sq-dur" }, ico("play", "in"), it.duration ? fmtDur(it.duration) : "") : null];
   const cell = isPhoto
     ? h("button", { class: "sq", "aria-label": it.title || "사진", onclick: () => openViewer(photos, photos.indexOf(it)) }, ...kids)
     : h("a", { class: "sq", href: `#/v/${it.id}`, "aria-label": it.title || "영상" }, ...kids);
@@ -3824,10 +3961,10 @@ async function renderHome() {
   $app.replaceChildren(h("div", { class: "home" },
     h("div", { class: "home-head" }, h("div", {}, stats, h("h1", {}, "내 보관함"))),
     // 검색에서 시작: 검색칸 · 자주 보는 사람 · 바로 가기 칩 · 이어 볼 영상 하나
-    h("a", { class: "home-search", href: "#/search" }, h("span", { "aria-hidden": "true" }, "⌕"), "사람, 태그, 제목 검색"),
+    h("a", { class: "home-search", href: "#/search" }, ico("search"), "사람, 태그, 제목 검색"),
     quickPeople, quickChips, heroBox,
     ...layout.filter((x) => x.on && secs[x.k]).map((x) => secs[x.k].sec),
-    h("div", { class: "home-edit" }, h("button", { class: "btn sm", onclick: openHomeEditor }, "✎ 홈 편집"))));
+    h("div", { class: "home-edit" }, h("button", { class: "btn sm", onclick: openHomeEditor }, ico("edit", "in"), "홈 편집"))));
 
   const counts = { videos: null, photos: null, people: null };
   const n = (x) => (x == null ? "…" : x.toLocaleString());
@@ -3839,7 +3976,7 @@ async function renderHome() {
   {
     const chips = [...savedAll].sort((a, b) => (b.default ? 1 : 0) - (a.default ? 1 : 0)).map((f) => {
       const p = new URLSearchParams(f.params || ""); if (f.type && f.type !== "all") p.set("type", f.type);
-      return h("a", { class: "hchip", href: "#/media" + (p.toString() ? "?" + p : "") }, (f.default ? "★ " : "") + f.name);
+      return h("a", { class: "hchip", href: "#/media" + (p.toString() ? "?" + p : "") }, f.default ? ico("star", "in filled") : null, f.name);
     });
     chips.push(h("a", { class: "hchip", href: "#/media?type=video&unwatched=1" }, "안 본 영상"));
     api("tags").then((tl) => {
@@ -3856,7 +3993,7 @@ async function renderHome() {
         const v = going[0];
         heroBox.replaceChildren(h("a", { class: "home-hero", href: `#/v/${v.id}` },
           h("img", { src: hdSrc(v.thumbs > 0 ? thumbUrl(v.id, 0, v.thumbs) : null), alt: "", onerror: (e) => (e.target.hidden = true) }),
-          h("span", { class: "hh-go" }, "▶ 이어 보기"),
+          h("span", { class: "hh-go" }, ico("play", "in"), "이어 보기"),
           h("div", { class: "hh-tx" }, h("b", {}, v.title), h("span", {}, `${fmtDur(Math.max(0, v.duration - v.resume_pos))} 남음` + (v.last_played ? " · " + timeAgo(v.last_played) : ""))),
           h("i", { class: "hh-bar", style: `width:${Math.min(100, (v.resume_pos / v.duration) * 100)}%` })));
       }
@@ -3873,7 +4010,7 @@ async function renderHome() {
         .map((p) => h("a", { class: "hp", href: `#/performer?id=${p.id}` }, h("span", { class: "hp-av" }, entityCover(p, p.name.slice(0, 1))), h("span", {}, p.name))));
       people.fill(list.filter((p) => p.count || p.photo_count).sort((a, b) => (b.count + b.photo_count) - (a.count + a.photo_count)).slice(0, 20)
         .map((p) => h("a", { class: "person", href: `#/performer?id=${p.id}` },
-          h("div", { class: "pf-avatar" }, entityCover(p, "👤")), h("span", {}, p.name))));
+          h("div", { class: "pf-avatar" }, entityCover(p, ico("person"))), h("span", {}, p.name))));
     }),
   ];
   if (serverCaps.photos) jobs.push(api("photos?sort=taken&order=desc&per=24").then((d) => {
@@ -3928,10 +4065,10 @@ async function renderHidden() {
       const img = h("img", { loading: "lazy", alt: "", src: v.thumbs > 0 ? thumbUrl(v.id, 0, v.thumbs) : null, hidden: !(v.thumbs > 0) });
       img.onerror = () => (img.hidden = true);
       return h("div", { class: "dup-item" },
-        h("div", { class: "thumb" }, img, h("div", { class: "noimg" }, "▶")),
+        h("div", { class: "thumb" }, img, h("div", { class: "noimg" }, ico("play"))),
         h("div", { class: "dup-body" },
           h("div", { class: "dup-name" }, v.filename),
-          h("div", { class: "meta" }, (v.source === "local" ? "📱 이 기기 · " : "☁ " + (SOURCE_LABEL[v.source] || "") + " · ") + (v.folder || "") + " · " + fmtSize(v.size)),
+          h("div", { class: "meta" }, ico(v.source === "local" ? "device" : "cloud", "in"), (v.source === "local" ? "이 기기 · " : (SOURCE_LABEL[v.source] || "") + " · ") + (v.folder || "") + " · " + fmtSize(v.size)),
           h("div", { class: "row", style: "margin-top:6px" }, h("button", { class: "btn sm", onclick: async (ev) => {
             await api(`videos/${v.id}/unhide`, { method: "POST" });
             ev.target.closest(".dup-item").classList.add("gone"); ev.target.replaceWith(h("span", { class: "meta" }, "다시 보입니다"));
@@ -3970,11 +4107,11 @@ async function renderDuplicates() {
       } }, "이것만 남기기");
       return h("div", { class: "dup-item" },
         ph ? h("button", { class: "thumb", onclick: () => openViewer(g.items, g.items.indexOf(v)) }, img)
-          : h("a", { class: "thumb", href: `#/v/${v.id}` }, img, h("div", { class: "noimg" }, "▶"),
+          : h("a", { class: "thumb", href: `#/v/${v.id}` }, img, h("div", { class: "noimg" }, ico("play")),
             v.duration ? h("span", { class: "badge dur" }, fmtDur(v.duration)) : null),
         h("div", { class: "dup-body" },
-          ph ? h("span", { class: "dup-name" }, "🖼 " + v.filename) : h("a", { class: "dup-name", href: `#/v/${v.id}` }, v.filename),
-          h("div", { class: "meta" }, (v.source === "local" ? "📱 이 기기 · " : "☁ " + (SOURCE_LABEL[v.source] || "") + " · ") + (v.folder || "")),
+          ph ? h("span", { class: "dup-name" }, ico("image", "in"), v.filename) : h("a", { class: "dup-name", href: `#/v/${v.id}` }, v.filename),
+          h("div", { class: "meta" }, ico(v.source === "local" ? "device" : "cloud", "in"), (v.source === "local" ? "이 기기 · " : (SOURCE_LABEL[v.source] || "") + " · ") + (v.folder || "")),
           h("div", { class: "meta" }, [v.rating ? "★".repeat(v.rating) : "", v.play_count ? `${v.play_count}회 재생` : "", v.performers && v.performers.length ? v.performers.join(", ") : ""].filter(Boolean).join(" · ")),
           h("div", { class: "row", style: "margin-top:6px" }, keepBtn, hideBtn)));
     })));
@@ -4003,9 +4140,9 @@ async function folderPicker(onPick) {
     head.textContent = r.path || "위치 선택";
     chooseBtn.disabled = !r.path;
     list.replaceChildren(
-      ...(r.parent != null ? [h("button", { onclick: () => go(r.parent) }, r.parent ? "⬆ 상위 폴더" : "⬆ 처음 위치")] : []),
+      ...(r.parent != null ? [h("button", { onclick: () => go(r.parent) }, ico("folderUp", "in"), r.parent ? "상위 폴더" : "처음 위치")] : []),
       ...(r.error ? [h("div", { class: "meta", style: "padding:10px 14px" }, "열 수 없음: " + r.error)] : []),
-      ...r.dirs.map((d) => h("button", { onclick: () => go(d.path) }, "📁 " + d.name)));
+      ...r.dirs.map((d) => h("button", { onclick: () => go(d.path) }, ico("folder", "in"), d.name)));
   }
   document.body.append(modal);
   go("");
