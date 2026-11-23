@@ -1463,3 +1463,16 @@ body.shorts-mode .topbar .tabs a.on .ico { --knock: #fff; }
 .album:active .album-cov { transform: scale(.97); transition: transform .15s ease; }
 .shelf-row.albums > * { width: 128px; flex: none; scroll-snap-align: start; }
 .he-meta { font-weight: 400; }
+
+/* ================= 영상: 전체 화면 버튼은 남은 시간 바로 위, 전체 화면에서는 재생 바를 바닥에서 띄운 둥근 막대로 ================= */
+.vp-ui > .vp-btn { top: auto !important; bottom: 34px; right: 8px; }
+.player.vp:fullscreen > .vp-track { left: 18px; right: 18px; bottom: calc(22px + env(safe-area-inset-bottom)); height: 26px; align-items: center; }
+.player.vp:fullscreen > .vp-track .vp-rail { height: 3px; border-radius: 2px; background: rgba(255,255,255,.28); }
+.player.vp:fullscreen.ui-on > .vp-track .vp-rail { height: 4px; }
+.player.vp:fullscreen > .vp-track .vp-fill { border-radius: 2px; }
+.player.vp:fullscreen > .vp-track.dragging .vp-rail { height: 8px; border-radius: 4px; }
+.player.vp:fullscreen > .vp-track.dragging .vp-fill { border-radius: 4px; }
+.player.vp:fullscreen .vp-ui .vp-times { left: 20px; right: 20px; bottom: calc(50px + env(safe-area-inset-bottom)); }
+.player.vp:fullscreen .vp-ui > .vp-btn { right: 14px; bottom: calc(72px + env(safe-area-inset-bottom)); }
+.player.vp:fullscreen .vp-ui::before { height: 170px; }
+.player.vp:fullscreen .vp-thin { display: none; }
