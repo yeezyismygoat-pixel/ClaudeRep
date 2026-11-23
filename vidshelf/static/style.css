@@ -1476,3 +1476,6 @@ body.shorts-mode .topbar .tabs a.on .ico { --knock: #fff; }
 .player.vp:fullscreen .vp-ui > .vp-btn { right: 14px; bottom: calc(72px + env(safe-area-inset-bottom)); }
 .player.vp:fullscreen .vp-ui::before { height: 170px; }
 .player.vp:fullscreen .vp-thin { display: none; }
+/* 전체 화면: 재생 중 잠시 뒤 버튼과 함께 재생 바도 숨김 (화면을 누르면 다시 나옴) */
+.player.vp:fullscreen > .vp-track { transition: opacity .25s ease; }
+.player.vp:fullscreen:not(.ui-on) > .vp-track:not(.dragging) { opacity: 0; pointer-events: none; }

@@ -2654,7 +2654,7 @@ async function renderVideo(id, params) {
       vact("tag", "태그", () => quickLinks("tags")),
       vact("person", "사람", () => quickLinks("performers")),
       vact("bookmark", "북마크", () => addMarker(null)),
-      vact("more", "더보기", () => moreSheet()));
+      vact("edit", "수정", () => setEditing(true)));   // 제목·별점·썸네일·메모·북마크 정리
     return [
       actRow,
       h("div", { class: "vcard" },
@@ -2708,14 +2708,6 @@ async function renderVideo(id, params) {
     draw();
     openSheet(isTag ? "태그" : "출연한 사람", [box]);
   }
-  function moreSheet() {
-    const dl = dlBtn();
-    const close = openSheet("더보기", [
-      h("button", { class: "del-opt", onclick: () => close(() => setEditing(true)) }, h("b", {}, ico("edit", "in"), "정보 수정"), h("span", { class: "meta" }, "제목 · 별점 · 썸네일 · 메모 · 북마크 정리 · 파일 정보")),
-      dl ? h("div", { class: "row" }, dl) : null,
-    ]);
-  }
-
   function editView() {
     const titleIn = h("input", { type: "text", value: v.title, onchange: (e) => save({ title: e.target.value.trim() || v.title }) });
     const stars = h("div", { class: "stars" }, ...[1, 2, 3, 4, 5].map((n) =>
