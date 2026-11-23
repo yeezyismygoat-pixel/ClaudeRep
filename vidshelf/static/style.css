@@ -1447,3 +1447,19 @@ body.shorts-mode .topbar .tabs a.on .ico { --knock: #fff; }
 /* 사진 보기를 닫으면 마지막으로 본 칸을 잠깐 표시 */
 .just-seen .tile-img, .just-seen.tile-img { animation: justSeen 1.1s ease; }
 @keyframes justSeen { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 3px transparent; } }
+
+/* ================= 폴더 (갤러리 앨범처럼) ================= */
+.ex-albums { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; }
+@media (min-width: 640px) { .ex-albums { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1000px) { .ex-albums { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.album { display: grid; gap: 2px; color: inherit; text-decoration: none; min-width: 0; }
+.album-cov { position: relative; display: grid; place-items: center; aspect-ratio: 1; border-radius: var(--r-md, 16px); overflow: hidden; background: var(--panel2); margin-bottom: 6px; }
+.album-cov img { width: 100%; height: 100%; object-fit: cover; display: block; animation: fadeIn .4s ease both; }
+.album-cov > .ico { width: 34%; height: 34%; color: var(--muted); }
+.album-src { position: absolute; right: 6px; top: 6px; width: 24px; height: 24px; border-radius: 12px; display: grid; place-items: center; background: rgba(0,0,0,.45); color: #fff; }
+.album-src .ico { width: 15px; height: 15px; }
+.album b { font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album .meta { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album:active .album-cov { transform: scale(.97); transition: transform .15s ease; }
+.shelf-row.albums > * { width: 128px; flex: none; scroll-snap-align: start; }
+.he-meta { font-weight: 400; }

@@ -1091,12 +1091,14 @@ public class Library implements HttpServer.Handler {
         long from = parseLong(nz(r.param("from")), 0), to = parseLong(nz(r.param("to")), 0);
         int minH = parseInt(r.param("min_h"), 0), minRating = parseInt(r.param("min_rating"), 0);
         boolean unorganized = "1".equals(r.param("unorganized"));
+        Set<String> folderFilter = new HashSet<>(r.params("folder"));   // 갤러리처럼 폴더별로 (그 폴더 바로 안의 파일)
         List<Video> list = new ArrayList<>();
         Set<Long> photoIds = new HashSet<>();
         List<Video> src = new ArrayList<>();
         if (!type.equals("photo")) src.addAll(visible());
         if (!type.equals("video")) for (Video p : visiblePhotos()) { src.add(p); photoIds.add(p.id); }
         for (Video v : src) {
+            if (!folderFilter.isEmpty() && !folderFilter.contains(v.relPath)) continue;
             JSONObject m = meta(v);
             if (fav && !m.optBoolean("favorite", false)) continue;
             if (unwatched && (photoIds.contains(v.id) || m.optInt("play_count", 0) > 0)) continue;
@@ -1751,6 +1753,32 @@ public class Library implements HttpServer.Handler {
         JSONObject o = new JSONObject().put("path", path).put("dirs", dirs);
         o.put("parent", parent == null ? JSONObject.NULL : parent);
         return o;
+    }
+
+    /** 갤러리의 앨범처럼: 목록에 보이는 사진·영상을 폴더별로 묶음 (최근에 추가된 폴더 먼저, 대표 그림은 가장 최근 항목) */
+    private synchronized JSONArray albums() throws JSONException {
+        class Alb { int videos, photos; long latest = -1; Video cover; boolean coverPhoto; String source; }
+        java.util.Map<String, Alb> m = new java.util.LinkedHashMap<>();
+        for (int pass = 0; pass < 2; pass++) {
+            for (Video v : pass == 0 ? visible() : visiblePhotos()) {
+                Alb a = m.computeIfAbsent(v.relPath, k -> new Alb());
+                if (pass == 0) a.videos++; else a.photos++;
+                long t = added(v);
+                if (t > a.latest) { a.latest = t; a.cover = v; a.coverPhoto = pass == 1; a.source = v.source(); }
+            }
+        }
+        List<java.util.Map.Entry<String, Alb>> list = new ArrayList<>(m.entrySet());
+        list.sort((x, y) -> Long.compare(y.getValue().latest, x.getValue().latest));
+        JSONArray out = new JSONArray();
+        for (java.util.Map.Entry<String, Alb> e : list) {
+            Alb a = e.getValue();
+            String path = e.getKey(), trimmed = path.replaceAll("/+$", "");
+            String name = trimmed.isEmpty() ? "내장 메모리" : trimmed.substring(trimmed.lastIndexOf('/') + 1);
+            JSONObject cover = a.cover == null ? null : (a.coverPhoto ? photoSummary(a.cover) : summary(a.cover)).put("kind", a.coverPhoto ? "photo" : "video");
+            out.put(new JSONObject().put("path", path).put("name", name).put("videos", a.videos).put("photos", a.photos)
+                    .put("latest", a.latest).put("source", a.source).put("cover", cover));
+        }
+        return out;
     }
 
     /** 사진·영상이 들어 있는 기기 폴더와 개수 (많은 순). 처음 화면의 ‘폴더 고르기’용 */
@@ -2430,6 +2458,7 @@ public class Library implements HttpServer.Handler {
         }
         if (p0.equals("browse")) { res.json(200, browse(r.param("path")).toString()); return; }
         if (p0.equals("folders")) { res.json(200, mediaFolders().toString()); return; }
+        if (p0.equals("albums")) { res.json(200, albums().toString()); return; }
         if (p0.equals("scan") && m.equals("POST")) {
             scan();
             res.json(200, "{\"started\":true}");

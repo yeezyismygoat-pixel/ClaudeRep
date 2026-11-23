@@ -996,7 +996,28 @@ function mediaSeg(cur) {
 
 const MEDIA_SORTS = [["added", "추가한 날짜"], ["title", "이름"], ["size", "파일 크기"], ["rating", "별점"], ["random", "무작위"]];
 const VIDEO_SORTS = [["duration", "길이"], ["plays", "재생 횟수"], ["played", "최근 재생"]];
-const FILTER_KEYS = ["q", "performer", "tag", "fav", "unwatched", "xperformer", "xtag", "dur", "when", "res", "rating", "unorganized"];
+const FILTER_KEYS = ["q", "performer", "tag", "fav", "unwatched", "xperformer", "xtag", "dur", "when", "res", "rating", "unorganized", "folder"];
+/** 갤러리처럼 폴더(앨범) 목록. 잠깐 기억해 두고 다시 씀 */
+let albumsCache = null, albumsAt = 0;
+async function getAlbums() {
+  if (albumsCache && Date.now() - albumsAt < 60_000) return albumsCache;
+  albumsCache = await api("albums").catch(() => albumsCache || []);
+  albumsAt = Date.now();
+  return albumsCache;
+}
+const folderName = (path) => { const t = (path || "").replace(/\/+$/, ""); return t ? t.slice(t.lastIndexOf("/") + 1) : "내장 메모리"; };
+const folderHref = (path) => "#/media?folder=" + encodeURIComponent(path);
+/** 폴더 칸: 대표 그림 + 이름 + 개수 */
+function albumCard(a) {
+  const c = a.cover;
+  const src = !c ? null : c.kind === "photo" ? hdSrc(`/photothumb/${c.id}.jpg`) : c.thumbs > 0 ? hdSrc(thumbUrl(c.id, 0, c.thumbs)) : null;
+  const img = src ? h("img", { src, loading: "lazy", alt: "" }) : null;
+  if (img) img.onerror = () => img.replaceWith(ico("folder"));
+  const n = [a.videos ? `영상 ${a.videos.toLocaleString()}` : "", a.photos ? `사진 ${a.photos.toLocaleString()}` : ""].filter(Boolean).join(" · ");
+  return h("a", { class: "album", href: folderHref(a.path), title: a.path },
+    h("span", { class: "album-cov" }, img || ico("folder"), a.source && a.source !== "local" ? h("span", { class: "album-src" }, ico("cloud")) : null),
+    h("b", {}, a.name), h("span", { class: "meta" }, n));
+}
 /** 범위 조건 (주소에는 알아보기 쉬운 이름으로, 서버에는 숫자로) */
 const RANGE_OPTS = {
   dur: [["s", "1분 미만", 0, 60], ["m", "1~5분", 60, 300], ["l", "5~20분", 300, 1200], ["xl", "20분 이상", 1200, 0]],
@@ -1521,6 +1542,7 @@ async function renderMedia(params0, type0) {
     for (const id of params.getAll("xperformer")) chips.push(h("span", { class: "fchip ex" }, "− " + perfName(id), h("button", { "aria-label": `${perfName(id)} 빼기 해제`, onclick: () => without("xperformer", id) }, ico("close", "x"))));
     for (const id of params.getAll("xtag")) chips.push(h("span", { class: "fchip ex" }, "− #" + tagName(id), h("button", { "aria-label": `${tagName(id)} 빼기 해제`, onclick: () => without("xtag", id) }, ico("close", "x"))));
     for (const k of ["dur", "when", "res", "rating"]) if (params.get(k)) chips.push(h("span", { class: "fchip" }, rangeLabel(k, params.get(k)), h("button", { "aria-label": "조건 해제", onclick: () => without(k, params.get(k)) }, ico("close", "x"))));
+    for (const f of params.getAll("folder")) chips.push(h("span", { class: "fchip" }, ico("folder", "in"), folderName(f), h("button", { "aria-label": `${folderName(f)} 폴더 필터 해제`, onclick: () => without("folder", f) }, ico("close", "x"))));
     if (params.get("unorganized") === "1") chips.push(h("span", { class: "fchip" }, "정리 안 된 항목", h("button", { "aria-label": "정리 안 된 항목 필터 해제", onclick: () => without("unorganized", "1") }, ico("close", "x"))));
     if (chips.length > 1) chips.push(h("button", { class: "fclear", onclick: () => { const p = new URLSearchParams(params); FILTER_KEYS.forEach((k) => p.delete(k)); update({ p }); } }, "모두 지우기"));
     chipsBox.replaceChildren(...chips);
@@ -1669,7 +1691,7 @@ async function renderMedia(params0, type0) {
     const sort = sortOf(), order = orderOf();
     const draft = {
       q: params.get("q") || "", performer: new Set(params.getAll("performer")), tag: new Set(params.getAll("tag")),
-      xperformer: new Set(params.getAll("xperformer")), xtag: new Set(params.getAll("xtag")),
+      xperformer: new Set(params.getAll("xperformer")), xtag: new Set(params.getAll("xtag")), folder: new Set(params.getAll("folder")),
       sort, order, fav: params.get("fav") === "1", unwatched: params.get("unwatched") === "1", unorganized: params.get("unorganized") === "1",
       dur: params.get("dur") || "", when: params.get("when") || "", res: params.get("res") || "", rating: params.get("rating") || "",
     };
@@ -1680,6 +1702,7 @@ async function renderMedia(params0, type0) {
       draft.tag.forEach((x) => p.append("tag", x));
       draft.xperformer.forEach((x) => p.append("xperformer", x));
       draft.xtag.forEach((x) => p.append("xtag", x));
+      draft.folder.forEach((x) => p.append("folder", x));
       for (const k of ["dur", "when", "res", "rating"]) if (draft[k] && !(k === "dur" && type === "photo")) p.set(k, draft[k]);
       if (draft.unorganized) p.set("unorganized", "1");
       if (draft.sort !== "added") p.set("sort", draft.sort);
@@ -1751,6 +1774,21 @@ async function renderMedia(params0, type0) {
           onclick: () => { if (on) { draft.tag.delete(id); draft.xtag.add(id); } else if (ex) draft.xtag.delete(id); else draft.tag.add(id); drawTags(); refreshCount(); } }, (ex ? "− #" : "#") + t.name);
       }), ...(!tagsAll && tagList.length > 10 ? [h("button", { class: "chip dashed", onclick: () => { tagsAll = true; drawTags(); } }, `+${tagList.length - 10}`)] : []));
     };
+
+    // 폴더: 갤러리의 앨범처럼 (여러 개 고르면 그중 아무 폴더에나 있는 것)
+    const folderBox = h("div", { class: "chips" });
+    const folderSec = h("div", { class: "sheet-sec", hidden: true }, h("h3", {}, "폴더"), folderBox);
+    let folderList = [], foldersAll = false;
+    const drawFolders = () => {
+      const chosen = folderList.filter((a) => draft.folder.has(a.path)), rest = folderList.filter((a) => !draft.folder.has(a.path));
+      const list = foldersAll ? chosen.concat(rest) : chosen.concat(rest.slice(0, Math.max(0, 10 - chosen.length)));
+      folderBox.replaceChildren(...list.map((a) => {
+        const on = draft.folder.has(a.path);
+        return h("button", { class: "chip" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false", title: a.path,
+          onclick: () => { if (on) draft.folder.delete(a.path); else draft.folder.add(a.path); drawFolders(); refreshCount(); } }, ico("folder", "in"), a.name);
+      }), ...(!foldersAll && folderList.length > list.length ? [h("button", { class: "chip dashed", onclick: () => { foldersAll = true; drawFolders(); } }, `+${folderList.length - list.length}`)] : []));
+    };
+    getAlbums().then((l) => { folderList = [...l].sort((a, b) => (b.videos + b.photos) - (a.videos + a.photos)); folderSec.hidden = !folderList.length; drawFolders(); });
 
     const sortBox = h("div", { class: "chips" });
     const drawSort = () => sortBox.replaceChildren(...MEDIA_SORTS.concat(type === "video" ? VIDEO_SORTS : []).map(([v, l]) => {
@@ -1847,6 +1885,7 @@ async function renderMedia(params0, type0) {
         people.length ? h("div", { class: "sheet-sec" }, h("div", { class: "sheet-sec-head" }, h("h3", {}, "사람"), peopleMore), peopleBox) : null,
         tagList.length ? h("div", { class: "sheet-sec" }, h("h3", {}, "태그"), tagBox) : null,
         h("p", { class: "meta tri-hint" }, "사람·태그는 한 번 누르면 포함, 한 번 더 누르면 빼기(−), 또 누르면 해제됩니다."),
+        folderSec,
         h("div", { class: "sheet-sec" }, h("h3", {}, "정렬"), sortBox),
         type === "photo" ? null : rangeSec("길이", "dur"),
         rangeSec("날짜", "when"),
@@ -1858,11 +1897,11 @@ async function renderMedia(params0, type0) {
       h("div", { class: "sheet-foot" },
         h("button", { class: "btn", onclick: () => {
           draft.q = ""; search.value = ""; draft.performer.clear(); draft.tag.clear(); draft.fav = false; draft.unwatched = false;
-          draft.xperformer.clear(); draft.xtag.clear(); draft.unorganized = false; draft.dur = draft.when = draft.res = draft.rating = "";
+          draft.xperformer.clear(); draft.xtag.clear(); draft.folder.clear(); draft.unorganized = false; draft.dur = draft.when = draft.res = draft.rating = "";
           rangeDraws.forEach((f) => f());
           draft.sort = "added"; draft.order = "desc";
           sheet.querySelectorAll(".switch").forEach((x) => { x.classList.remove("on"); x.setAttribute("aria-checked", "false"); });
-          drawPeople(); drawTags(); drawSort(); refreshCount();
+          drawPeople(); drawTags(); drawFolders(); drawSort(); refreshCount();
         } }, "초기화"),
         resultBtn));
     const shade = h("div", { class: "sheet-shade", onclick: () => close(false) });
@@ -3527,22 +3566,26 @@ async function renderExplore(params0) {
   const tagName = (id) => (tags.find((t) => String(t.id) === String(id)) || { name: "#" + id }).name;
   const ageOf = (p) => (p.birthdate ? age(p.birthdate) : null);
   const urlFor = () => "#/explore" + (params.toString() ? "?" + params : "");
-  const isTags = () => params.get("t") === "tags";   // 사람 / 태그
+  const MODES = ["people", "tags", "folders"];   // 사람 / 태그 / 폴더
+  const modeOf = () => (MODES.includes(params.get("t")) ? params.get("t") : "people");
+  const isTags = () => modeOf() === "tags";
+  const isFolders = () => modeOf() === "folders";
+  let albums = null;
 
   const countLine = h("div", { class: "meta" }, "");
   const search = h("input", { type: "search", class: "ex-search", value: params.get("q") || "" });
-  const segInd = h("span", { class: "type-ind", "aria-hidden": "true", style: "width: calc((100% - 6px) / 2)" });
-  const segBtns = [["people", "사람"], ["tags", "태그"]].map(([k, l]) => h("button", { role: "tab", onclick: () => setMode(k) }, l));
-  const typeSeg = h("div", { class: "type-seg two", role: "tablist" }, segInd, ...segBtns);
+  const segInd = h("span", { class: "type-ind", "aria-hidden": "true", style: `width: calc((100% - 6px) / ${MODES.length})` });
+  const segBtns = [["people", "사람"], ["tags", "태그"], ["folders", "폴더"]].map(([k, l]) => h("button", { role: "tab", onclick: () => setMode(k) }, l));
+  const typeSeg = h("div", { class: "type-seg", role: "tablist" }, segInd, ...segBtns);
   function setMode(k, anim) {
-    if ((k === "tags") === isTags()) return;
+    if (k === modeOf()) return;
     const p = new URLSearchParams();
-    if (k === "tags") p.set("t", "tags");
+    if (k !== "people") p.set("t", k);
     search.value = "";
-    update(p, anim || (k === "tags" ? "left" : "right"));
+    update(p, anim || (MODES.indexOf(k) > MODES.indexOf(modeOf()) ? "left" : "right"));
   }
-  window.__mediaSwipeTarget = (dir) => ((dir > 0 && !isTags()) || (dir < 0 && isTags()) ? content : null);
-  window.__mediaSwipe = (dir) => { setMode(dir > 0 ? "tags" : "people"); return true; };
+  window.__mediaSwipeTarget = (dir) => { const j = MODES.indexOf(modeOf()) + dir; return j >= 0 && j < MODES.length ? content : null; };
+  window.__mediaSwipe = (dir) => { const j = MODES.indexOf(modeOf()) + dir; if (j < 0 || j >= MODES.length) return false; setMode(MODES[j]); return true; };
   const filterBtn = h("button", { class: "filter-btn", onclick: () => openFilter() });
   const chipsBox = h("div", { class: "fchips" });
   const grid = h("div", { class: "ex-grid" });
@@ -3661,12 +3704,29 @@ async function renderExplore(params0) {
       } }, "저장")]);
   }
   function draw(restore, anim) {
-    segBtns.forEach((b, i) => { const on = (i === 1) === isTags(); b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
-    segInd.style.transform = `translateX(${isTags() ? 100 : 0}%)`;
-    search.placeholder = isTags() ? "태그 검색" : "사람 이름 검색";
+    segBtns.forEach((b, i) => { const on = MODES[i] === modeOf(); b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
+    segInd.style.transform = `translateX(${MODES.indexOf(modeOf()) * 100}%)`;
+    search.placeholder = isTags() ? "태그 검색" : isFolders() ? "폴더 이름 검색" : "사람 이름 검색";
     search.setAttribute("aria-label", search.placeholder);
     content.classList.remove("in-left", "in-right"); content.style.transform = ""; content.style.opacity = "";
     if (anim) { void content.offsetWidth; content.classList.add("in-" + anim); }
+    if (isFolders()) {   // 갤러리처럼 폴더별로
+      chipsBox.replaceChildren(); chipsBox.hidden = true;
+      filterBtn.replaceChildren(ico("filter"), "정렬");
+      grid.className = "ex-albums";
+      more.replaceChildren();
+      const paint = () => {
+        const q = (params.get("q") || "").trim().toLowerCase(), sort = params.get("sort") || "recent";
+        const list = (albums || []).filter((a) => !q || a.name.toLowerCase().includes(q) || a.path.toLowerCase().includes(q));
+        if (sort === "name") list.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+        else if (sort === "count") list.sort((a, b) => (b.videos + b.photos) - (a.videos + a.photos));
+        countLine.textContent = `폴더 ${list.length.toLocaleString()}개 · ${{ recent: "최근 추가된 순", name: "이름", count: "많은 순" }[sort] || ""}`;
+        grid.replaceChildren(...(list.length ? list.map(albumCard) : [h("div", { class: "empty", style: "grid-column:1/-1" }, (albums || []).length ? "검색과 맞는 폴더가 없습니다." : "아직 사진·영상이 있는 폴더가 없습니다.")]));
+      };
+      if (albums) paint();
+      else { countLine.textContent = "폴더 불러오는 중…"; getAlbums().then((l) => { albums = l; if (isFolders()) paint(); }); }
+      return;
+    }
     if (isTags()) {
       const tl = tagList();
       countLine.textContent = `태그 ${tl.length.toLocaleString()}개 · ${(params.get("sort") || "count") === "name" ? "이름" : "많이 쓴 순"}`;
@@ -3708,6 +3768,12 @@ async function renderExplore(params0) {
   });
 
   function openFilter() {
+    if (isFolders()) {
+      const cur = params.get("sort") || "recent";
+      const close = openSheet("정렬", [h("div", { class: "chips" }, ...[["recent", "최근 추가된 순"], ["count", "많은 순"], ["name", "이름"]].map(([k, l]) =>
+        h("button", { class: "chip" + (cur === k ? " on" : ""), onclick: () => close(() => { const p = new URLSearchParams(params); if (k === "recent") p.delete("sort"); else p.set("sort", k); update(p); }) }, l)))]);
+      return;
+    }
     if (isTags()) {
       const cur = params.get("sort") || "count";
       const close = openSheet("정렬", [h("div", { class: "chips" }, ...[["count", "많이 쓴 순"], ["name", "이름"]].map(([k, l]) =>
@@ -3915,9 +3981,12 @@ function shelf(title, moreHref, kind) {
 }
 
 /** 홈 화면 줄 순서·보이기 (이 기기에 저장) */
-const HOME_SECTIONS = [["resume", "이어 보기"], ["recent", "최근 추가된 영상"], ["favs", "즐겨찾기"], ["photos", "최근 사진"], ["people", "사람"]];
+const HOME_SECTIONS = [["resume", "이어 보기"], ["recent", "최근 추가된 영상"], ["favs", "즐겨찾기"], ["photos", "최근 사진"], ["albums", "폴더"], ["people", "사람"]];
 let homeExtra = [];   // 홈에 표시하기로 한 저장된 필터: [["sf:12", "필터 · 공연 즐겨찾기"], …]
-const homeSections = () => HOME_SECTIONS.concat(homeExtra);
+/** 홈에 한 줄로 넣은 폴더 (이 기기에 저장) */
+function homeFolders() { try { return JSON.parse(localStorage.getItem("vs-home-folders") || "[]"); } catch (e) { return []; } }
+function setHomeFolders(list) { try { localStorage.setItem("vs-home-folders", JSON.stringify(list)); } catch (e) {} }
+const homeSections = () => HOME_SECTIONS.concat(homeExtra, homeFolders().map((f) => ["fd:" + f, "폴더 · " + folderName(f)]));
 function homeLayout() {
   let saved = [];
   try { saved = JSON.parse(localStorage.getItem("vs-home") || "[]"); } catch (e) {}
@@ -3937,13 +4006,16 @@ function openHomeEditor() {
     const move = (d) => { const j = i + d; if (j < 0 || j >= layout.length) return; [layout[i], layout[j]] = [layout[j], layout[i]]; saveLayout(); draw(); };
     return h("div", { class: "home-edit-row" + (x.on ? "" : " off") },
       h("div", { class: "he-move" },
-        h("button", { class: "round-btn sm", "aria-label": "위로", disabled: i === 0, onclick: () => move(-1) }, "▲"),
-        h("button", { class: "round-btn sm", "aria-label": "아래로", disabled: i === layout.length - 1, onclick: () => move(1) }, "▼")),
+        h("button", { class: "round-btn sm", "aria-label": "위로", disabled: i === 0, onclick: () => move(-1) }, ico("up")),
+        h("button", { class: "round-btn sm", "aria-label": "아래로", disabled: i === layout.length - 1, onclick: () => move(1) }, ico("down"))),
       h("span", { class: "he-name" }, label(x.k)),
-      x.k.startsWith("sf:") ? h("button", { class: "round-btn sm", "aria-label": "홈에서 빼기", onclick: async () => {
-        await api(`saved_filters/${x.k.slice(3)}/home`, { method: "POST", body: { on: false } }).catch(() => null);
-        homeExtra = homeExtra.filter(([k]) => k !== x.k); layout = layout.filter((y) => y.k !== x.k);
-        saveLayout(); draw(); drawAdd();
+      x.k.startsWith("sf:") || x.k.startsWith("fd:") ? h("button", { class: "round-btn sm", "aria-label": "홈에서 빼기", onclick: async () => {
+        if (x.k.startsWith("sf:")) {
+          await api(`saved_filters/${x.k.slice(3)}/home`, { method: "POST", body: { on: false } }).catch(() => null);
+          homeExtra = homeExtra.filter(([k]) => k !== x.k);
+        } else setHomeFolders(homeFolders().filter((f) => f !== x.k.slice(3)));
+        layout = layout.filter((y) => y.k !== x.k);
+        saveLayout(); draw(); drawAdd(); drawFolderAdd();
       } }, ico("close", "x")) : null, sw);
   }));
   draw();
@@ -3965,7 +4037,28 @@ function openHomeEditor() {
         } }, "+ 추가"))) : [h("p", { class: "meta", style: "margin:0" }, "모든 저장된 필터가 홈에 있습니다.")]));
   };
   drawAdd();
-  openSheet("홈 편집", [h("p", { class: "meta", style: "margin:0" }, "▲▼로 순서를 바꾸고, 스위치로 보이거나 숨깁니다."), list, addBox],
+  // 폴더를 홈 줄로 추가 (갤러리 앨범처럼)
+  const folderAdd = h("div", { class: "home-edit-add" });
+  let foldersAll = false;
+  const drawFolderAdd = async () => {
+    const albums = await getAlbums();
+    const have = new Set(homeFolders());
+    const rest = albums.filter((a) => !have.has(a.path)).sort((a, b) => (b.videos + b.photos) - (a.videos + a.photos));
+    if (!albums.length) { folderAdd.replaceChildren(); return; }
+    const shown = foldersAll ? rest : rest.slice(0, 6);
+    folderAdd.replaceChildren(h("div", { class: "he-sub" }, "폴더 줄 추가"),
+      ...(rest.length ? shown.map((a) => h("div", { class: "home-edit-row" },
+        h("span", { class: "he-name" }, ico("folder", "in"), a.name, h("span", { class: "meta he-meta" }, ` ${(a.videos + a.photos).toLocaleString()}개`)),
+        h("button", { class: "btn sm primary", onclick: (e) => {
+          e.currentTarget.disabled = true;
+          setHomeFolders(homeFolders().concat([a.path]));
+          layout = layout.filter((x) => x.k !== "fd:" + a.path).concat([{ k: "fd:" + a.path, on: true }]);
+          saveLayout(); draw(); drawFolderAdd();
+        } }, "+ 추가"))) : [h("p", { class: "meta", style: "margin:0" }, "모든 폴더가 홈에 있습니다.")]),
+      !foldersAll && rest.length > shown.length ? h("button", { class: "btn sm", onclick: () => { foldersAll = true; drawFolderAdd(); } }, `폴더 ${rest.length - shown.length}개 더 보기`) : null);
+  };
+  drawFolderAdd();
+  openSheet("홈 편집", [h("p", { class: "meta", style: "margin:0" }, "화살표로 순서를 바꾸고, 스위치로 보이거나 숨깁니다."), list, addBox, folderAdd],
     [h("button", { class: "btn", onclick: () => { layout = homeSections().map(([k]) => ({ k, on: true })); saveLayout(); draw(); } }, "처음대로"),
      h("button", { class: "btn primary sheet-go", onclick: () => history.back() }, "완료")]);
   const onClose = () => { window.removeEventListener("popstate", onClose); if (parseHash().path === "/home" || !location.hash) setTimeout(route, 230); };
@@ -3993,7 +4086,20 @@ async function renderHome() {
   const favs = shelf("즐겨찾기", "#/media?fav=1", "favs");
   const photos = shelf("최근 사진", "#/photos", "photos");
   const people = shelf("사람", "#/explore", "people");
-  const secs = { resume, recent, favs, photos, people };
+  const albumsSec = shelf("폴더", "#/explore?t=folders", "albums");
+  const secs = { resume, recent, favs, photos, people, albums: albumsSec };
+  // 갤러리처럼 폴더 줄 + 홈에 넣은 폴더는 각각 한 줄
+  const layout0 = homeLayout();
+  if (layout0.some((x) => x.k === "albums" && x.on)) getAlbums().then((l) => albumsSec.fill(l.slice(0, 14).map(albumCard)));
+  homeFolders().forEach((f) => {
+    const sec = shelf(folderName(f), folderHref(f), "favs");
+    secs["fd:" + f] = sec;
+    if (!layout0.some((x) => x.k === "fd:" + f && x.on)) return;
+    api("media?type=all&per=18&folder=" + encodeURIComponent(f)).then((d) => {
+      const ph = d.items.filter((x) => x.kind === "photo");
+      sec.fill(d.items.map((it) => homeSquare(it, ph)));
+    }).catch(() => sec.fill([]));
+  });
   const quickPeople = h("div", { class: "home-people" }), quickChips = h("div", { class: "home-chips" }), heroBox = h("div");
   // 저장된 필터 중 ‘홈에 표시’한 것은 각각 한 줄
   const savedAll = await api("saved_filters").catch(() => []);
