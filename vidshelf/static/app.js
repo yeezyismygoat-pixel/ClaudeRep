@@ -639,7 +639,26 @@ function pageIn() {
   void $app.offsetWidth;   // 애니메이션 다시 시작
   $app.classList.add(dir > 0 ? "slide-l" : dir < 0 ? "slide-r" : "page-in");
 }
-window.addEventListener("hashchange", () => requestAnimationFrame(pageIn));
+// 새 화면이 다 그려진 뒤에 들어오는 움직임을 줌 (route 끝에서). 예전 화면에 움직임을 주면 깜빡임
+/** 하단 탭 버튼을 누르면: 예전 화면을 살짝 감추고, 새 화면이 그려지면 탭 방향에서 들어옴 */
+document.addEventListener("click", (e) => {
+  const a = e.target.closest && e.target.closest(".tabs a[data-tab]");
+  if (!a || document.body.classList.contains("selecting")) return;
+  const from = TAB_ORDER.indexOf(currentRootTab() || TAB_GROUP[parseHash().path.slice(1)] || ""), to = TAB_ORDER.indexOf(a.dataset.tab);
+  if (to < 0 || (from === to && currentRootTab())) return;
+  if (a.getAttribute("href") === location.hash) return;
+  window.__tabNav = from < 0 ? 1 : Math.sign(to - from) || 1;
+  $app.classList.remove("tab-in", "page-in", "slide-l", "slide-r");
+  $app.classList.add("tab-out");
+  setTimeout(() => { if ($app.classList.contains("tab-out")) { $app.classList.remove("tab-out"); window.__tabNav = 0; } }, 2500);   // 혹시 화면이 안 바뀌어도 가려진 채로 남지 않게
+}, true);
+function tabIn(dir) {
+  $app.classList.remove("tab-out", "page-in", "slide-l", "slide-r", "tab-in");
+  $app.style.setProperty("--tab-dx", `${dir * 26}px`);
+  void $app.offsetWidth;
+  $app.classList.add("tab-in");
+  clearTimeout(tabIn._t); tabIn._t = setTimeout(() => $app.classList.remove("tab-in"), 600);
+}
 
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 function endRestore() {
@@ -651,7 +670,8 @@ function endRestore() {
 /** 화면별 스크롤 위치 기억 (영상을 보고 뒤로 오면 보던 곳에서 이어서) */
 const scrollMemory = {};
 let lastHash = location.hash;
-async function route() {
+async function route(ev) {
+  const nav = ev instanceof HashChangeEvent;
   if (lastHash && /^#\/(media|photos|explore)?(\?|$)/.test(lastHash)) scrollMemory[lastHash] = { y: window.scrollY, pages: window.__mediaPages || 1, at: Date.now() };
   lastHash = location.hash;
   window.__mediaSwipe = null; window.__mediaSwipeTarget = null;
@@ -698,7 +718,10 @@ async function route() {
   } catch (e) {
     if (e.message !== "login required") $app.replaceChildren(errorView(e));
   } finally {
-    finishTabSwipe();   // 밀어서 넘어온 경우 새 화면이 옆에서 들어옴
+    if (tabSwipePending) finishTabSwipe();   // 밀어서 넘어온 경우 새 화면이 옆에서 들어옴
+    else if (window.__tabNav) { const d = window.__tabNav; window.__tabNav = 0; tabIn(d); }
+    else if (nav) pageIn();
+    $app.classList.remove("tab-out");
   }
 }
 
@@ -859,14 +882,12 @@ function finishTabSwipe() {
   if (!tabSwipePending) return;
   const dir = tabSwipePending;
   tabSwipePending = 0;
+  window.__noPageIn = false;
+  // 화면 전체(#app)를 움직이면 아래 고정 버튼 줄이 엉뚱한 곳에 갔다가 튀므로, 안쪽 내용만 움직임
   $app.style.transition = "none";
-  $app.style.transform = `translateX(${dir * 28}%)`;
-  $app.style.opacity = "0";
-  void $app.offsetWidth;
-  $app.style.transition = "transform .34s cubic-bezier(.2,.8,.2,1), opacity .25s ease";
   $app.style.transform = "";
   $app.style.opacity = "";
-  setTimeout(() => { $app.style.transition = ""; }, 380);
+  tabIn(dir * 3);
 }
 (function tabSwipe() {
   let sx = 0, sy = 0, t0 = 0, mode = null, from = null, dx = 0, moving = null;
@@ -1017,7 +1038,7 @@ function toggleSel(it, el) {
   selCount.textContent = selected.size;
   if (!selected.size) { endSelect(false, true); return; }   // 하나도 안 남으면 선택 모드 끝
 }
-function selectable(el, it) {
+function selectable(el, it, peek) {   // peek: 유튜브식 보기에서만 꾹 누르면 미리보기 카드, 그 밖에는 바로 선택 모드
   el._item = it;
   cells.set(keyOf(it), el);
   if (selected.has(keyOf(it))) el.classList.add("sel");
@@ -1029,13 +1050,13 @@ function selectable(el, it) {
     timer = setTimeout(() => {   // 길게 누르면 미리보기 카드 (여기서 바로 정리하거나 ‘선택’으로 여러 개 고르기)
       timer = null; fired = true;
       try { if (window.VidShelfApp && VidShelfApp.haptic) VidShelfApp.haptic(); else if (navigator.vibrate) navigator.vibrate(18); } catch (er) {}
-      openPeek(it, el);
+      if (peek) openPeek(it, el); else { startSelect(); toggleSel(it, el); }
     }, 450);
   }, { passive: true });
   el.addEventListener("touchmove", (e) => { if (timer && Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 10) cancel(); }, { passive: true });
   el.addEventListener("touchend", cancel);
   el.addEventListener("touchcancel", cancel);
-  el.addEventListener("contextmenu", (e) => { e.preventDefault(); if (!selecting && !fired) { fired = true; openPeek(it, el); } });
+  el.addEventListener("contextmenu", (e) => { e.preventDefault(); if (!selecting && !fired) { fired = true; if (peek) openPeek(it, el); else { startSelect(); toggleSel(it, el); } } });
   el._unfire = () => { fired = false; };   // 미리보기 카드의 ‘열기’가 막히지 않게
   el.addEventListener("click", (e) => {   // 선택 모드에서는 열지 않고 고르기
     if (fired) { e.preventDefault(); e.stopImmediatePropagation(); fired = false; return; }
@@ -1403,13 +1424,13 @@ async function renderMedia(params0, type0) {
           else {   // 목록 보기: 이어지는 사진들은 이미지 벽처럼 줄지어 보여 줌
             let run = grid.lastElementChild;   // 목록 보기: 이어지는 사진은 옆으로 넘겨 보는 한 줄로
             if (!run || !run.classList.contains("photo-strip")) { run = h("div", { class: "photo-strip" }); grid.append(run); }
-            run.append(selectable(cell, it));
+            run.append(selectable(cell, it, true));
             fitStrips.add(run);
           }
         } else if (mode === "wall") {
           grid.append(selectable(videoTile(it), it));
         } else {
-          grid.append(sel.swipeActions(selectable(ytCell(it, null), it), it));   // 목록 보기: 꾹 누르면 미리보기 카드, 옆으로 밀면 즐겨찾기·정리 완료
+          grid.append(sel.swipeActions(selectable(ytCell(it, null), it, true), it));   // 목록 보기: 꾹 누르면 미리보기 카드, 옆으로 밀면 즐겨찾기·정리 완료
         }
       }
       fitStrips.forEach(fitStrip);

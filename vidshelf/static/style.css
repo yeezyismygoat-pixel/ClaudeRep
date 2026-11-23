@@ -1325,3 +1325,19 @@ body.dock-down .media.docked .media-bar { transform: none; opacity: 1; pointer-e
 /* 홈 편집: 저장된 필터 추가 */
 .home-edit-add { display: grid; gap: 8px; margin-top: 6px; }
 .he-sub { font-size: 13px; font-weight: 700; color: var(--muted); margin: 6px 2px 0; }
+
+/* ================= 9.1: 탭 전환 · 아래 버튼 줄 등장 · 채워지는 탭 아이콘 ================= */
+/* 예전 화면은 살짝 감추고, 새 화면이 그려진 뒤 탭 방향에서 들어옴. 고정된 아래 버튼 줄은 따로 아래에서 떠오름 */
+#app.tab-out > :not(.media), #app.tab-out > .media > * { opacity: 0 !important; transition: opacity .1s ease; }
+#app.tab-in > :not(.media), #app.tab-in > .media > :not(.media-bar) { animation: tabIn .32s cubic-bezier(.2,.8,.2,1) backwards; }
+#app.tab-in > .media > .media-bar, #app.page-in > .media > .media-bar { animation: dockIn .42s cubic-bezier(.2,.8,.2,1) .06s backwards; }
+@keyframes tabIn { from { opacity: 0; transform: translateX(var(--tab-dx, 0px)); } to { opacity: 1; transform: none; } }
+@keyframes dockIn { from { opacity: 0; transform: translateY(36px) scale(.96); } to { opacity: 1; transform: none; } }
+/* 화면 전체(.media)에 움직임을 주면 고정 버튼 줄이 튀므로 안쪽만 */
+#app.page-in > .media, #app.slide-l > .media, #app.slide-r > .media { animation: none !important; }
+#app.page-in > .media > :not(.media-bar) { animation: pageIn .32s var(--ease) backwards; }
+#app.slide-l > .media > :not(.media-bar) { animation: inLeft .3s var(--ease) backwards; }
+#app.slide-r > .media > :not(.media-bar) { animation: inRight .3s var(--ease) backwards; }
+/* 고른 탭의 아이콘은 안쪽이 채워짐 */
+.tabs .ico .f { fill: transparent; transition: fill .2s ease; }
+.tabs a.on .ico .f { fill: currentColor; }

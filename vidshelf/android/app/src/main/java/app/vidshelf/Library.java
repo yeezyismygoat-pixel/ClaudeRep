@@ -1175,7 +1175,7 @@ public class Library implements HttpServer.Handler {
 
     private void photoThumb(Video v, HttpServer.Request r, HttpServer.Response res) throws Exception {
         int size = thumbBucket(r);
-        File f = new File(new File(thumbDir, "photos"), Long.toHexString(v.id) + (size > 512 ? "-" + size : "") + ".jpg");
+        File f = new File(new File(thumbDir, "photos"), Long.toHexString(v.id) + (size > 512 ? "-q" + size : "") + ".jpg");
         if (!f.exists() || f.length() == 0) {
             byte[] jpg = null;
             if (v.node != null) {
@@ -1197,7 +1197,9 @@ public class Library implements HttpServer.Handler {
                 Bitmap bmp = null;
                 frameLock.acquire();
                 try {
-                    bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(size, size), null);
+                    // 큰 칸용은 원본에서 직접 줄여 만듦 (갤러리 미리보기는 512 정도라 크게 보면 흐림)
+                    if (size > 512) bmp = decodeSource(android.graphics.ImageDecoder.createSource(ctx.getContentResolver(), v.uri), size);
+                    if (bmp == null) bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(size, size), null);
                 } catch (Exception ignored) {
                 } finally {
                     frameLock.release();
@@ -2572,7 +2574,7 @@ public class Library implements HttpServer.Handler {
         n = Math.max(0, Math.min(N_FRAMES - 1, n));
         int size = n == 0 ? Math.max(640, thumbBucket(r)) : 640;
         File dir = new File(thumbDir, String.valueOf(v.id));
-        File f = new File(dir, n + (size > 640 ? "-" + size : "") + ".jpg");
+        File f = new File(dir, n + (size > 640 ? "-q" + size : "") + ".jpg");
         if (!f.exists() || f.length() == 0) {
             Bitmap bmp = null;
             frameLock.acquire();
@@ -2580,10 +2582,12 @@ public class Library implements HttpServer.Handler {
                 if (n == 0) {
                     try {
                         bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(size, size), null);   // 비율 유지 (세로 영상도)
+                        // 갤러리 미리보기가 요청보다 많이 작으면(흐림) 영상에서 직접 한 장 뽑음
+                        if (bmp != null && size > 640 && Math.max(bmp.getWidth(), bmp.getHeight()) < size * 0.7) { bmp.recycle(); bmp = null; }
                     } catch (Exception ignored) {
                     }
                 }
-                if (bmp == null) bmp = frame(v, n == 0 ? 0.2 : (n - 0.5) / (N_FRAMES - 1));
+                if (bmp == null) bmp = frame(v, n == 0 ? 0.2 : (n - 0.5) / (N_FRAMES - 1), n == 0 ? size : 480);
             } finally {
                 frameLock.release();
             }
@@ -2599,7 +2603,9 @@ public class Library implements HttpServer.Handler {
         res.send(200, "image/jpeg", body);
     }
 
-    private Bitmap frame(Video v, double frac) {
+    private Bitmap frame(Video v, double frac) { return frame(v, frac, 480); }
+
+    private Bitmap frame(Video v, double frac, int max) {
         MediaMetadataRetriever mmr = new MediaMetadataRetriever();
         try {
             mmr.setDataSource(ctx, v.uri);
@@ -2609,7 +2615,7 @@ public class Library implements HttpServer.Handler {
                 dur = d == null ? 0 : Long.parseLong(d) / 1000.0;
             }
             long us = (long) (dur * frac * 1_000_000);
-            Bitmap b = mmr.getScaledFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 480);
+            Bitmap b = mmr.getScaledFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, max, max);
             if (b == null) b = mmr.getFrameAtTime(us);
             return b;
         } catch (Exception e) {
