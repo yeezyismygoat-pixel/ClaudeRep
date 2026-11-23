@@ -164,6 +164,11 @@ public class MainActivity extends Activity {
             if (web == null) createWebView();
             if (port != loadedPort) {
                 String hash = "";
+                // 처음 화면에서 ‘폴더를 골라서’를 골랐으면 폴더 고르기 화면부터
+                if (web.getUrl() == null && getPreferences(MODE_PRIVATE).getBoolean("setup_pick", false)) {
+                    getPreferences(MODE_PRIVATE).edit().remove("setup_pick").apply();
+                    hash = "#/setup";
+                }
                 if (web.getUrl() != null) {
                     int i = web.getUrl().indexOf('#');
                     if (i >= 0) hash = web.getUrl().substring(i);
@@ -422,20 +427,185 @@ public class MainActivity extends Activity {
         requestPermissions(perms.toArray(new String[0]), 1);
     }
 
+    private boolean permDenied = false;
+
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
         new Thread(() -> Library.get(this).scan()).start();   // 새 권한으로 목록 다시 만들기
-        if (!hasVideoPermission())
-            Toast.makeText(this, "영상 접근 권한이 있어야 목록을 만들 수 있습니다", Toast.LENGTH_LONG).show();
-        // onResume 이 이어서 호출되며 서버를 시작합니다
+        permDenied = code == 1 && !hasVideoPermission();
+        // onResume 이 이어서 호출되며 서버를 시작하거나 (거절했으면) 안내를 다시 보여 줍니다
+    }
+
+    // ---- 처음 화면: 무엇을 가져올지 고르고 사진·영상 접근 허용
+    private int[] palette() {   // 배경, 카드, 글자, 흐린 글자, 강조, 강조 위 글자, 옅은 강조, 선
+        return systemDark()
+                ? new int[]{DARK_BG, 0xFF1B1D21, 0xFFEEEDEA, 0xFF9A99A1, 0xFF7C9CFF, 0xFF0B1430, 0xFF23305A, 0xFF2E3036}
+                : new int[]{LIGHT_BG, 0xFFFBFAF7, 0xFF17171A, 0xFF6E6D76, 0xFF2F5BEA, 0xFFFFFFFF, 0xFFE3E9FD, 0xFFE2DED5};
     }
 
     private void showPermissionScreen() {
-        LinearLayout box = column();
-        box.addView(text("VidShelf", 26, TEXT, true));
-        box.addView(text("영상과 사진 목록을 만들려면 접근 권한이 필요합니다. 권한 창에서 ‘모두 허용’을 고르세요.", 15, MUTED, false));
-        box.addView(button("영상 접근 허용", v -> askPermissions()));
-        show(box);
+        final int[] c = palette();
+        final boolean dark = systemDark();
+        android.content.SharedPreferences prefs = getPreferences(MODE_PRIVATE);
+        final boolean[] all = {!"pick".equals(prefs.getString("media_choice", "all"))};
+
+        android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        scroll.setFillViewport(true);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(24), dp(28), dp(24), dp(20));
+        scroll.addView(col, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        col.addView(space(), new LinearLayout.LayoutParams(1, 0, 1f));
+        // 앱 아이콘
+        android.widget.ImageView icon = new android.widget.ImageView(this);
+        icon.setImageResource(R.drawable.ic_launcher_fg);
+        GradientDrawable ibg = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{0xFF26272D, 0xFF121316});
+        ibg.setCornerRadius(dp(20));
+        icon.setBackground(ibg);
+        icon.setClipToOutline(true);
+        icon.setOutlineProvider(android.view.ViewOutlineProvider.BACKGROUND);
+        icon.setElevation(dp(4));
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(68), dp(68));
+        ilp.bottomMargin = dp(18);
+        col.addView(icon, ilp);
+
+        col.addView(label("VidShelf", 30, c[2], true));
+        TextView lead = label("휴대폰의 영상과 사진을 태그·사람별로 정리하는 보관함이에요.", 15, c[3], false);
+        lead.setLineSpacing(0, 1.25f);
+        col.addView(lead);
+
+        TextView q = label("어떤 사진·영상을 가져올까요?", 16, c[2], true);
+        LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        qlp.topMargin = dp(30); qlp.bottomMargin = dp(10);
+        col.addView(q, qlp);
+
+        final LinearLayout[] cards = new LinearLayout[2];
+        final View[] radios = new View[2];
+        Runnable paint = () -> {
+            for (int i = 0; i < 2; i++) {
+                boolean on = (i == 0) == all[0];
+                GradientDrawable g = new GradientDrawable();
+                g.setColor(c[1]); g.setCornerRadius(dp(20)); g.setStroke(dp(2), on ? c[4] : c[1]);
+                cards[i].setBackground(g);
+                GradientDrawable r = new GradientDrawable();
+                r.setShape(GradientDrawable.OVAL); r.setColor(c[1]); r.setStroke(on ? dp(7) : dp(2), on ? c[4] : c[7]);
+                radios[i].setBackground(r);
+                cards[i].setContentDescription((i == 0 ? "휴대폰 전체" : "폴더를 골라서") + (on ? ", 선택됨" : ""));
+            }
+        };
+        String[][] opts = {
+                {"휴대폰 전체", "카메라, 다운로드, 메신저 등 휴대폰에 있는 모든 사진과 영상을 가져와요."},
+                {"폴더를 골라서", "다음 화면에서 사진·영상이 있는 폴더를 보고, 원하는 폴더만 골라요."}};
+        for (int i = 0; i < 2; i++) {
+            final int idx = i;
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.HORIZONTAL);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setPadding(dp(14), dp(14), dp(16), dp(14));
+            card.setElevation(dp(1));
+            card.setClickable(true);
+            card.setFocusable(true);
+            // 아이콘 칸
+            android.widget.ImageView ic = new android.widget.ImageView(this);
+            ic.setImageResource(i == 0 ? R.drawable.ic_ob_photos : R.drawable.ic_ob_folder);
+            int tint = i == 0 ? (dark ? 0xFF9DB4FF : 0xFF2F5BEA) : (dark ? 0xFFF0BE6A : 0xFFB7791F);
+            int tile = i == 0 ? (dark ? 0xFF222D4D : 0xFFE4ECFF) : (dark ? 0xFF3A2F1C : 0xFFFCEFD9);
+            ic.setImageTintList(android.content.res.ColorStateList.valueOf(tint));
+            GradientDrawable tg = new GradientDrawable(); tg.setColor(tile); tg.setCornerRadius(dp(14));
+            ic.setBackground(tg);
+            ic.setPadding(dp(10), dp(10), dp(10), dp(10));
+            card.addView(ic, new LinearLayout.LayoutParams(dp(46), dp(46)));
+            // 글
+            LinearLayout txt = new LinearLayout(this);
+            txt.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            tlp.leftMargin = dp(14); tlp.rightMargin = dp(12);
+            LinearLayout titleRow = new LinearLayout(this);
+            titleRow.setGravity(Gravity.CENTER_VERTICAL);
+            titleRow.addView(label(opts[i][0], 16, c[2], true));
+            if (i == 0) {
+                TextView badge = label("추천", 11, c[4], true);
+                GradientDrawable bg = new GradientDrawable(); bg.setColor(c[6]); bg.setCornerRadius(dp(8));
+                badge.setBackground(bg);
+                badge.setPadding(dp(7), dp(1), dp(7), dp(1));
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                blp.leftMargin = dp(8);
+                titleRow.addView(badge, blp);
+            }
+            txt.addView(titleRow);
+            TextView sub = label(opts[i][1], 13, c[3], false);
+            sub.setLineSpacing(0, 1.2f);
+            txt.addView(sub);
+            card.addView(txt, tlp);
+            View radio = new View(this);
+            card.addView(radio, new LinearLayout.LayoutParams(dp(22), dp(22)));
+            card.setOnClickListener(v -> {
+                all[0] = idx == 0;
+                getPreferences(MODE_PRIVATE).edit().putString("media_choice", all[0] ? "all" : "pick").apply();
+                v.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
+                paint.run();
+            });
+            cards[i] = card; radios[i] = radio;
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            clp.bottomMargin = dp(10);
+            col.addView(card, clp);
+        }
+        paint.run();
+        col.addView(label("나중에 설정 → 라이브러리와 미디어 폴더에서 언제든 바꿀 수 있어요.", 12.5f, c[3], false));
+
+        col.addView(space(), new LinearLayout.LayoutParams(1, dp(28), 1f));
+
+        // 거절했을 때 안내
+        boolean blocked = permDenied && Build.VERSION.SDK_INT >= 23
+                && !shouldShowRequestPermissionRationale(Build.VERSION.SDK_INT >= 33 ? Manifest.permission.READ_MEDIA_VIDEO : Manifest.permission.READ_EXTERNAL_STORAGE);
+        if (permDenied) {
+            TextView warn = label(blocked
+                    ? "사진·영상 접근이 꺼져 있어요. 아래 버튼을 눌러 휴대폰 설정의 ‘권한 → 사진 및 동영상’에서 ‘모두 허용’으로 바꿔 주세요."
+                    : "사진·영상 접근을 허용해야 목록을 만들 수 있어요. 권한 창에서 ‘모두 허용’을 눌러 주세요.", 13.5f, dark ? 0xFFFF8A80 : 0xFFC92A2A, false);
+            warn.setLineSpacing(0, 1.2f);
+            LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            wlp.bottomMargin = dp(10);
+            col.addView(warn, wlp);
+        }
+        Button go = new Button(this);
+        go.setText(blocked ? "설정에서 허용하기" : "계속");
+        go.setAllCaps(false);
+        go.setTextSize(16);
+        go.setTypeface(Typeface.DEFAULT_BOLD);
+        go.setTextColor(c[5]);
+        go.setStateListAnimator(null);
+        GradientDrawable gbg = new GradientDrawable(); gbg.setColor(c[4]); gbg.setCornerRadius(dp(18));
+        go.setBackground(gbg);
+        go.setOnClickListener(v -> {
+            Library.get(this).setLibraryAll(all[0]);
+            getPreferences(MODE_PRIVATE).edit().putBoolean("setup_pick", !all[0]).apply();
+            if (blocked) {
+                startActivity(new android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
+                return;
+            }
+            askPermissions();
+        });
+        col.addView(go, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)));
+        TextView foot = label("다음 화면에서 사진·동영상 접근을 ‘모두 허용’으로 골라 주세요. 모든 정보는 이 휴대폰 안에만 저장돼요.", 12.5f, c[3], false);
+        foot.setGravity(Gravity.CENTER);
+        foot.setLineSpacing(0, 1.2f);
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        flp.topMargin = dp(10);
+        col.addView(foot, flp);
+        show(scroll);
+    }
+
+    private View space() { return new View(this); }
+
+    private TextView label(String s, float sp, int color, boolean bold) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        t.setIncludeFontPadding(true);
+        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+        return t;
     }
 
     private void hideSplash() {
@@ -477,9 +647,10 @@ public class MainActivity extends Activity {
     }
 
     private void showError(String err) {
+        int[] c = palette();
         LinearLayout box = column();
-        box.addView(text("서버를 시작하지 못했습니다", 18, TEXT, true));
-        box.addView(text(err, 14, 0xFFEF6A62, false));
+        box.addView(text("앱을 시작하지 못했습니다", 18, c[2], true));
+        box.addView(text(err, 14, systemDark() ? 0xFFFF8A80 : 0xFFC92A2A, false));
         box.addView(button("다시 시도", v -> {
             ServerService.lastError = null;
             ServerService.start(this);
@@ -491,8 +662,8 @@ public class MainActivity extends Activity {
     private void show(View v) {
         if (web != null) return;
         root.removeAllViews();
-        applyBars(true);   // 권한·오류 화면은 어두운 바탕
-        root.setBackgroundColor(BG);
+        applyBars(systemDark());   // 앱과 같은 밝기
+        root.setBackgroundColor(systemDark() ? DARK_BG : LIGHT_BG);
         root.addView(v, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
@@ -523,10 +694,12 @@ public class MainActivity extends Activity {
         Button b = new Button(this);
         b.setText(s);
         b.setAllCaps(false);
-        b.setTextColor(0xFF1D1304);
+        int[] c = palette();
+        b.setTextColor(c[5]);
+        b.setStateListAnimator(null);
         GradientDrawable g = new GradientDrawable();
-        g.setColor(ACCENT);
-        g.setCornerRadius(dp(10));
+        g.setColor(c[4]);
+        g.setCornerRadius(dp(16));
         b.setBackground(g);
         b.setOnClickListener(onClick);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);

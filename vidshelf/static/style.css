@@ -1414,3 +1414,24 @@ body.shorts-mode .topbar .tabs a.on { color: #16161A !important; }
 body.shorts-mode .topbar .tabs a.on .ico { --knock: #fff; }
 @media (prefers-reduced-motion: reduce) { .tab-blob { transition: opacity .2s ease; } .topbar .tabs a.on .ico { animation: none; } }
 .topbar .tabs a, .topbar .tabs .ico { -webkit-user-drag: none; user-select: none; -webkit-user-select: none; }
+
+/* ================= 처음 설정: 가져올 폴더 고르기 ================= */
+.setup { padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
+.setup-lead { margin: -4px 0 14px; }
+.setup-tools { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 8px; }
+.setup-list { display: grid; gap: 8px; }
+.setup-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; font: inherit; color: inherit; cursor: pointer;
+  background: var(--panel); border-radius: var(--r-md, 16px); padding: 10px 12px; box-shadow: var(--soft-lo); outline: 2px solid transparent; transition: outline-color .2s ease; }
+.setup-row.on { outline-color: var(--accent); }
+.setup-text { flex: 1; min-width: 0; display: grid; }
+.setup-text b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-text .meta { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-count { font-size: 12px; white-space: nowrap; }
+.ico.setup-check { width: 24px; height: 24px; color: var(--muted); flex: none; }
+.setup-row.on .ico.setup-check { color: var(--accent); }
+.setup-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 45; display: grid; gap: 8px; padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, var(--bg) 28%); max-width: 560px; margin: 0 auto; }
+.setup-bar .btn { height: 50px; border-radius: 16px; font-size: 15px; justify-content: center; display: flex; align-items: center; }
+.setup-bar .setup-all { background: var(--panel); border: 0; box-shadow: var(--soft-lo); }
+.lib-mode { margin: 0 0 10px; }
+.lib-mode button { display: inline-flex; align-items: center; justify-content: center; }

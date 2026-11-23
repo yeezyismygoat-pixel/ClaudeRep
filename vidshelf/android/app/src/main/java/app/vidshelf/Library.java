@@ -269,7 +269,7 @@ public class Library implements HttpServer.Handler {
 
     // ------------------------------------------------------------------ 백업 / 복원
     private static final String[] BACKUP_KEYS = {"videos", "tags", "performers", "performer_info", "seq"};
-    private static final String[] BACKUP_SETTINGS = {"library_paths", "mega_links", "icloud_links", "mega_thumbs", "mega_refresh_hours"};
+    private static final String[] BACKUP_SETTINGS = {"library_paths", "library_all", "mega_links", "icloud_links", "mega_thumbs", "mega_refresh_hours"};
 
     /** 태그·별점·출연자 등 사용자 정보. 비밀번호와 로그인 쿠키는 넣지 않음. */
     private synchronized JSONObject backupJson() throws JSONException {
@@ -573,7 +573,20 @@ public class Library implements HttpServer.Handler {
         return m;
     }
 
+    /** 목록에 넣을 폴더. ‘휴대폰 전체’를 골랐으면 빈 글자 하나(모든 폴더가 여기로 시작) */
     public synchronized List<String> libraryPaths() {
+        if (settings().optBoolean("library_all", false)) { List<String> all = new ArrayList<>(); all.add(""); return all; }
+        return storedPaths();
+    }
+
+    /** 처음 화면에서 고른 방식: true = 휴대폰 전체, false = 고른 폴더만 */
+    public synchronized void setLibraryAll(boolean on) {
+        try { settings().put("library_all", on); } catch (JSONException ignored) {}
+        save();
+        lastScan = 0;
+    }
+
+    private synchronized List<String> storedPaths() {
         List<String> out = new ArrayList<>();
         JSONArray a = settings().optJSONArray("library_paths");
         if (a != null) for (int i = 0; i < a.length(); i++) out.add(a.optString(i));
@@ -1740,9 +1753,23 @@ public class Library implements HttpServer.Handler {
         return o;
     }
 
+    /** 사진·영상이 들어 있는 기기 폴더와 개수 (많은 순). 처음 화면의 ‘폴더 고르기’용 */
+    private synchronized JSONArray mediaFolders() throws JSONException {
+        if (lastScan == 0) scan();
+        java.util.Map<String, int[]> m = new java.util.HashMap<>();
+        for (Video v : all) if (!v.cloud()) m.computeIfAbsent(v.relPath, k -> new int[2])[0]++;
+        for (Video v : allPhotos) if (!v.cloud()) m.computeIfAbsent(v.relPath, k -> new int[2])[1]++;
+        List<java.util.Map.Entry<String, int[]>> list = new ArrayList<>(m.entrySet());
+        list.sort((a, b) -> (b.getValue()[0] + b.getValue()[1]) - (a.getValue()[0] + a.getValue()[1]));
+        JSONArray out = new JSONArray();
+        for (java.util.Map.Entry<String, int[]> e : list)
+            out.put(new JSONObject().put("path", e.getKey()).put("videos", e.getValue()[0]).put("photos", e.getValue()[1]));
+        return out;
+    }
+
     private synchronized JSONObject settingsJson() throws JSONException {
         Set<String> folders = allFolders();
-        List<String> paths = libraryPaths();
+        List<String> paths = storedPaths();
         JSONArray lp = new JSONArray();
         for (String p : paths) {
             boolean exists = false;
@@ -1755,7 +1782,7 @@ public class Library implements HttpServer.Handler {
             String t = s >= 0 ? f.substring(0, s + 1) : f;
             if (!t.isEmpty() && !paths.contains(t)) top.add(t);
         }
-        return new JSONObject().put("library_paths", lp).put("suggestions", new JSONArray(top))
+        return new JSONObject().put("library_paths", lp).put("library_all", settings().optBoolean("library_all", false)).put("suggestions", new JSONArray(top))
                 .put("password_set", passwordSet()).put("data_dir", "앱 내부 저장소")
                 .put("ffmpeg", false).put("ffprobe", false).put("platform", "android")
                 .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
@@ -2270,7 +2297,9 @@ public class Library implements HttpServer.Handler {
                             if (!s.isEmpty() && !out.contains(s)) out.add(s);
                         }
                         settings().put("library_paths", new JSONArray(out));
+                        lastScan = 0;
                     }
+                    if (b.has("library_all")) { settings().put("library_all", b.optBoolean("library_all")); lastScan = 0; }
                     save();
                 }
                 if (b.has("mega_refresh_hours")) {
@@ -2400,6 +2429,7 @@ public class Library implements HttpServer.Handler {
             return;
         }
         if (p0.equals("browse")) { res.json(200, browse(r.param("path")).toString()); return; }
+        if (p0.equals("folders")) { res.json(200, mediaFolders().toString()); return; }
         if (p0.equals("scan") && m.equals("POST")) {
             scan();
             res.json(200, "{\"started\":true}");

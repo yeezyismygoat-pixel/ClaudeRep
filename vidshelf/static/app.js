@@ -882,6 +882,7 @@ async function route(ev) {
     if (path === "/stats") return await renderStats();
     if (path === "/explore") return await renderExplore(params);
     if (path === "/search") return await renderSearch(params);
+    if (path === "/setup") return await renderSetup();
     if (path === "/media") return await renderMedia(params, params.get("type") || "all");
     if (path === "/duplicates") return await renderDuplicates();
     if (path === "/hidden") return await renderHidden();
@@ -2779,7 +2780,7 @@ async function renderSettings(opts = {}) {
   const SECTIONS = [
     { group: "일반", items: [
       { id: "display", icon: "display", title: "화면과 재생", sub: `${themeName} · 연속 재생 ${autoNextOn() ? "켬" : "끔"}` },
-      { id: "library", icon: "folder", title: "라이브러리와 미디어 폴더", sub: `영상 ${(c.total || 0).toLocaleString()}개 · 폴더 ${st.library_paths.length}개` },
+      { id: "library", icon: "folder", title: "라이브러리와 미디어 폴더", sub: `영상 ${(c.total || 0).toLocaleString()}개 · ${st.library_all ? "휴대폰 전체" : `폴더 ${st.library_paths.length}개`}` },
       st.mega_supported ? { id: "cloud", icon: "cloud", title: "클라우드", sub: nCloud ? `MEGA ${(st.mega || []).length} · iCloud ${(st.icloud || []).length}` : "연결된 곳 없음" } : null,
       st.fav_sync !== undefined ? { id: "favorites", icon: "heart", title: "즐겨찾기 연동", sub: st.fav_sync ? (st.manage_media ? "갤러리와 연동 · 바로 반영" : "갤러리와 연동") : "앱 안에서만" } : null,
     ] },
@@ -2831,6 +2832,7 @@ async function renderSettings(opts = {}) {
   if (section === "library") {
     const paths = st.library_paths.map((p) => p.path);
     const savePaths = async (list) => { await api("settings", { method: "PUT", body: { library_paths: list } }); reload(); };
+    const setAll = async (on) => { await api("settings", { method: "PUT", body: { library_all: on } }); reload(); };
     const pathList = h("ul", { class: "pathlist" }, st.library_paths.length ? st.library_paths.map((p) =>
       h("li", {}, h("span", { class: "p" }, p.path, !p.exists ? h("div", { class: "warn" }, "폴더를 찾을 수 없습니다 (저장소 권한을 확인하세요)") : null),
         h("button", { class: "btn sm danger", onclick: () => savePaths(paths.filter((x) => x !== p.path)) }, "제거")))
@@ -2847,15 +2849,20 @@ async function renderSettings(opts = {}) {
           h("div", { class: "stat" }, h("b", {}, (c.seconds || 0) >= 3600 ? ((c.seconds / 3600).toFixed(1) + "시간") : fmtDur(c.seconds)), h("span", {}, "전체 길이")),
           h("div", { class: "stat" }, h("b", {}, c.favorites || 0), h("span", {}, "즐겨찾기")))),
       h("div", { class: "panel" }, h("h3", {}, "미디어 폴더"),
-        h("p", { class: "meta", style: "margin-top:0" }, "이 기기에서 영상과 사진을 가져올 폴더입니다. ‘폴더 찾아보기’에서 휴대폰의 모든 폴더를 고를 수 있습니다."),
-        pathList,
+        h("div", { class: "seg lib-mode", role: "group", "aria-label": "가져올 범위" },
+          h("button", { class: st.library_all ? "on" : "", onclick: () => setAll(true) }, ico("device", "in"), "휴대폰 전체"),
+          h("button", { class: st.library_all ? "" : "on", onclick: () => setAll(false) }, ico("folder", "in"), "고른 폴더만")),
+        st.library_all ? h("p", { class: "meta" }, "카메라, 다운로드, 메신저 등 휴대폰에 있는 모든 사진과 영상을 가져옵니다.") : null,
+        st.library_all ? null : h("p", { class: "meta", style: "margin-top:0" }, "아래 폴더의 사진과 영상만 가져옵니다. ‘폴더 목록에서 고르기’에서 사진·영상이 있는 폴더를 한눈에 고를 수 있습니다."),
+        st.library_all ? null : pathList,
         h("div", { class: "row" },
-          h("button", { class: "btn", onclick: () => folderPicker((p) => savePaths(paths.concat([p]))) }, ico("folder", "in"), "폴더 찾아보기"),
-          h("button", { class: "btn primary", disabled: status.scanning || !paths.length, onclick: async () => {
+          st.library_all ? null : h("a", { class: "btn", href: "#/setup" }, ico("folder", "in"), "폴더 목록에서 고르기"),
+          st.library_all ? null : h("button", { class: "btn", onclick: () => folderPicker((p) => savePaths(paths.concat([p]))) }, "직접 찾아보기"),
+          h("button", { class: "btn primary", disabled: status.scanning || (!paths.length && !st.library_all), onclick: async () => {
             await api("scan", { method: "POST" }); toast("스캔을 시작했습니다"); setTimeout(reload, 800);
           } }, status.scanning ? "스캔 중…" : "지금 스캔")),
-        h("div", { class: "taginput" }, manual, h("button", { class: "btn", onclick: () => manual.value.trim() && savePaths(paths.concat([manual.value.trim()])) }, "추가")),
-        suggestions,
+        st.library_all ? null : h("div", { class: "taginput" }, manual, h("button", { class: "btn", onclick: () => manual.value.trim() && savePaths(paths.concat([manual.value.trim()])) }, "추가")),
+        st.library_all ? null : suggestions,
         status.last_scan ? h("p", { class: "meta" }, `마지막 스캔: ${fmtDate(status.last_scan)}`) : null));
   }
 
@@ -4123,6 +4130,50 @@ async function renderDuplicates() {
       ? h("p", { class: "meta" }, `${groups.length}묶음 · 중복으로 차지하는 크기 약 ${fmtSize(wasted)}. 영상은 파일 크기가, 사진은 파일 크기와 가로·세로가 똑같으면 같은 것으로 봅니다. 남길 영상에서 ‘이것만 남기기’를 누르면 나머지는 숨기고 태그·사람 등 정보는 합쳐집니다. 숨긴 영상은 설정 → 숨긴 영상에서 되돌릴 수 있습니다.`)
       : h("div", { class: "empty" }, "중복 영상·사진이 없습니다."),
     ...groups.map(groupEl)));
+}
+
+/** 가져올 폴더 고르기: 사진·영상이 있는 폴더를 개수와 함께 보여 주고 체크해서 고름 (처음 화면에서 ‘폴더를 골라서’를 고르면 여기로) */
+async function renderSetup() {
+  setTab("library");
+  document.body.classList.add("nav-hidden");
+  const [folders, st] = await Promise.all([api("folders").catch(() => []), api("settings").catch(() => ({ library_paths: [] }))]);
+  const stored = (st.library_paths || []).map((p) => p.path);
+  const chosen = new Set(folders.filter((f) => stored.some((p) => f.path.startsWith(p))).map((f) => f.path));
+  const list = h("div", { class: "setup-list" });
+  const goBtn = h("button", { class: "btn primary setup-go" });
+  const n = (x) => (x || 0).toLocaleString();
+  const draw = () => {
+    list.replaceChildren(...folders.map((f) => {
+      const on = chosen.has(f.path), parts = f.path.replace(/\/+$/, "").split("/");
+      return h("button", { class: "setup-row" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false",
+        onclick: () => { if (chosen.has(f.path)) chosen.delete(f.path); else chosen.add(f.path); draw(); } },
+        h("span", { class: "set-ico t4" }, ico("folder")),
+        h("span", { class: "setup-text" }, h("b", {}, parts[parts.length - 1] || f.path), h("span", { class: "meta" }, parts.slice(0, -1).join(" / ") || "내장 메모리")),
+        h("span", { class: "setup-count meta" }, [f.videos ? `영상 ${n(f.videos)}` : "", f.photos ? `사진 ${n(f.photos)}` : ""].filter(Boolean).join(" · ")),
+        ico("select", on ? "setup-check filled" : "setup-check"));
+    }));
+    goBtn.disabled = !chosen.size;
+    goBtn.textContent = chosen.size ? `폴더 ${chosen.size}개 가져오기` : "폴더를 골라 주세요";
+  };
+  goBtn.onclick = async () => {
+    goBtn.disabled = true;
+    await api("settings", { method: "PUT", body: { library_paths: [...chosen], library_all: false } });
+    toast(`폴더 ${chosen.size}개의 사진과 영상을 가져옵니다`);
+    location.replace("#/home");
+  };
+  const allBtn = h("button", { class: "btn setup-all", onclick: async () => {
+    await api("settings", { method: "PUT", body: { library_all: true } });
+    toast("휴대폰의 모든 사진과 영상을 가져옵니다");
+    location.replace("#/home");
+  } }, ico("device", "in"), "휴대폰 전체 가져오기");
+  const toggleAll = h("button", { class: "btn sm", onclick: () => { if (chosen.size === folders.length) chosen.clear(); else folders.forEach((f) => chosen.add(f.path)); draw(); } }, "모두 선택");
+  draw();
+  $app.replaceChildren(h("div", { class: "setup" },
+    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "처음 설정"), h("h1", {}, "가져올 폴더 고르기"))),
+    h("p", { class: "meta setup-lead" }, "체크한 폴더의 사진과 영상만 목록에 나와요. 나중에 설정 → 라이브러리와 미디어 폴더에서 언제든 바꿀 수 있어요."),
+    folders.length ? h("div", { class: "setup-tools" }, h("span", { class: "meta" }, `사진·영상이 있는 폴더 ${folders.length}개`), toggleAll) : null,
+    folders.length ? list : h("div", { class: "empty" }, "아직 사진·영상이 있는 폴더를 찾지 못했습니다. 잠시 뒤 다시 열어 보세요."),
+    h("div", { class: "setup-bar" }, goBtn, allBtn)));
 }
 
 async function folderPicker(onPick) {
