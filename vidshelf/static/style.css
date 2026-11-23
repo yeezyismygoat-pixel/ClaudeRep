@@ -1299,3 +1299,29 @@ body.selecting:has(.media.docked) .toast { bottom: calc(196px + env(safe-area-in
 /* 홈 줄의 영상 카드: 아래쪽 모서리에 생기던 네모난 그림자·바탕을 없앰 (그림만 둥글게) */
 .shelf .card, .grid .card { background: none !important; box-shadow: none !important; border-radius: 0 !important; }
 @media (max-width: 560px) { .mcontent-wrap .ytfeed { padding-left: 12px !important; padding-right: 12px !important; } .mcontent-wrap .ytfeed .photo-strip { margin: 0 -12px; padding-left: 12px !important; padding-right: 12px !important; scroll-padding-left: 12px; } }
+
+/* ================= 9.0: 유튜브식 카드 · 은은한 빛 · 아래 버튼 줄 · 사진 줄 ================= */
+/* 카드 하나 = 썸네일(위 모서리만 둥글게) + 설명 칸(아래 모서리만 둥글게). 설명 칸에 썸네일 색이 위에서 아래로 번짐 */
+.ytfeed { gap: 14px 16px !important; }
+.yt { --amb: 128 128 128; --amb-a: 0; border-radius: 16px; overflow: hidden; background: var(--panel); box-shadow: var(--soft-lo); isolation: isolate; }
+.yt.amb { --amb-a: 1; }
+.yt .yt-thumb, .yt.sel .yt-thumb { border-radius: 16px 16px 0 0 !important; }
+.yt .yt-info { padding: 11px 12px 14px !important; border-radius: 0 0 16px 16px; margin: 0;
+  background: linear-gradient(180deg, rgb(var(--amb) / calc(.42 * var(--amb-a))) 0%, rgb(var(--amb) / calc(.18 * var(--amb-a))) 55%, rgb(var(--amb) / calc(.07 * var(--amb-a))) 100%), var(--panel); }
+:root[data-theme="dark"] .yt .yt-info { background: linear-gradient(180deg, rgb(var(--amb) / calc(.55 * var(--amb-a))) 0%, rgb(var(--amb) / calc(.22 * var(--amb-a))) 60%, rgb(var(--amb) / calc(.08 * var(--amb-a))) 100%), var(--panel); }
+.yt .yt-av { background: color-mix(in srgb, var(--panel) 70%, transparent); }
+.swipe-wrap { border-radius: 16px !important; }
+.swipe-wrap > .yt { background: var(--panel) !important; }
+.ytfeed > .swipe-wrap, .ytfeed > .yt { border-top: 0 !important; }
+.skeleton .yt-info { padding: 11px 12px 14px; }
+/* 아래 버튼 줄: 화면 아래 그라데이션보다 위에, 스크롤해도 늘 보임 */
+.media.docked .media-bar { z-index: 42 !important; }
+body.dock-down .media.docked .media-bar { transform: none; opacity: 1; pointer-events: auto; }
+.media.docked { padding-bottom: 96px; }
+/* 사진 줄: 폭보다 좁으면 키워서 양옆을 꽉 채움 */
+.ytfeed .photo-strip.fit { overflow: hidden; }
+.photo-strip.fit .tile { height: var(--sh, 190px); min-width: 0; }
+.photo-strip.fit .tile-img { width: 100% !important; aspect-ratio: auto !important; }
+/* 홈 편집: 저장된 필터 추가 */
+.home-edit-add { display: grid; gap: 8px; margin-top: 6px; }
+.he-sub { font-size: 13px; font-weight: 700; color: var(--muted); margin: 6px 2px 0; }

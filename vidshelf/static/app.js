@@ -264,6 +264,29 @@ async function tintFromImage(src) {
     return [r / w, gg / w, b / w];
   } catch (e) { return null; }
 }
+/** 썸네일 아래쪽 1/3 의 평균 색을 보기 좋은 밝기로 맞춰서 "r g b" */
+function ambientOf(img) {
+  try {
+    const W = 16, H = 16, c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    g.drawImage(img, 0, 0, W, H);
+    const d = g.getImageData(0, Math.floor(H * 0.6), W, H - Math.floor(H * 0.6)).data;
+    let r = 0, gg = 0, b = 0, w = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const R = d[i] / 255, G = d[i + 1] / 255, B = d[i + 2] / 255;
+      const mx = Math.max(R, G, B), mn = Math.min(R, G, B);
+      const wt = 0.25 + (mx - mn);   // 색이 있는 픽셀을 조금 더
+      r += R * wt; gg += G * wt; b += B * wt; w += wt;
+    }
+    if (!w) return null;
+    let [hh, s, l] = rgbToHsl([r / w, gg / w, b / w]);
+    const dark = document.documentElement.dataset.theme === "dark";
+    s = Math.min(0.75, s * 1.25);
+    l = dark ? Math.min(0.5, Math.max(0.28, l)) : Math.min(0.62, Math.max(0.4, l));
+    return hslRgbTriplet(hh, s, l);
+  } catch (e) { return null; }
+}
 function rgbToHsl([r, g, b]) {
   const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
   if (mx === mn) return [0, 0, l];
@@ -1339,7 +1362,7 @@ async function renderMedia(params0, type0) {
     const grid = h("div", { class: mode === "wall" ? "wall" : "ytfeed" });
     const more = h("div", { class: "more" });
     const box = h("div", { class: "mcontent in-" + anim }, grid, more);
-    const photos = [];
+    const photos = [], fitStrips = new Set();
     let page = 1;
     let restoring = anim === "none" && restore && restore.y > 0 ? restore : null;
     const base = toServerParams(params);
@@ -1381,6 +1404,7 @@ async function renderMedia(params0, type0) {
             let run = grid.lastElementChild;   // 목록 보기: 이어지는 사진은 옆으로 넘겨 보는 한 줄로
             if (!run || !run.classList.contains("photo-strip")) { run = h("div", { class: "photo-strip" }); grid.append(run); }
             run.append(selectable(cell, it));
+            fitStrips.add(run);
           }
         } else if (mode === "wall") {
           grid.append(selectable(videoTile(it), it));
@@ -1388,6 +1412,7 @@ async function renderMedia(params0, type0) {
           grid.append(sel.swipeActions(selectable(ytCell(it, null), it), it));   // 목록 보기: 꾹 누르면 미리보기 카드, 옆으로 밀면 즐겨찾기·정리 완료
         }
       }
+      fitStrips.forEach(fitStrip);
       const shown = (page - 1) * d.per + d.items.length;
       window.__mediaPages = page;
       if (restoring && page < restoring.pages && shown < d.total) { page++; return load(); }   // 기억한 만큼 미리 불러옴
@@ -1406,6 +1431,8 @@ async function renderMedia(params0, type0) {
     img.onload = () => {
       img.hidden = false;
       if (!known && img.naturalWidth) img.parentElement.style.aspectRatio = img.naturalWidth / img.naturalHeight;
+      const card = img.closest(".yt"), amb = ambientOf(img);   // 유튜브 은은한 빛처럼: 썸네일 아래쪽 색이 설명 칸으로 번짐
+      if (card && amb) { card.style.setProperty("--amb", amb); card.classList.add("amb"); }
     };
     img.onerror = () => (img.hidden = true);
     // 원래 비율 그대로 (모르면 이미지를 받아 본 뒤 맞춤)
@@ -1675,7 +1702,7 @@ async function renderMedia(params0, type0) {
 
   drawHeader();
   const offFs = attachFastScroll(() => (["added", "taken", "title"].includes(sortOf()) ? labelAtCenter() : ""));
-  const offDock = attachDockHide();
+  const offDock = () => {};   // 아래 버튼 줄은 스크롤해도 늘 보임
   window.__fsCleanup = () => { offFs(); offDock(); };
   await drawContent("none");
 }
@@ -1701,7 +1728,7 @@ function wallTile({ href, onclick, src, ratio, badges, performers }) {
   src = hdSrc(src);
   let r = ratio > 0 ? Math.min(3, Math.max(0.4, ratio)) : 1;
   const box = h("div", { class: "tile-img", style: `aspect-ratio:${r}` });
-  const tile = h(href ? "a" : "div", { class: "tile", href, onclick, style: `flex:${r} 1 ${Math.round(r * wallHeight())}px` }, box,
+  const tile = h(href ? "a" : "div", { class: "tile", href, onclick, "data-r": r, style: `flex:${r} 1 ${Math.round(r * wallHeight())}px` }, box,
     h("div", { class: "tile-cap" + (performers && performers.length ? " has" : "") }, performers && performers.length ? performers.join(", ") : "\u00a0"));
   if (src) {
     const img = h("img", { src, loading: "lazy", alt: "" });
@@ -1709,6 +1736,8 @@ function wallTile({ href, onclick, src, ratio, badges, performers }) {
       if (!(ratio > 0) && img.naturalWidth) {   // 비율을 모르면 이미지를 받아 본 뒤 맞춤
         r = Math.min(3, Math.max(0.4, img.naturalWidth / img.naturalHeight));
         box.style.aspectRatio = r; tile.style.flex = `${r} 1 ${Math.round(r * wallHeight())}px`;
+        tile.dataset.r = r;
+        const strip = tile.closest(".photo-strip"); if (strip) fitStrip(strip);
       }
     };
     img.onerror = () => (img.hidden = true);
@@ -1717,6 +1746,22 @@ function wallTile({ href, onclick, src, ratio, badges, performers }) {
   (badges || []).forEach((b) => b && box.append(b));
   return tile;
 }
+
+/** 목록 보기의 사진 한 줄: 다 합쳐도 화면 폭보다 좁으면 키워서 양옆을 꽉 채움 (넓으면 옆으로 넘겨 보기) */
+const STRIP_MAX = 420;
+function fitStrip(strip) {
+  const tiles = [...strip.querySelectorAll(".tile")];
+  if (!tiles.length || !strip.isConnected) return;
+  const cs = getComputedStyle(strip);
+  const W = strip.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const gaps = 4 * (tiles.length - 1), R = tiles.reduce((a, t) => a + (+t.dataset.r || 1), 0);
+  if (W <= 0) return;
+  if ((W - gaps) / R < 140) {   /* 너무 많아서 줄이면 작아지는 줄만 옆으로 넘겨 보기 */ strip.classList.remove("fit"); strip.style.removeProperty("--sh"); tiles.forEach((t) => t.style.removeProperty("flex")); return; }
+  strip.classList.add("fit");
+  strip.style.setProperty("--sh", Math.round(Math.min(STRIP_MAX, (W - gaps) / R)) + "px");
+  tiles.forEach((t) => t.style.setProperty("flex", `${t.dataset.r || 1} 1 0px`, "important"));
+}
+window.addEventListener("resize", () => document.querySelectorAll(".photo-strip").forEach(fitStrip));
 
 function videoTile(v) {
   return wallTile({
@@ -3682,10 +3727,33 @@ function openHomeEditor() {
       h("div", { class: "he-move" },
         h("button", { class: "round-btn sm", "aria-label": "위로", disabled: i === 0, onclick: () => move(-1) }, "▲"),
         h("button", { class: "round-btn sm", "aria-label": "아래로", disabled: i === layout.length - 1, onclick: () => move(1) }, "▼")),
-      h("span", { class: "he-name" }, label(x.k)), sw);
+      h("span", { class: "he-name" }, label(x.k)),
+      x.k.startsWith("sf:") ? h("button", { class: "round-btn sm", "aria-label": "홈에서 빼기", onclick: async () => {
+        await api(`saved_filters/${x.k.slice(3)}/home`, { method: "POST", body: { on: false } }).catch(() => null);
+        homeExtra = homeExtra.filter(([k]) => k !== x.k); layout = layout.filter((y) => y.k !== x.k);
+        saveLayout(); draw(); drawAdd();
+      } }, "×") : null, sw);
   }));
   draw();
-  openSheet("홈 편집", [h("p", { class: "meta", style: "margin:0" }, "▲▼로 순서를 바꾸고, 스위치로 보이거나 숨깁니다."), list],
+  // 저장된 필터를 홈 줄로 추가
+  const addBox = h("div", { class: "home-edit-add" });
+  const drawAdd = async () => {
+    const all = await api("saved_filters").catch(() => []);
+    const rest = all.filter((f) => !f.home);
+    if (!all.length) { addBox.replaceChildren(h("p", { class: "meta", style: "margin:0" }, "저장된 필터가 없습니다. 미디어 탭의 필터에서 조건을 고른 뒤 ‘필터 저장’을 누르면 여기에 나옵니다.")); return; }
+    addBox.replaceChildren(h("div", { class: "he-sub" }, "저장된 필터 추가"),
+      ...(rest.length ? rest.map((f) => h("div", { class: "home-edit-row" },
+        h("span", { class: "he-name" }, (f.default ? "★ " : "") + f.name),
+        h("button", { class: "btn sm primary", onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          await api(`saved_filters/${f.id}/home`, { method: "POST", body: { on: true } }).catch(() => null);
+          homeExtra = homeExtra.filter(([k]) => k !== "sf:" + f.id).concat([["sf:" + f.id, "필터 · " + f.name]]);
+          layout = layout.filter((x) => x.k !== "sf:" + f.id).concat([{ k: "sf:" + f.id, on: true }]);
+          saveLayout(); draw(); drawAdd();
+        } }, "+ 추가"))) : [h("p", { class: "meta", style: "margin:0" }, "모든 저장된 필터가 홈에 있습니다.")]));
+  };
+  drawAdd();
+  openSheet("홈 편집", [h("p", { class: "meta", style: "margin:0" }, "▲▼로 순서를 바꾸고, 스위치로 보이거나 숨깁니다."), list, addBox],
     [h("button", { class: "btn", onclick: () => { layout = homeSections().map(([k]) => ({ k, on: true })); saveLayout(); draw(); } }, "처음대로"),
      h("button", { class: "btn primary sheet-go", onclick: () => history.back() }, "완료")]);
   const onClose = () => { window.removeEventListener("popstate", onClose); if (parseHash().path === "/home" || !location.hash) setTimeout(route, 230); };

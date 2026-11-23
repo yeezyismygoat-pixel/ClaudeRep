@@ -1158,22 +1158,19 @@ public class Library implements HttpServer.Handler {
         android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
         o.inJustDecodeBounds = true;
         android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length, o);
-        if (o.outWidth <= 0) return null;
+        if (o.outWidth <= 0) return toJpegScaled(decodeSource(android.graphics.ImageDecoder.createSource(java.nio.ByteBuffer.wrap(data)), max));
         int sample = 1;
         while (Math.max(o.outWidth, o.outHeight) / (sample * 2) >= max) sample *= 2;
         o.inJustDecodeBounds = false;
         o.inSampleSize = sample;
         Bitmap b = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length, o);
-        if (b == null) return null;
+        if (b == null) return toJpegScaled(decodeSource(android.graphics.ImageDecoder.createSource(java.nio.ByteBuffer.wrap(data)), max));
         int w = b.getWidth(), h = b.getHeight(), big = Math.max(w, h);
         if (big > max) {
             Bitmap sc = Bitmap.createScaledBitmap(b, w * max / big, h * max / big, true);
             if (sc != b) { b.recycle(); b = sc; }
         }
-        ByteArrayOutputStream bo = new ByteArrayOutputStream();
-        b.compress(Bitmap.CompressFormat.JPEG, 86, bo);
-        b.recycle();
-        return bo.toByteArray();
+        return toJpegScaled(b);
     }
 
     private void photoThumb(Video v, HttpServer.Request r, HttpServer.Response res) throws Exception {
@@ -1192,6 +1189,9 @@ public class Library implements HttpServer.Handler {
                         if (big != null) jpg = big;
                     } catch (IOException ignored) {}
                 }
+                if (jpg == null && !webImage(v.name, v.mime) && v.node.size > 0 && v.node.size < 60L * 1024 * 1024) {   // HEIC 등은 받아서 변환
+                    try (InputStream in = Mega.open(v.link, v.node, 0, v.node.size - 1)) { jpg = bytesToJpeg(readAll(in), size); } catch (IOException ignored) {}
+                }
                 if (jpg == null) { megaStream(v.link, v.node, v.mime, r, res, false); return; }   // 썸네일이 없으면 원본
             } else {
                 Bitmap bmp = null;
@@ -1202,11 +1202,12 @@ public class Library implements HttpServer.Handler {
                 } finally {
                     frameLock.release();
                 }
-                if (bmp == null) { res.error(404, "no thumbnail"); return; }
-                ByteArrayOutputStream bo = new ByteArrayOutputStream();
-                bmp.compress(Bitmap.CompressFormat.JPEG, size > 512 ? 86 : 80, bo);
-                bmp.recycle();
-                jpg = bo.toByteArray();
+                if (bmp == null) {   // 갤러리 미리보기가 없으면 직접 풀어서 줄임 (HEIC 등)
+                    frameLock.acquire();
+                    try { bmp = decodeSource(android.graphics.ImageDecoder.createSource(ctx.getContentResolver(), v.uri), size); } finally { frameLock.release(); }
+                }
+                jpg = toJpegScaled(bmp);
+                if (jpg == null) { res.error(404, "no thumbnail"); return; }
             }
             f.getParentFile().mkdirs();
             try (FileOutputStream o = new FileOutputStream(f)) { o.write(jpg); }
@@ -1224,40 +1225,132 @@ public class Library implements HttpServer.Handler {
 
     private static final Set<String> WEB_IMAGE = new HashSet<>(java.util.Arrays.asList("jpg", "jpeg", "png", "gif", "webp", "bmp"));
 
+    private final Semaphore fullLock = new Semaphore(1);
+
+    /** 비트맵을 JPEG 로 (HDR·10비트 사진은 일반 색으로 바꾼 뒤). 실패하면 null */
+    static byte[] toJpeg(Bitmap b, int quality) {
+        if (b == null) return null;
+        Bitmap s = b;
+        try {
+            if (b.getConfig() != Bitmap.Config.ARGB_8888) s = b.copy(Bitmap.Config.ARGB_8888, false);
+            if (s == null) return null;
+            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+            boolean ok = s.compress(Bitmap.CompressFormat.JPEG, quality, bo);
+            return ok && bo.size() > 200 ? bo.toByteArray() : null;
+        } catch (Throwable e) {
+            return null;
+        } finally {
+            if (s != null && s != b) s.recycle();
+        }
+    }
+
+    /** 안드로이드 사진 해독기 (HEIC·HEIF·AVIF 포함), 긴 변이 max 를 넘으면 줄임 */
+    static Bitmap decodeSource(android.graphics.ImageDecoder.Source src, int max) {
+        try {
+            return android.graphics.ImageDecoder.decodeBitmap(src, (decoder, info, s) -> {
+                decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE);
+                try { decoder.setTargetColorSpace(android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)); } catch (Throwable ignored) {}
+                int w = info.getSize().getWidth(), h = info.getSize().getHeight(), big = Math.max(w, h);
+                if (big > max) decoder.setTargetSize(Math.max(1, w * max / big), Math.max(1, h * max / big));
+            });
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /** HEIC 는 영상 코덱으로 만든 사진이라, 사진 해독기가 못 풀면 영상 도구로 한 번 더 */
+    static Bitmap decodeHeif(java.io.FileDescriptor fd, String path, int max) {
+        android.media.MediaMetadataRetriever mr = new android.media.MediaMetadataRetriever();
+        try {
+            if (fd != null) mr.setDataSource(fd); else mr.setDataSource(path);
+            Bitmap b;
+            try { b = mr.getPrimaryImage(); } catch (Throwable e) { b = null; }
+            if (b == null) b = mr.getImageAtIndex(0);
+            if (b == null) return null;
+            int w = b.getWidth(), h = b.getHeight(), big = Math.max(w, h);
+            if (big > max) {
+                Bitmap sc = Bitmap.createScaledBitmap(b, w * max / big, h * max / big, true);
+                if (sc != b) { b.recycle(); b = sc; }
+            }
+            return b;
+        } catch (Throwable e) {
+            return null;
+        } finally {
+            try { mr.release(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /** 받은 사진 데이터(MEGA·iCloud)를 어떤 형식이든 JPEG 로 */
+    byte[] bytesToJpeg(byte[] data, int max) {
+        byte[] out = toJpegScaled(decodeSource(android.graphics.ImageDecoder.createSource(java.nio.ByteBuffer.wrap(data)), max));
+        if (out != null) return out;
+        File tmp = new File(ctx.getCacheDir(), "heif-" + Thread.currentThread().getId() + ".tmp");
+        try {
+            try (FileOutputStream o = new FileOutputStream(tmp)) { o.write(data); }
+            return toJpegScaled(decodeHeif(null, tmp.getAbsolutePath(), max));
+        } catch (IOException e) {
+            return null;
+        } finally {
+            tmp.delete();
+        }
+    }
+
+    private static byte[] toJpegScaled(Bitmap b) {
+        byte[] out = toJpeg(b, 88);
+        if (b != null) b.recycle();
+        return out;
+    }
+
+    static boolean webImage(String name, String mime) {
+        String m = mime == null ? "" : mime.toLowerCase(Locale.ROOT);
+        return WEB_IMAGE.contains(ext(name)) && !m.contains("heic") && !m.contains("heif") && !m.contains("avif");
+    }
+
     private void photoFull(Video v, HttpServer.Request r, HttpServer.Response res) throws Exception {
         String mime = v.mime == null ? "image/jpeg" : v.mime;
-        if (v.node != null) { megaStream(v.link, v.node, mime, r, res, "1".equals(r.param("dl"))); return; }
-        String ext = ext(v.name);
-        boolean webOk = WEB_IMAGE.contains(ext) && !mime.contains("heic") && !mime.contains("heif");
-        if (webOk || "1".equals(r.param("dl"))) { media(v, r, res); return; }
+        boolean dl = "1".equals(r.param("dl"));
+        boolean webOk = webImage(v.name, mime);
+        if (v.item != null && (webOk || dl)) { icloudStream(v, r, res, dl); return; }
+        if (v.node != null && (webOk || dl)) { megaStream(v.link, v.node, mime, r, res, dl); return; }
+        if (v.node == null && v.item == null && (webOk || dl)) { media(v, r, res); return; }
         // 웹 화면이 못 보여 주는 형식(HEIC·HEIF·DNG 등)은 JPEG 로 바꿔서 보냄 (한 번 만들면 보관)
-        File f = new File(new File(thumbDir, "photos"), Long.toHexString(v.id) + "-full.jpg");
-        if (!f.exists() || f.length() == 0) {
-            Bitmap bmp = null;
-            frameLock.acquire();   // 큰 사진을 여러 장 동시에 풀면 메모리가 모자라서 한 장씩
+        File f = new File(new File(thumbDir, "photos"), (v.item != null ? "ic-" + v.item.guid : Long.toHexString(v.id)) + "-full2.jpg");
+        if (f.length() == 0) {
+            byte[] jpg = null;
+            fullLock.acquire();   // 큰 사진을 여러 장 동시에 풀면 메모리가 모자라서 한 장씩 (미리보기 만들기와는 따로 줄 섬)
             try {
-                if (f.exists() && f.length() > 0) bmp = null;
-                else {
-                    try {   // 1) 안드로이드 사진 해독기 (HEIC 포함)
-                        bmp = android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(ctx.getContentResolver(), v.uri),
-                                (decoder, info, src) -> {
-                                    decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE);
-                                    int w = info.getSize().getWidth(), h = info.getSize().getHeight(), max = Math.max(w, h);
-                                    if (max > 2560) decoder.setTargetSize(w * 2560 / max, h * 2560 / max);
-                                });
-                    } catch (Throwable e1) {
-                        bmp = null;
+                if (f.length() == 0) {
+                    if (v.item != null || v.node != null) {
+                        byte[] data = null;
+                        try {
+                            if (v.item != null) {
+                                java.net.HttpURLConnection c = ICloud.open(v.album, v.item, v.item.mediaChecksum, null);
+                                try (InputStream in = c.getInputStream()) { data = readAll(in); }
+                            } else if (v.node.size > 0 && v.node.size < 60L * 1024 * 1024) {
+                                try (InputStream in = Mega.open(v.link, v.node, 0, v.node.size - 1)) { data = readAll(in); }
+                            }
+                        } catch (IOException ignored) {}
+                        if (data != null) jpg = bytesToJpeg(data, 2560);
+                    } else {
+                        // 1) 안드로이드 사진 해독기  2) 영상 도구(HEIC)  3) 갤러리가 쓰는 큰 미리보기
+                        jpg = toJpegScaled(decodeSource(android.graphics.ImageDecoder.createSource(ctx.getContentResolver(), v.uri), 2560));
+                        if (jpg == null) {
+                            try (android.os.ParcelFileDescriptor pfd = ctx.getContentResolver().openFileDescriptor(v.uri, "r")) {
+                                if (pfd != null) jpg = toJpegScaled(decodeHeif(pfd.getFileDescriptor(), null, 2560));
+                            } catch (Throwable ignored) {}
+                        }
+                        if (jpg == null) {
+                            Bitmap b = null;
+                            try { b = ctx.getContentResolver().loadThumbnail(v.uri, new Size(2048, 2048), null); } catch (Throwable ignored) {}
+                            jpg = toJpegScaled(b);
+                        }
                     }
-                    if (bmp == null) {   // 2) 갤러리가 쓰는 큰 미리보기 (거의 모든 형식)
-                        try { bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(2048, 2048), null); } catch (Throwable e2) { bmp = null; }
-                    }
-                    if (bmp == null) { res.error(415, "이 사진 형식을 열 수 없습니다"); return; }
+                    if (jpg == null) { res.error(415, "이 사진 형식을 열 수 없습니다"); return; }
                     f.getParentFile().mkdirs();
-                    try (FileOutputStream o = new FileOutputStream(f)) { bmp.compress(Bitmap.CompressFormat.JPEG, 88, o); }
-                    bmp.recycle();
+                    try (FileOutputStream o = new FileOutputStream(f)) { o.write(jpg); }
                 }
             } finally {
-                frameLock.release();
+                fullLock.release();
             }
         }
         res.header("Cache-Control", "max-age=86400");
@@ -1764,8 +1857,8 @@ public class Library implements HttpServer.Handler {
                 v = photoById.get(parseLong(p.length > 2 ? p[2].replace(".jpg", "") : "", -1));
             }
             if (v == null) { res.error(404, "not found"); return; }
-            if (v.item != null) { if (path.startsWith("/photo/")) icloudStream(v, r, res, "1".equals(r.param("dl"))); else icloudThumb(v, r, res); }
-            else if (path.startsWith("/photo/")) photoFull(v, r, res); else photoThumb(v, r, res);
+            if (path.startsWith("/photo/")) photoFull(v, r, res);
+            else if (v.item != null) icloudThumb(v, r, res); else photoThumb(v, r, res);
             return;
         }
         if (path.startsWith("/media/") || path.startsWith("/thumbs/") || path.startsWith("/transcode/")) {
