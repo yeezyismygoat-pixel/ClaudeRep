@@ -1479,3 +1479,74 @@ body.shorts-mode .topbar .tabs a.on .ico { --knock: #fff; }
 /* 전체 화면: 재생 중 잠시 뒤 버튼과 함께 재생 바도 숨김 (화면을 누르면 다시 나옴) */
 .player.vp:fullscreen > .vp-track { transition: opacity .25s ease; }
 .player.vp:fullscreen:not(.ui-on) > .vp-track:not(.dragging) { opacity: 0; pointer-events: none; }
+
+/* ================= 최애 월드컵 ================= */
+.cup { padding-bottom: 110px; }
+.cup-lead { margin: -4px 0 14px; }
+.cup-opts { display: grid; gap: 10px; }
+.cup-opts h3 { margin: 6px 0 0; font-size: 14px; }
+.cup-seg { margin: 0; }
+.cup-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14.5px; padding: 4px 0; }
+.cup-start { width: 100%; height: 52px; border-radius: 16px; font-size: 16px; margin: 16px 0 8px; }
+.cup-hist { margin-top: 18px; }
+.cup-hist h2 { font-size: 17px; margin: 0 0 8px; }
+.cup-hist-item { position: relative; }
+/* 대결 화면 */
+.cup-game { display: flex; flex-direction: column; gap: 10px; min-height: calc(100vh - 40px); min-height: calc(100dvh - 40px); padding-bottom: 20px; }
+.cup-top { display: flex; align-items: center; gap: 10px; }
+.cup-title { flex: 1; text-align: center; font-size: 18px; }
+.cup-title b { font: 700 19px var(--font-head, inherit); }
+.cup-prog { height: 4px; border-radius: 2px; background: var(--panel2); overflow: hidden; }
+.cup-prog i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 2px; transition: width .35s cubic-bezier(.2,.8,.2,1); }
+.cup-arena { flex: 1; display: grid; grid-template-rows: 1fr auto 1fr; gap: 0; min-height: 0; }
+.cup-arena.in .cup-card.a { animation: cupInA .38s cubic-bezier(.2,.8,.2,1) both; }
+.cup-arena.in .cup-card.b { animation: cupInB .38s cubic-bezier(.2,.8,.2,1) .05s both; }
+@keyframes cupInA { from { opacity: 0; transform: translateX(-28px); } }
+@keyframes cupInB { from { opacity: 0; transform: translateX(28px); } }
+.cup-card { display: flex; flex-direction: column; border: 0; padding: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; min-height: 0;
+  background: var(--panel); border-radius: var(--r-lg, 22px); overflow: hidden; box-shadow: var(--soft); transition: transform .3s cubic-bezier(.2,.8,.2,1), opacity .3s ease, box-shadow .3s ease; }
+.cup-card:active { transform: scale(.98); }
+.cup-card.win { transform: scale(1.03); box-shadow: 0 0 0 3px var(--accent), var(--soft); }
+.cup-card.lose { opacity: .25; transform: scale(.94); }
+.cup-media { position: relative; flex: 1; min-height: 120px; background: #000; display: grid; }
+.cup-media > img, .cup-media > video, .cup-media > .noimg { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: cover; display: block; }
+.cup-media > video { object-fit: contain; background: #000; z-index: 1; }
+.cup-media .badge { position: absolute; right: 8px; bottom: 8px; z-index: 2; font-size: 12px; padding: 2px 6px; }
+.cup-pv { position: absolute; left: 8px; bottom: 8px; z-index: 2; width: 38px; height: 38px; border-radius: 19px; border: 0; display: grid; place-items: center;
+  color: #fff; background: rgba(0,0,0,.5); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.cup-pv .ico { width: 18px; height: 18px; }
+.cup-cap { display: grid; gap: 1px; padding: 10px 14px 12px; }
+.cup-cap b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cup-cap .meta { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cup-vs { justify-self: center; margin: -14px 0; z-index: 3; width: 46px; height: 46px; border-radius: 23px; display: grid; place-items: center;
+  background: var(--text); color: var(--bg); font: 800 14px var(--font-head, inherit); letter-spacing: .04em; box-shadow: var(--soft); }
+.cup-banner { position: fixed; left: 50%; top: 42%; z-index: 60; transform: translate(-50%, -50%); padding: 14px 26px; border-radius: 22px;
+  background: var(--accent); color: var(--accent-ink); font: 800 22px var(--font-head, inherit); box-shadow: 0 10px 30px rgba(0,0,0,.25); pointer-events: none; }
+.cup-banner.show { animation: cupBanner 1s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes cupBanner { 0% { opacity: 0; transform: translate(-50%, -50%) scale(.7); } 25% { opacity: 1; transform: translate(-50%, -50%) scale(1.05); } 75% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(.95); } }
+/* 결과 */
+.cup-crown { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 6px 0 12px; font: 800 20px var(--font-head, inherit); color: #C9902C; }
+.cup-crown .ico { width: 30px; height: 30px; --knock: var(--bg); }
+.cup-winner { display: block; width: 100%; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: var(--r-lg, 22px); overflow: hidden;
+  background: var(--panel); box-shadow: 0 0 0 3px #E0B04A, var(--soft); animation: cupWin .6s cubic-bezier(.34,1.5,.5,1) both; }
+@keyframes cupWin { from { transform: scale(.85); opacity: 0; } }
+.cup-winner img, .cup-winner .noimg { display: block; width: 100%; max-height: 52vh; object-fit: cover; background: #000; }
+.cup-wcap { display: grid; padding: 12px 14px 14px; }
+.cup-wcap b { font-size: 17px; }
+.cup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
+.cup-actions .btn { flex: 1 1 auto; justify-content: center; display: inline-flex; align-items: center; }
+.cup-rank { margin-top: 14px; }
+.cup-rank h3 { margin: 0 0 8px; font-size: 15px; }
+.cup-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+@media (min-width: 640px) { .cup-grid { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
+.cup-mini { border: 0; padding: 0; }
+/* 월드컵 대결: 두 칸이 화면 높이를 반씩 나눠 가짐 (사진 비율과 상관없이) */
+.cup-game { height: calc(100vh - 24px); height: calc(100dvh - 24px); min-height: 0 !important; }
+.cup-arena { grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr); }
+.cup-card { min-height: 0; }
+.cup-media { min-height: 0; position: relative; }
+.cup-media > img, .cup-media > video, .cup-media > .noimg { position: absolute; inset: 0; }
+.cup-seg { display: flex; }
+.cup-seg button { flex: 1; justify-content: center; }
+/* 하단 바가 숨은 화면에서는 아래 흐려지는 그라데이션도 숨김 */
+body.nav-hidden:not(.shorts-mode) .topbar::before, body.nav-hidden:not(.shorts-mode) .topbar::after { opacity: 0; }
