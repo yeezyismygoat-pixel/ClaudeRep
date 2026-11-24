@@ -760,7 +760,7 @@ function longPressFav(el, it) {
 
 /** 목록 끝이 화면에 가까워지면 다음 목록을 자동으로 불러옴 (‘더 보기’ 버튼 대신) */
 function autoMore(moreEl, loadNext) {
-  const mark = h("div", { class: "auto-more", "aria-hidden": "true" }, h("i", { class: "spin" }));
+  const mark = h("div", { class: "auto-more", "aria-hidden": "true" }, vvLoader());
   moreEl.replaceChildren(mark);
   const io = new IntersectionObserver((ents) => {
     if (!ents.some((e) => e.isIntersecting)) return;
@@ -843,14 +843,23 @@ function endRestore() {
 /** 화면별 스크롤 위치 기억 (영상을 보고 뒤로 오면 보던 곳에서 이어서) */
 const scrollMemory = {};
 let lastHash = location.hash;
+let routeSeq = 0;
+function routeLoader(on) {
+  let el = document.getElementById("route-loader");
+  if (on && !el) { el = h("div", { id: "route-loader", class: "route-loader" }, vvLoader("불러오는 중…")); document.body.append(el); void el.offsetWidth; }
+  if (el) el.classList.toggle("on", !!on);
+}
 async function route(ev) {
   const nav = ev instanceof HashChangeEvent;
-  if (lastHash && /^#\/(media|photos|explore)?(\?|$)/.test(lastHash)) scrollMemory[lastHash] = { y: window.scrollY, pages: window.__mediaPages || 1, at: Date.now() };
+  if (lastHash && /^#\/(media|photos|explore|comics)?(\?|$)/.test(lastHash)) scrollMemory[lastHash] = { y: window.scrollY, pages: window.__mediaPages || 1, at: Date.now() };
   lastHash = location.hash;
   window.__mediaSwipe = null; window.__mediaSwipeTarget = null;
   stopHoldPreview();
   clearTint();
   const { path, params } = parseHash();
+  // 화면이 조금이라도 늦게 뜨면 가운데에 로딩 아이콘 (빈 화면으로 두지 않음)
+  const mySeq = ++routeSeq;
+  const slowT = setTimeout(() => { if (mySeq === routeSeq) routeLoader(true); }, 180);
   stopPlayer();
   if (pageCleanup) { try { pageCleanup(); } catch (e) {} pageCleanup = null; }
   if (window.__fsCleanup) { try { window.__fsCleanup(); } catch (e) {} window.__fsCleanup = null; }
@@ -896,6 +905,8 @@ async function route(ev) {
   } catch (e) {
     if (e.message !== "login required") $app.replaceChildren(errorView(e));
   } finally {
+    clearTimeout(slowT);
+    if (mySeq === routeSeq) routeLoader(false);
     if (tabSwipePending) finishTabSwipe();   // 밀어서 넘어온 경우 새 화면이 옆에서 들어옴
     else if (window.__tabNav) { const d = window.__tabNav; window.__tabNav = 0; tabIn(d); }
     else if (nav) pageIn();
@@ -2889,7 +2900,7 @@ async function renderSettings(opts = {}) {
           h("a", { href: it.href || `#/settings?section=${it.id}` }, setIcon(it.icon),
             h("div", { class: "set-text" }, h("div", { class: "set-title" }, it.title), h("div", { class: "meta" }, it.sub)),
             h("span", { class: "chev", "aria-hidden": "true" }, ico("next"))))))),
-      h("p", { class: "meta about-line" }, "Velvet 1.0 · 모든 정보는 이 휴대폰 안에만 저장됩니다 (만화는 e-hentai 에서 받아 옵니다)")));
+      h("p", { class: "meta about-line" }, "Velvet 1.1 · 모든 정보는 이 휴대폰 안에만 저장됩니다 (만화는 e-hentai 에서 받아 옵니다)")));
     return;
   }
 

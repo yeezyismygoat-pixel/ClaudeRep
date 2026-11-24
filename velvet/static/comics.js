@@ -1,9 +1,19 @@
 /* Velvet — 만화 탭 (e-hentai 한국어·즐겨찾기·저장, 만화 정보, 만화 보기)
-   app.js 의 h · ico · icon · api · toast · openSheet · autoMore · setTab · route · slideTo 를 씁니다.
-   app.js 보다 먼저 불러오고, 여기서는 함수만 정의합니다. */
+   app.js 의 h · ico · api · toast · openSheet · autoMore · setTab · route · endRestore · scrollMemory · lastHash 를 씁니다.
+   app.js 보다 먼저 불러오고, 여기서는 함수만 정의합니다.
+   화면은 기다리지 않고 바로 그림: 받아 둔 목록이 있으면 그것부터, 없으면 자리(빈 카드)와 로딩 아이콘을 보여 주고 채움. */
 "use strict";
 
 const CX_SEGS = [["ko", "한국어"], ["fav", "즐겨찾기"], ["saved", "저장"]];
+const CX_TTL = 10 * 60 * 1000;   // 받아 둔 목록을 다시 받지 않고 쓰는 시간
+const cxCache = new Map();       // "ko||검색어" · "fav|폴더|검색어" → { items, next, folders, at }
+const cxKnown = new Map();       // gid → 카드로 본 만화 정보 (만화 정보 화면을 바로 그리는 데 씀)
+const cxSegState = {};           // 항목별 마지막 검색어·폴더
+let cxStatus = null;             // { logged_in }
+let cxRecent = null;             // 이어 읽기 목록
+let cxSaved = null;              // 저장 목록
+let cxFavFolders = null;         // 즐겨찾기 폴더 (칩)
+
 const cxThumb = (u) => !u ? "" : u.startsWith("/") ? u : `/eh/thumb?u=${encodeURIComponent(u)}`;
 function cxStore(key, val) {
   try { if (val === undefined) return localStorage.getItem(key); localStorage.setItem(key, val); } catch (e) { return null; }
@@ -12,17 +22,37 @@ function cxStore(key, val) {
 function cxFolderNames() {
   try { return JSON.parse(cxStore("vv-eh-folders") || "{}"); } catch (e) { return {}; }
 }
+function cxForgetFavs() { for (const k of [...cxCache.keys()]) if (k.startsWith("fav|")) cxCache.delete(k); }
 
 /** 로그인되면 앱이 부름: 즐겨찾기로 */
 window.onEhLogin = () => {
+  cxStatus = { logged_in: true };
+  cxForgetFavs();
+  cxSegState.fav = "";
   const to = "#/comics?tab=fav";
   if (location.hash === to) route(); else location.hash = to;
 };
 
+// ---------------------------------------------------------------- 로딩 표시
+/** Velvet 로딩 아이콘: 아치 세 개가 차례로 솟았다 내려앉음 */
+function vvLoader(text) {
+  return h("div", { class: "vv-loader", role: "status", "aria-live": "polite" },
+    h("span", { class: "vv-arches", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
+    text ? h("span", { class: "vv-loader-t" }, text) : null);
+}
+/** 불러오는 동안 카드 자리 */
+function cxSkeleton(n) {
+  return Array.from({ length: n || 6 }, () => h("div", { class: "cx-card skel", "aria-hidden": "true" },
+    h("div", { class: "cx-cover" }), h("i", { class: "sk-line" }), h("i", { class: "sk-line short" })));
+}
+
 // ---------------------------------------------------------------- 조각
 function cxCard(g, extra) {
-  const img = h("img", { src: cxThumb(g.thumb), loading: "lazy", alt: "" });
+  cxKnown.set(g.gid, g);
+  const img = h("img", { loading: "lazy", decoding: "async", alt: "", src: cxThumb(g.thumb) });
   img.onerror = () => (img.hidden = true);
+  img.onload = () => img.classList.add("in");   // 표지는 받아지면 살며시 나타남
+  if (img.complete && img.naturalWidth) img.classList.add("in");
   const pct = g.read_page > 0 ? Math.min(100, (g.read_page / Math.max(1, g.pages)) * 100) : 0;
   return h("a", { class: "cx-card", href: `#/comic?gid=${g.gid}&t=${g.token}` },
     h("div", { class: "cx-cover" }, img,
@@ -54,7 +84,7 @@ function cxLoginPanel() {
   const msg = h("p", { class: "cx-warn" });
   const submit = async (body, btn, m) => {
     btn.disabled = true; m.textContent = "";
-    try { await api("eh/login", { method: "POST", body }); toast("e-hentai 에 로그인했습니다"); route(); }
+    try { await api("eh/login", { method: "POST", body }); toast("e-hentai 에 로그인했습니다"); cxStatus = { logged_in: true }; cxForgetFavs(); route(); }
     catch (e) { m.textContent = e.message; btn.disabled = false; }
   };
   const loginBtn = h("button", { class: "btn primary", onclick: (e) => submit({ user: user.value, pass: pass.value }, e.currentTarget, msg) }, "로그인");
@@ -75,136 +105,251 @@ function cxLoginPanel() {
 }
 
 // ---------------------------------------------------------------- 만화 탭: 한국어 / 즐겨찾기 / 저장
-async function renderComics(params) {
+/** 항목을 바꿀 때는 화면을 새로 그리지 않고 아래 목록만 옆에서 밀려 들어옴 */
+async function renderComics(params0) {
   setTab("comics");
-  const asked = params.get("tab");
-  const tab = CX_SEGS.some(([k]) => k === asked) ? asked : CX_SEGS.some(([k]) => k === cxStore("vv-comics-tab")) ? cxStore("vv-comics-tab") : "ko";
-  cxStore("vv-comics-tab", tab);
-  const idx = CX_SEGS.findIndex(([k]) => k === tab);
-  const goSeg = (k) => { if (k !== tab) slideTo("#/comics?tab=" + k, CX_SEGS.findIndex(([x]) => x === k) > idx ? 1 : -1); };
-  const content = h("div", { class: "cx-content" });
-  // 옆으로 밀면 한국어 ↔ 즐겨찾기 ↔ 저장, 끝에서 더 밀면 옆 탭으로
-  window.__mediaSwipeTarget = (dir) => { const j = idx + dir; return j >= 0 && j < CX_SEGS.length ? content : null; };
-  window.__mediaSwipe = (dir) => { const j = idx + dir; if (j < 0 || j >= CX_SEGS.length) return false; goSeg(CX_SEGS[j][0]); return true; };
-
-  const seg = h("div", { class: "cx-seg", role: "tablist", "aria-label": "만화 목록" },
-    ...CX_SEGS.map(([k, l]) => h("button", { role: "tab", class: k === tab ? "on" : "", "aria-selected": k === tab ? "true" : "false", onclick: () => goSeg(k) }, l)));
-  const gear = h("a", { class: "round-btn cx-headbtn", href: "#/comics/settings", "aria-label": "만화 설정", title: "만화 설정" }, ico("gear"));
-  $app.replaceChildren(h("div", { class: "cx" }, cxHead("만화", "e-hentai", gear), seg, content));
-
-  if (tab === "saved") return cxSaved(content);
-  const isFav = tab === "fav";
-  const st = await api("eh/status").catch(() => ({ logged_in: false }));
-  if (isFav && !st.logged_in) { content.replaceChildren(cxLoginPanel()); return; }
-
-  const favcat = params.get("favcat") || "all", q = params.get("q") || "";
-  const update = (ch) => {
-    const p = new URLSearchParams(params);
-    p.set("tab", tab);
-    for (const [k, v] of Object.entries(ch)) (v == null || v === "") ? p.delete(k) : p.set(k, v);
-    location.hash = "#/comics?" + p;
-  };
-  let t;
-  const search = h("input", { type: "search", class: "cx-search", value: q, enterkeyhint: "search",
-    "aria-label": "만화 검색",
-    placeholder: isFav ? "즐겨찾기에서 검색 (제목, 태그)" : "한국어 만화 검색 (제목, 태그, 작가)",
-    oninput: (e) => { clearTimeout(t); t = setTimeout(() => { typingSearch = true; update({ q: e.target.value }); }, 700); },
-    onkeydown: (e) => { if (e.key === "Enter") { clearTimeout(t); e.target.blur(); update({ q: e.target.value }); } } });
-  const folderChips = h("div", { class: "cx-chips" });
-  const recent = h("div");
-  const grid = h("div", { class: "cx-grid" });
-  const more = h("div");
-  const status = h("div");
-  content.replaceChildren(...[
-    h("label", { class: "cx-search-box" }, ico("search"), search),
-    isFav ? folderChips : null,
-    !isFav && !q ? recent : null,
-    q ? h("p", { class: "meta cx-qline" }, `‘${q}’ 검색 결과`) : null,
-    status, grid, more].filter(Boolean));
-  keepTypingFocus(search);
-
-  if (!isFav && !q) {   // 이어 읽기: 최근 읽은 만화 (인터넷 없이도 보임)
-    api("eh/recent").then((d) => {
-      if (!d.items.length) return;
-      recent.replaceChildren(h("section", { class: "cx-shelf" }, h("h2", {}, "이어 읽기"),
-        h("div", { class: "cx-row" }, d.items.map((g) => cxCard(g)))));
-    }).catch(() => {});
+  let params = new URLSearchParams(params0);
+  const valid = (k) => CX_SEGS.some(([x]) => x === k);
+  if (!valid(params.get("tab"))) {   // 만화 탭 버튼: 마지막으로 보던 항목
+    const last = valid(cxStore("vv-comics-tab")) ? cxStore("vv-comics-tab") : "ko";
+    params = new URLSearchParams(cxSegState[last] || "tab=" + last);
+    params.set("tab", last);
+    history.replaceState(history.state, "", "#/comics?" + params);
+    lastHash = location.hash;
+  }
+  const tabOf = () => params.get("tab");
+  // 처음 한 번만 기다림 (앱 안에서 바로 답하는 것들)
+  if (!cxStatus || !cxRecent) {
+    const [st, rc] = await Promise.all([cxStatus ? cxStatus : api("eh/status").catch(() => ({ logged_in: false })),
+      cxRecent ? { items: cxRecent } : api("eh/recent").catch(() => ({ items: [] }))]);
+    cxStatus = st; cxRecent = rc.items;
   }
 
-  let next = null, first = true;
-  async function load() {
-    const qs = new URLSearchParams();
-    if (isFav) qs.set("favcat", favcat);
-    if (q) qs.set("q", q);
-    if (next) qs.set("next", next);
-    if (first) more.replaceChildren(h("div", { class: "auto-more" }, h("i", { class: "spin" })));
-    let d;
-    try { d = await api((isFav ? "eh/favorites?" : "eh/search?") + qs); }
-    catch (e) {
-      const box = cxError(e.message, () => { box.remove(); load(); });
-      if (first) { more.replaceChildren(); status.replaceChildren(box); } else more.replaceChildren(box);
-      return;
+  const segBtns = CX_SEGS.map(([k, l]) => h("button", { role: "tab", onclick: () => setSeg(k) }, l));
+  const segInd = h("span", { class: "cx-seg-ind", "aria-hidden": "true", style: `--i:${CX_SEGS.findIndex(([k]) => k === tabOf())}` });
+  const seg = h("div", { class: "cx-seg", role: "tablist", "aria-label": "만화 목록" }, segInd, ...segBtns);
+  const gear = h("a", { class: "round-btn cx-headbtn", href: "#/comics/settings", "aria-label": "만화 설정", title: "만화 설정" }, ico("gear"));
+  const content = h("div", { class: "cx-content mcontent" });
+  const root = h("div", { class: "cx" }, cxHead("만화", "e-hentai", gear), seg, content);
+  const alive = () => $app.contains(root);
+  let seq = 0;   // 늦게 도착한 예전 응답은 버림
+  let cur = {};
+
+  function setSeg(k) {
+    const from = CX_SEGS.findIndex(([x]) => x === tabOf()), to = CX_SEGS.findIndex(([x]) => x === k);
+    if (from === to || to < 0) return;
+    cxSegState[tabOf()] = params.toString();
+    const p = new URLSearchParams(cxSegState[k] || "");
+    p.set("tab", k);
+    update(p, to > from ? "left" : "right");
+  }
+  function update(p, anim) {
+    params = p;
+    cxSegState[tabOf()] = params.toString();
+    cxStore("vv-comics-tab", tabOf());
+    history.replaceState(history.state, "", "#/comics?" + params);
+    lastHash = location.hash;
+    window.scrollTo({ top: 0, behavior: "instant" });
+    draw(anim);
+  }
+  // 옆으로 밀면 한국어 ↔ 즐겨찾기 ↔ 저장, 끝에서 더 밀면 옆 탭으로
+  const idxNow = () => CX_SEGS.findIndex(([k]) => k === tabOf());
+  window.__mediaSwipeTarget = (dir) => { const j = idxNow() + dir; return j >= 0 && j < CX_SEGS.length ? content : null; };
+  window.__mediaSwipe = (dir) => { const j = idxNow() + dir; if (j < 0 || j >= CX_SEGS.length) return false; setSeg(CX_SEGS[j][0]); return true; };
+
+  function draw(anim) {
+    const tab = tabOf();
+    segBtns.forEach((b, i) => { const on = CX_SEGS[i][0] === tab; b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
+    segInd.style.setProperty("--i", String(idxNow()));
+    content.classList.remove("in-left", "in-right", "in-fade");
+    content.style.transform = ""; content.style.opacity = ""; content.style.transition = "";
+    if (anim) { void content.offsetWidth; content.classList.add("in-" + anim); }
+    seq++;
+    cur = {};
+    if (tab === "saved") return drawSaved();
+    if (tab === "fav" && !cxStatus.logged_in) { content.replaceChildren(cxLoginPanel()); return; }
+    drawBrowse();
+  }
+
+  function drawBrowse() {
+    const isFav = tabOf() === "fav";
+    let t;
+    const search = h("input", { type: "search", class: "cx-search", value: params.get("q") || "", enterkeyhint: "search", "aria-label": "만화 검색",
+      placeholder: isFav ? "즐겨찾기에서 검색 (제목, 태그)" : "한국어 만화 검색 (제목, 태그, 작가)",
+      oninput: (e) => { clearTimeout(t); t = setTimeout(() => setQuery(e.target.value), 600); },
+      onkeydown: (e) => { if (e.key === "Enter") { clearTimeout(t); e.target.blur(); setQuery(e.target.value); } } });
+    cur = { search, chips: isFav ? h("div", { class: "cx-chips" }) : null, recent: isFav ? null : h("div"), list: h("div", { class: "cx-listbox" }) };
+    content.replaceChildren(...[h("label", { class: "cx-search-box" }, ico("search"), search), cur.chips, cur.recent, cur.list].filter(Boolean));
+    if (cur.chips && cxFavFolders) drawChips();
+    if (cur.recent) drawRecent();
+    drawList();
+  }
+  function setQuery(v) {
+    const p = new URLSearchParams(params);
+    v = (v || "").trim();
+    if (v) p.set("q", v); else p.delete("q");
+    if (p.toString() === params.toString()) return;
+    params = p; cxSegState[tabOf()] = params.toString();
+    history.replaceState(history.state, "", "#/comics?" + params); lastHash = location.hash;
+    drawList(true);
+  }
+  function setFolder(cat) {
+    const p = new URLSearchParams(params);
+    if (cat === "all") p.delete("favcat"); else p.set("favcat", cat);
+    params = p; cxSegState[tabOf()] = params.toString();
+    history.replaceState(history.state, "", "#/comics?" + params); lastHash = location.hash;
+    drawChips(); drawList(true);
+  }
+  function drawChips() {
+    if (!cur.chips || !cxFavFolders) return;
+    const favcat = params.get("favcat") || "all";
+    const total = cxFavFolders.reduce((n, f) => n + f.count, 0);
+    cur.chips.replaceChildren(
+      h("button", { class: "chip" + (favcat === "all" ? " on" : ""), onclick: () => setFolder("all") }, `전체${total ? " " + total : ""}`),
+      ...cxFavFolders.filter((f) => f.count > 0 || f.cat === favcat).map((f) =>
+        h("button", { class: "chip" + (favcat === f.cat ? " on" : ""), onclick: () => setFolder(f.cat) }, `${f.name} ${f.count}`)));
+  }
+  /** 이어 읽기 줄: 받아 둔 것을 바로 보여 주고, 뒤에서 새로 받아 바뀌었으면 고침 */
+  function drawRecent() {
+    const box = cur.recent;
+    const paint = () => {
+      box.hidden = !!params.get("q") || !cxRecent.length;
+      box.replaceChildren(...(cxRecent.length ? [h("section", { class: "cx-shelf" }, h("h2", {}, "이어 읽기"),
+        h("div", { class: "cx-row" }, cxRecent.map((g) => cxCard(g))))] : []));
+    };
+    paint();
+    const sig = JSON.stringify(cxRecent.map((g) => [g.gid, g.read_page]));
+    api("eh/recent").then((d) => {
+      cxRecent = d.items;
+      if (box === cur.recent && alive() && JSON.stringify(cxRecent.map((g) => [g.gid, g.read_page])) !== sig) paint();
+    }).catch(() => {});
+  }
+  function drawList(fade) {
+    const box = cur.list;
+    const isFav = tabOf() === "fav", q = params.get("q") || "", favcat = params.get("favcat") || "all";
+    if (cur.recent) cur.recent.hidden = !!q || !(cxRecent || []).length;
+    const key = [tabOf(), isFav ? favcat : "", q].join("|");
+    const my = ++seq;
+    const qline = q ? h("p", { class: "meta cx-qline" }, `‘${q}’ 검색 결과`) : null;
+    const fetchPage = (next) => {
+      const qs = new URLSearchParams();
+      if (isFav) qs.set("favcat", favcat);
+      if (q) qs.set("q", q);
+      if (next) qs.set("next", next);
+      return api((isFav ? "eh/favorites?" : "eh/search?") + qs);
+    };
+    const paint = (entry) => {
+      if (!entry.items.length) {
+        box.replaceChildren(...[qline, h("div", { class: "empty" }, q ? "검색 결과가 없어요." : isFav ? "즐겨찾기한 만화가 없어요." : "만화를 찾지 못했어요.")].filter(Boolean));
+        return;
+      }
+      const grid = h("div", { class: "cx-grid" }, entry.items.map((g) => cxCard(g)));
+      const more = h("div");
+      box.replaceChildren(...[qline, grid, more].filter(Boolean));
+      const setMore = () => {
+        if (!entry.next) { more.replaceChildren(h("p", { class: "meta cx-end" }, "목록의 끝이에요")); return; }
+        autoMore(more, async () => {
+          try {
+            const d = await fetchPage(entry.next);
+            if (my !== seq || !alive()) return;
+            entry.items.push(...d.items); entry.next = d.next;
+            grid.append(...d.items.map((g) => cxCard(g)));
+            setMore();
+          } catch (e) {
+            if (my !== seq) return;
+            const err = cxError(e.message, () => { err.remove(); setMore(); });
+            more.replaceChildren(err);
+          }
+        });
+      };
+      setMore();
+    };
+    const hit = cxCache.get(key);
+    if (hit && Date.now() - hit.at < CX_TTL) {
+      if (fade) { box.classList.remove("cx-fade"); void box.offsetWidth; box.classList.add("cx-fade"); }
+      paint(hit);
+      return true;
     }
-    if (isFav && d.logged_in === false) {
-      content.replaceChildren(h("p", { class: "cx-warn" }, "로그인이 풀렸어요. 다시 로그인해 주세요."), cxLoginPanel());
-      return;
-    }
-    if (first) {
-      first = false;
-      if (isFav) {
+    box.classList.remove("cx-fade");
+    box.replaceChildren(...[qline, vvLoader(isFav ? "즐겨찾기를 불러오는 중…" : q ? "찾는 중…" : "만화를 불러오는 중…"), h("div", { class: "cx-grid" }, cxSkeleton(6))].filter(Boolean));
+    fetchPage(null).then((d) => {
+      if (my !== seq || !alive()) return;
+      if (isFav && d.logged_in === false) {
+        cxStatus = { logged_in: false };
+        content.replaceChildren(h("p", { class: "cx-warn" }, "로그인이 풀렸어요. 다시 로그인해 주세요."), cxLoginPanel());
+        return;
+      }
+      const entry = { items: d.items, next: d.next, at: Date.now() };
+      cxCache.set(key, entry);
+      if (isFav && d.folders) {
         const names = {};
         d.folders.forEach((f) => (names[f.cat] = f.name));
         cxStore("vv-eh-folders", JSON.stringify(names));
-        const total = d.folders.reduce((n, f) => n + f.count, 0);
-        folderChips.replaceChildren(
-          h("button", { class: "chip" + (favcat === "all" ? " on" : ""), onclick: () => update({ favcat: null }) }, `전체${total ? " " + total : ""}`),
-          ...d.folders.filter((f) => f.count > 0 || f.cat === favcat).map((f) =>
-            h("button", { class: "chip" + (favcat === f.cat ? " on" : ""), onclick: () => update({ favcat: f.cat }) }, `${f.name} ${f.count}`)));
+        cxFavFolders = d.folders;
+        drawChips();
       }
-      if (!d.items.length) {
-        grid.replaceWith(h("div", { class: "empty" }, q ? "검색 결과가 없어요." : isFav ? "즐겨찾기한 만화가 없어요." : "만화를 찾지 못했어요."));
-        more.replaceChildren(); return;
-      }
-    }
-    d.items.forEach((g) => grid.append(cxCard(g)));
-    next = d.next;
-    if (next) autoMore(more, load); else more.replaceChildren(h("p", { class: "meta cx-end" }, "목록의 끝이에요"));
+      void box.offsetWidth; box.classList.add("cx-fade");   // 빈 카드 자리에서 진짜 카드로 살며시
+      paint(entry);
+    }).catch((e) => {
+      if (my !== seq || !alive()) return;
+      box.replaceChildren(...[qline, cxError(e.message, () => drawList())].filter(Boolean));
+    });
+    return false;
   }
-  await load();
-}
 
-/** 저장: 휴대폰에 받아 둔 만화 (인터넷·VPN 없이 읽기) */
-async function cxSaved(content) {
-  const d = await api("eh/saved");
-  const grid = h("div", { class: "cx-grid" });
-  for (const g of d.items) {
-    const stLine = g.done ? h("div", { class: "meta" }, `저장됨 · ${g.pages}쪽`)
-      : g.error ? h("div", { class: "cx-warn" }, `멈춤 ${g.saved_pages}/${g.pages}: ${g.error}`)
-      : h("div", { class: "meta" }, `받는 중 ${g.saved_pages}/${g.pages}`);
-    const btns = h("div", { class: "cx-saved-btns" },
-      !g.done ? h("button", { class: "btn sm", onclick: async (e) => { e.preventDefault(); await api("eh/save", { method: "POST", body: g }); toast("이어서 받아요"); route(); } }, "이어 받기") : null,
-      h("button", { class: "btn sm danger", onclick: async (e) => {
-        e.preventDefault();
-        if (!confirm(`‘${g.title}’ 저장본을 지울까요?`)) return;
-        await api("eh/unsave", { method: "POST", body: { gid: g.gid } }); route();
-      } }, "삭제"));
-    grid.append(h("div", { class: "cx-saved" }, cxCard(g, stLine), btns));
+  /** 저장: 휴대폰에 받아 둔 만화 (인터넷·VPN 없이 읽기) */
+  function drawSaved() {
+    const my = seq;
+    const box = h("div");
+    content.replaceChildren(h("p", { class: "meta cx-lead" }, "휴대폰에 저장한 만화는 인터넷이나 VPN 없이 볼 수 있어요. 만화 정보 화면의 ‘휴대폰에 저장’으로 추가하세요."), box);
+    const paint = (items) => {
+      if (!items.length) { box.replaceChildren(h("div", { class: "empty" }, "저장한 만화가 없어요.")); return; }
+      box.replaceChildren(h("div", { class: "cx-grid" }, items.map((g) => {
+        const stLine = g.done ? h("div", { class: "meta" }, `저장됨 · ${g.pages}쪽`)
+          : g.error ? h("div", { class: "cx-warn" }, `멈춤 ${g.saved_pages}/${g.pages}: ${g.error}`)
+          : h("div", { class: "meta" }, `받는 중 ${g.saved_pages}/${g.pages}`);
+        const btns = h("div", { class: "cx-saved-btns" },
+          !g.done ? h("button", { class: "btn sm", onclick: async (e) => { e.preventDefault(); await api("eh/save", { method: "POST", body: g }); toast("이어서 받아요"); refresh(); } }, "이어 받기") : null,
+          h("button", { class: "btn sm danger", onclick: async (e) => {
+            e.preventDefault();
+            if (!confirm(`‘${g.title}’ 저장본을 지울까요?`)) return;
+            await api("eh/unsave", { method: "POST", body: { gid: g.gid } }); refresh();
+          } }, "삭제"));
+        return h("div", { class: "cx-saved" }, cxCard(g, stLine), btns);
+      })));
+    };
+    const refresh = () => api("eh/saved").then((d) => {
+      const changed = JSON.stringify(d.items) !== JSON.stringify(cxSaved);
+      cxSaved = d.items;
+      if (my === seq && alive() && changed) paint(cxSaved);
+    }).catch((e) => { if (my === seq && alive() && !cxSaved) box.replaceChildren(cxError(e.message, refresh)); });
+    if (cxSaved) paint(cxSaved);
+    else box.replaceChildren(vvLoader("불러오는 중…"));
+    refresh();
   }
-  content.replaceChildren(
-    h("p", { class: "meta cx-lead" }, "휴대폰에 저장한 만화는 인터넷이나 VPN 없이 볼 수 있어요. 만화 정보 화면의 ‘휴대폰에 저장’으로 추가하세요."),
-    d.items.length ? grid : h("div", { class: "empty" }, "저장한 만화가 없어요."));
+
+  $app.replaceChildren(root);
+  draw(null);
+  // 만화 정보에서 뒤로 오면 보던 곳에서 이어서 (목록을 이미 받아 둔 경우)
+  const mem = scrollMemory[location.hash];
+  delete scrollMemory[location.hash];
+  if (mem && mem.y > 0 && !content.querySelector(".vv-loader")) {
+    window.scrollTo({ top: mem.y, behavior: "instant" });
+    requestAnimationFrame(() => { window.scrollTo({ top: mem.y, behavior: "instant" }); endRestore(); });
+  } else endRestore();
 }
 
 // ---------------------------------------------------------------- 만화 설정
 async function renderComicSettings() {
   setTab("comics");
   const st = await api("eh/status").catch(() => ({ logged_in: false }));
+  cxStatus = st;
   const account = st.logged_in
     ? h("div", { class: "panel" }, h("h3", {}, "e-hentai 계정"),
         h("p", {}, "로그인되어 있어요."),
         h("button", { class: "btn danger", onclick: async () => {
           if (!confirm("e-hentai 에서 로그아웃할까요? (이 앱에 저장한 로그인 쿠키를 지웁니다)")) return;
-          await api("eh/logout", { method: "POST" }); toast("로그아웃했어요"); route();
+          await api("eh/logout", { method: "POST" }); cxStatus = { logged_in: false }; cxForgetFavs(); toast("로그아웃했어요"); route();
         } }, "로그아웃"))
     : cxLoginPanel();
   const usage = h("dl", { class: "cx-usage" }, h("dt", {}, "불러오는 중…"));
@@ -254,8 +399,12 @@ function cxPosted(s) {
 /** 미리보기 한 칸. 작은 그림은 여러 장이 붙은 그림에서 잘라서 보여 줌. */
 function cxPreview(it, onOpen) {
   const cell = h("button", { class: "cx-pv", "aria-label": `${it.n}쪽부터 읽기`, onclick: () => onOpen(it.n) });
-  if (it.full) cell.append(h("img", { src: cxThumb(it.url), loading: "lazy", alt: "" }));
-  else {
+  if (it.full) {
+    const img = h("img", { loading: "lazy", decoding: "async", alt: "", src: cxThumb(it.url) });
+    img.onload = () => img.classList.add("in");
+    if (img.complete && img.naturalWidth) img.classList.add("in");
+    cell.append(img);
+  } else {
     const inner = h("div", { class: "cx-pv-in" });
     inner.style.cssText = `width:${it.w}px;height:${it.h}px;background-image:url("${cxThumb(it.url)}");background-position:${it.x}px ${it.y}px`;
     cell.dataset.w = it.w; cell.dataset.h = it.h;
@@ -285,44 +434,51 @@ function cxComment(c) {
     h("div", { class: "cx-cmt-text" }, c.text));
 }
 
-async function renderComic(params) {
+/** 만화 정보: 목록에서 본 정보(표지·제목·쪽수)로 바로 그리고, 자세한 정보(태그·미리보기·댓글)는 받는 대로 채움 */
+function renderComic(params) {
   setTab("comics");
   const gid = +params.get("gid"), token = params.get("t") || "";
-  let g, offline = false;
-  try { g = await api(`eh/gallery?gid=${gid}&t=${token}`); }
-  catch (e) {   // 연결이 안 되어도 저장한 만화면 정보 없이 바로 읽을 수 있게
-    const s = (await api("eh/saved").catch(() => ({ items: [] }))).items.find((x) => x.gid === gid);
-    if (!s) { $app.replaceChildren(h("div", { class: "cx" }, h("button", { class: "cx-back", onclick: () => history.back() }, ico("back"), "뒤로"), cxError(e.message, route))); return; }
-    g = Object.assign({ tags: [], rating: "", posted: "" }, s);
-    offline = true;
-  }
-  if (g.logged_in === false) { location.hash = "#/comics?tab=fav"; return; }
-  let startAt = Math.min(Math.max(1, g.read_page || 1), g.pages);
-  const read = (n) => cxOpenReader(g, n, (last) => {   // 다 읽고 닫으면 화면은 그대로, 읽기 버튼만 새로
-    g.read_page = last;
-    startAt = Math.min(Math.max(1, last), g.pages);
-    drawReadRow();
-  });
+  const known = cxKnown.get(gid);
+  let g = known ? Object.assign({ tags: null, rating: "", posted: "" }, known) : null;
+  let full = false, offline = false, startAt = 1;
+  const read = (n) => {
+    if (!g || !g.pages) return;
+    cxOpenReader(g, n, (last) => {   // 다 읽고 닫으면 화면은 그대로, 읽기 버튼과 목록 카드의 읽은 쪽만 새로
+      g.read_page = last;
+      const k = cxKnown.get(gid); if (k) k.read_page = last;
+      drawRead();
+    });
+  };
 
-  // ---- 위쪽: 표지와 제목
-  const cover = h("img", { src: cxThumb(g.thumb), alt: "" });
+  // ---- 위쪽: 표지와 제목 (표지 그림은 한 번만 만들어 깜빡이지 않게)
+  const cover = h("img", { alt: "", decoding: "async" });
   cover.onerror = () => (cover.hidden = true);
-  const title = h("h1", { class: "cx-ctitle", onclick: () => title.classList.toggle("open") }, g.title_jpn || g.title);
-  const facts = [g.category, `${g.pages}쪽`, g.rating ? `★ ${(+g.rating).toFixed(1)}` : "", g.posted ? new Date(g.posted * 1000).toLocaleDateString("ko-KR") : ""].filter(Boolean);
-  const hero = h("div", { class: "cx-hero" },
-    h("button", { class: "cx-hcover", "aria-label": "읽기", onclick: () => read(startAt) }, cover),
-    h("div", { class: "cx-hmain" },
-      title,
+  cover.onload = () => cover.classList.add("in");
+  const coverBtn = h("button", { class: "cx-hcover", "aria-label": "읽기", onclick: () => read(startAt) }, cover);
+  const hmain = h("div", { class: "cx-hmain" });
+  const heroBox = h("div", { class: "cx-hero" }, coverBtn, hmain);
+  const drawHero = () => {
+    coverBtn.classList.toggle("skel", !g);
+    if (!g) { hmain.replaceChildren(h("i", { class: "sk-line tall" }), h("i", { class: "sk-line" }), h("i", { class: "sk-line short" })); return; }
+    const src = cxThumb(g.thumb);
+    if (src && cover.getAttribute("src") !== src) cover.src = src;
+    const title = h("h1", { class: "cx-ctitle", onclick: () => title.classList.toggle("open") }, g.title_jpn || g.title);
+    const facts = [g.category, g.pages ? `${g.pages}쪽` : "", g.rating ? `★ ${(+g.rating).toFixed(1)}` : "", g.posted ? new Date(g.posted * 1000).toLocaleDateString("ko-KR") : ""].filter(Boolean);
+    hmain.replaceChildren(...[title,
       g.title_jpn && g.title !== g.title_jpn ? h("p", { class: "cx-orig" }, g.title) : null,
       h("div", { class: "cx-facts" }, facts.map((f) => h("span", {}, f))),
-      g.uploader ? h("p", { class: "meta" }, `올린 사람 ${g.uploader}`) : null));
+      g.uploader ? h("p", { class: "meta" }, `올린 사람 ${g.uploader}`) : null].filter(Boolean));
+  };
 
   // ---- 읽기 버튼
   const readRow = h("div", { class: "cx-readrow" });
-  const drawReadRow = () => readRow.replaceChildren(...[
-    h("button", { class: "btn primary cx-readmain", onclick: () => read(startAt) }, g.read_page > 1 ? `이어 읽기 · ${startAt}쪽` : "읽기"),
-    g.read_page > 1 ? h("button", { class: "btn", onclick: () => read(1) }, "처음부터") : null].filter(Boolean));
-  drawReadRow();
+  const drawRead = () => {
+    if (!g || !g.pages) { readRow.replaceChildren(h("button", { class: "btn primary cx-readmain", disabled: true }, "불러오는 중…")); return; }
+    startAt = Math.min(Math.max(1, g.read_page || 1), g.pages);
+    readRow.replaceChildren(...[
+      h("button", { class: "btn primary cx-readmain", onclick: () => read(startAt) }, g.read_page > 1 ? `이어 읽기 · ${startAt}쪽` : "읽기"),
+      g.read_page > 1 ? h("button", { class: "btn", onclick: () => read(1) }, "처음부터") : null].filter(Boolean));
+  };
 
   // ---- 즐겨찾기 · 저장 · 댓글
   const act = (name, label) => h("button", { class: "cx-act" }, cxActIcon(name), h("b", {}, label), h("small", {}, "…"));
@@ -345,8 +501,9 @@ async function renderComic(params) {
     const setFav = async (cat, btn) => {
       btn.disabled = true;
       try {
-        const f = await api("eh/fav", { method: "POST", body: { gid: g.gid, t: g.token, favcat: cat } });
+        const f = await api("eh/fav", { method: "POST", body: { gid, t: token, favcat: cat } });
         drawFav(Object.assign({ logged_in: true }, f));
+        cxForgetFavs();
         toast(cat < 0 ? "즐겨찾기에서 뺐어요" : `‘${f.name || names[cat] || "폴더 " + cat}’에 넣었어요`);
         closeSheet();
       } catch (e) { toast(e.message); btn.disabled = false; }
@@ -360,12 +517,14 @@ async function renderComic(params) {
 
   const drawSave = async () => {
     const d = await api("eh/saved").catch(() => ({ items: [] }));
-    const s = d.items.find((x) => x.gid === g.gid);
+    cxSaved = d.items;
+    const s = d.items.find((x) => x.gid === gid);
     setAct(saveAct, !s ? "저장하기" : s.done ? "저장됨" : s.error ? `멈춤 ${s.saved_pages}/${s.pages}` : `받는 중 ${s.saved_pages}/${s.pages}`, !!s);
     saveAct.onclick = s ? () => (location.hash = "#/comics?tab=saved") : async () => {
+      if (!g || !g.pages) { toast("정보를 불러온 뒤에 저장할 수 있어요"); return; }
       saveAct.disabled = true;
       try {
-        await api("eh/save", { method: "POST", body: { gid: g.gid, token: g.token, title: g.title_jpn || g.title, thumb: g.thumb, pages: g.pages, category: g.category } });
+        await api("eh/save", { method: "POST", body: { gid, token, title: g.title_jpn || g.title, thumb: g.thumb, pages: g.pages, category: g.category } });
         toast("휴대폰에 저장을 시작했어요. 아래 막대에 진행 상황이 나와요.");
       } catch (e) { toast(e.message); }
       saveAct.disabled = false;
@@ -378,29 +537,38 @@ async function renderComic(params) {
   const pvGrid = h("div", { class: "cx-pvgrid" });
   const pvMore = h("div");
   const pvSec = h("section", { class: "cx-sec" }, h("h2", {}, "미리보기"), pvGrid, pvMore);
-  let pvPage = 0, perPage = 0;
+  let pvPage = 0, perPage = 0, pvLoaded = false;
+  const drawPvMore = () => {
+    if (!pvLoaded) return;
+    const pagesOfPv = perPage && g && g.pages ? Math.ceil(g.pages / perPage) : 1;
+    pvMore.replaceChildren(...[pvPage + 1 < pagesOfPv ? h("button", { class: "btn cx-block", onclick: async (e) => {
+      const b = e.currentTarget;
+      b.disabled = true; b.replaceChildren(vvLoader());
+      try { pvPage++; const d = await api(`eh/previews?gid=${gid}&t=${token}&p=${pvPage}`); addPreviews(d.items); }
+      catch (x) { pvPage--; pvMore.replaceChildren(cxError(x.message, drawPvMore)); }
+    } }, "미리보기 더 보기") : null].filter(Boolean));
+  };
   const addPreviews = (items) => {
     items.forEach((it) => pvGrid.append(cxPreview(it, read)));
     requestAnimationFrame(() => cxLayoutPreviews(pvGrid));
-    const pagesOfPv = perPage ? Math.ceil(g.pages / perPage) : 1;
-    pvMore.replaceChildren(...[pvPage + 1 < pagesOfPv ? h("button", { class: "btn cx-block", onclick: async (e) => {
-      e.currentTarget.disabled = true; e.currentTarget.textContent = "불러오는 중…";
-      try { pvPage++; const d = await api(`eh/previews?gid=${g.gid}&t=${g.token}&p=${pvPage}`); addPreviews(d.items); }
-      catch (x) { pvPage--; pvMore.replaceChildren(cxError(x.message, () => addPreviews([]))); }
-    } }, "미리보기 더 보기") : null].filter(Boolean));
+    drawPvMore();
   };
 
   // ---- 태그
-  const groups = {};
-  for (const tag of g.tags || []) {
-    const [ns, name] = tag.includes(":") ? tag.split(/:(.*)/s) : ["misc", tag];
-    (groups[ns] = groups[ns] || []).push(name);
-  }
-  const nsList = Object.keys(groups).sort((a, b) => (CX_NS_ORDER.indexOf(a) + 99) % 99 - (CX_NS_ORDER.indexOf(b) + 99) % 99);
-  const tagSec = nsList.length ? h("section", { class: "cx-sec" }, h("h2", {}, "태그"),
-    h("div", { class: "cx-tags" }, nsList.map((ns) => h("div", { class: "cx-tagrow" },
-      h("span", { class: "cx-ns" }, CX_NS[ns] || ns),
-      h("div", { class: "cx-chips wrap" }, groups[ns].map((n) => h("a", { class: "chip", href: `#/comics?tab=ko&q=${encodeURIComponent(`${ns}:"${n}$"`)}` }, n))))))) : null;
+  const tagBox = h("div");
+  const drawTags = () => {
+    if (!full) { tagBox.replaceChildren(h("section", { class: "cx-sec" }, h("h2", {}, "태그"), h("div", { class: "cx-sk-chips", "aria-hidden": "true" }, h("i"), h("i"), h("i"), h("i")))); return; }
+    const groups = {};
+    for (const tag of g.tags || []) {
+      const [ns, name] = tag.includes(":") ? tag.split(/:(.*)/s) : ["misc", tag];
+      (groups[ns] = groups[ns] || []).push(name);
+    }
+    const nsList = Object.keys(groups).sort((a, b) => (CX_NS_ORDER.indexOf(a) + 99) % 99 - (CX_NS_ORDER.indexOf(b) + 99) % 99);
+    tagBox.replaceChildren(...(nsList.length ? [h("section", { class: "cx-sec cx-fade" }, h("h2", {}, "태그"),
+      h("div", { class: "cx-tags" }, nsList.map((ns) => h("div", { class: "cx-tagrow" },
+        h("span", { class: "cx-ns" }, CX_NS[ns] || ns),
+        h("div", { class: "cx-chips wrap" }, groups[ns].map((n) => h("a", { class: "chip", href: `#/comics?tab=ko&q=${encodeURIComponent(`${ns}:"${n}$"`)}` }, n)))))))] : []));
+  };
 
   // ---- 댓글
   const cmtList = h("div", { class: "cx-cmts" });
@@ -428,7 +596,7 @@ async function renderComic(params) {
       if (text.length < 10) { msg.textContent = "댓글은 10글자 이상이어야 해요"; return; }
       send.disabled = true; msg.textContent = "";
       try {
-        const d = await api("eh/comment", { method: "POST", body: { gid: g.gid, t: g.token, text } });
+        const d = await api("eh/comment", { method: "POST", body: { gid, t: token, text } });
         const mine = d.comments.some((c) => c.text.replace(/\s+/g, " ").includes(text.replace(/\s+/g, " ").slice(0, 20)));
         drawComments(d.comments, true);
         if (mine) { ta.value = ""; toast("댓글을 올렸어요"); }
@@ -439,33 +607,61 @@ async function renderComic(params) {
     cmtWrite.replaceChildren(h("div", { class: "cx-write" }, ta, h("div", { class: "cx-write-foot" }, h("span", { class: "meta" }, "e-hentai 에 내 이름으로 올라가요"), send)), msg);
   };
 
-  $app.replaceChildren(h("div", { class: "cx cx-comic" },
+  const root = h("div", { class: "cx cx-comic" },
     h("button", { class: "cx-back", onclick: () => (history.length > 1 ? history.back() : (location.hash = "#/comics")) }, ico("back"), "뒤로"),
-    hero, readRow,
+    heroBox, readRow,
     h("div", { class: "cx-acts" }, favAct, saveAct, cmtAct),
-    pvSec, tagSec, cmtSec));
+    pvSec, tagBox, cmtSec);
+  const alive = () => $app.contains(root);
+  drawHero(); drawRead(); drawTags();
+  $app.replaceChildren(root);
+
+  let autoRead = params.get("read");
+  const maybeAutoRead = () => { if (autoRead && g && g.pages) { const n = +autoRead || startAt; autoRead = null; read(n); } };
+  maybeAutoRead();
+
+  // 자세한 정보 (인터넷)
+  api(`eh/gallery?gid=${gid}&t=${token}`).then((d) => {
+    if (!alive()) return;
+    if (d.logged_in === false) { location.hash = "#/comics?tab=fav"; return; }
+    g = Object.assign(g || {}, d); full = true;
+    const k = cxKnown.get(gid); if (k) k.read_page = d.read_page;
+    drawHero(); drawRead(); drawTags(); drawPvMore(); maybeAutoRead();
+  }).catch(async (e) => {
+    if (!alive()) return;
+    // 연결이 안 되어도 저장한 만화면 정보 없이 바로 읽을 수 있게
+    const s = (await api("eh/saved").catch(() => ({ items: [] }))).items.find((x) => x.gid === gid);
+    if (!alive()) return;
+    if (!g && s) g = Object.assign({ rating: "", posted: "" }, s);
+    if (!g) { heroBox.replaceWith(cxError(e.message, () => route())); readRow.replaceChildren(); return; }
+    offline = true; full = true; g.tags = g.tags || [];
+    drawHero(); drawRead(); drawTags(); maybeAutoRead();
+  });
 
   // 미리보기·댓글·즐겨찾기 상태는 갤러리 화면 한 번으로 받음
-  const loadDetails = async () => {
+  const loadDetails = () => {
     pvGrid.replaceChildren(...Array.from({ length: 8 }, () => h("div", { class: "cx-pv skel" })));
-    cmtList.replaceChildren(h("p", { class: "meta" }, "불러오는 중…"));
-    try {
-      const d = await api(`eh/details?gid=${g.gid}&t=${g.token}`);
-      perPage = d.per_page; pvGrid.replaceChildren();
+    pvMore.replaceChildren();
+    cmtList.replaceChildren(vvLoader());
+    api(`eh/details?gid=${gid}&t=${token}`).then((d) => {
+      if (!alive()) return;
+      perPage = d.per_page; pvLoaded = true;
+      pvGrid.replaceChildren();
+      pvGrid.classList.add("cx-fade");
       if (d.items.length) addPreviews(d.items); else pvGrid.replaceChildren(h("p", { class: "meta" }, "미리보기가 없어요."));
       drawComments(d.comments, false);
       drawFav(d.logged_in ? Object.assign({ logged_in: true }, d.fav) : { logged_in: false });
       drawWrite(d.logged_in);
-    } catch (e) {
+    }).catch((e) => {
+      if (!alive()) return;
       pvGrid.replaceChildren();
       pvMore.replaceChildren(cxError((offline ? "연결이 안 되어 저장한 정보로 보여 줘요. " : "") + e.message, loadDetails));
       cmtList.replaceChildren(h("p", { class: "meta" }, "댓글을 불러오지 못했어요."));
       setAct(cmtAct, "-", false);
       drawFav(null); favAct.disabled = true; setAct(favAct, "-", false);
-    }
+    });
   };
   loadDetails();
-  if (params.get("read")) read(+params.get("read") || startAt);
 }
 
 // ---------------------------------------------------------------- 만화 보기
@@ -491,6 +687,7 @@ function cxOpenReader(g, start, onClose) {
       .then((t) => (why.textContent = t || "")).catch(() => (why.textContent = "앱에 연결하지 못했어요"));
     return h("div", { class: "cx-rfail" }, h("button", { class: "btn", onclick: (e) => { e.stopPropagation(); retry(); } }, `${n}쪽 불러오기 실패 · 다시 시도`), why);
   };
+  const pageLoader = (n) => h("div", { class: "cx-pload" }, vvLoader(), h("span", { class: "cx-pn" }, `${n}`));
 
   // ---- 세로 스크롤
   const pages = [];
@@ -500,13 +697,12 @@ function cxOpenReader(g, start, onClose) {
     if (!pg || pg.dataset.state) return;
     pg.dataset.state = "loading";
     const img = h("img", { alt: `${i + 1}쪽`, decoding: "async" });
-    img.onload = () => { pg.dataset.state = "done"; pg.classList.add("loaded"); };
-    img.onerror = () => { pg.dataset.state = "failed"; pg.replaceChildren(failView(i + 1, img.src, () => { pg.dataset.state = ""; pg.replaceChildren(h("span", { class: "cx-pn" }, `${i + 1}`)); load(i); })); };
+    img.onload = () => { pg.dataset.state = "done"; pg.classList.add("loaded"); pg.replaceChildren(img); };
+    img.onerror = () => { pg.dataset.state = "failed"; pg.replaceChildren(failView(i + 1, img.src, () => { pg.dataset.state = ""; pg.replaceChildren(pageLoader(i + 1)); load(i); })); };
     img.src = pageUrl(i + 1);
-    pg.replaceChildren(img);
   };
   for (let i = 0; i < g.pages; i++) {
-    const pg = h("div", { class: "cx-rpage", "data-n": i + 1 }, h("span", { class: "cx-pn" }, `${i + 1}`));
+    const pg = h("div", { class: "cx-rpage", "data-n": i + 1 }, pageLoader(i + 1));
     pages.push(pg); list.append(pg);
   }
   const near = new IntersectionObserver((ents) => ents.forEach((e) => e.isIntersecting && load(+e.target.dataset.n - 1)), { rootMargin: "300% 0px" });
@@ -514,15 +710,19 @@ function cxOpenReader(g, start, onClose) {
   const end = h("div", { class: "cx-rend" }, h("p", {}, "마지막 쪽이에요"), h("button", { class: "btn", onclick: () => history.back() }, "닫기"));
   const scrollView = h("div", { class: "cx-rscroll" }, list, end);
 
-  // ---- 한 장씩
+  // ---- 한 장씩: 다음 쪽 그림이 다 받아지면 바꿔 끼움 (그 사이 빈 화면 없이)
   const single = h("div", { class: "cx-rsingle" });
+  let want = 0;
   const showSingle = (n) => {
     if (n < 1) return;
     if (n > g.pages) { toast("마지막 쪽이에요"); return; }
     setCurrent(n);
-    const img = h("img", { alt: `${n}쪽`, src: pageUrl(n) });
-    img.onerror = () => single.replaceChildren(failView(n, img.src, () => showSingle(n)));
-    single.replaceChildren(img);
+    want = n;
+    const img = h("img", { alt: `${n}쪽`, decoding: "async" });
+    const slow = setTimeout(() => { if (want === n) single.append(h("div", { class: "cx-rwait" }, vvLoader())); }, 180);
+    img.onload = () => { clearTimeout(slow); if (want === n) single.replaceChildren(img); };
+    img.onerror = () => { clearTimeout(slow); if (want === n) single.replaceChildren(failView(n, img.src, () => showSingle(n))); };
+    img.src = pageUrl(n);
     for (const k of [n + 1, n + 2]) if (k <= g.pages) new Image().src = pageUrl(k);   // 다음 쪽 미리 받기
   };
   let sx = null, sy = null;
@@ -548,7 +748,9 @@ function cxOpenReader(g, start, onClose) {
 
   const close = () => {
     if (closed) return;
-    closed = true; near.disconnect(); mid.disconnect(); el.remove(); document.body.style.overflow = "";
+    closed = true; near.disconnect(); mid.disconnect(); document.body.style.overflow = "";
+    el.classList.add("out");
+    setTimeout(() => el.remove(), 200);
     immersive(false);
     window.removeEventListener("popstate", onPop); document.removeEventListener("keydown", onKey);
     api("eh/progress", { method: "POST", body: progressBody() }).catch(() => {}).then(() => (onClose ? onClose(current) : route()));
