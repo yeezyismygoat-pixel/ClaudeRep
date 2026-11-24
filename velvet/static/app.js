@@ -2900,7 +2900,7 @@ async function renderSettings(opts = {}) {
           h("a", { href: it.href || `#/settings?section=${it.id}` }, setIcon(it.icon),
             h("div", { class: "set-text" }, h("div", { class: "set-title" }, it.title), h("div", { class: "meta" }, it.sub)),
             h("span", { class: "chev", "aria-hidden": "true" }, ico("next"))))))),
-      h("p", { class: "meta about-line" }, "Velvet 1.1 · 모든 정보는 이 휴대폰 안에만 저장됩니다 (만화는 e-hentai 에서 받아 옵니다)")));
+      h("p", { class: "meta about-line" }, "Velvet 1.2 · 모든 정보는 이 휴대폰 안에만 저장됩니다 (만화는 e-hentai 에서 받아 옵니다)")));
     return;
   }
 

@@ -1,7 +1,7 @@
 /* ================================================================
    Velvet 디자인 — VidShelf 화면 위에 마지막으로 덮는 층
    밤(기본)·낮 두 벌. 장미색은 고른 것, 금색은 진행·숫자, 벨벳색은 큰 면.
-   제목은 세리프(Cormorant Garamond + 고운바탕), 본문은 IBM Plex Sans KR.
+   글꼴은 나눔스퀘어라운드 한 가지 (제목은 가장 굵게).
    ================================================================ */
 :root, :root[data-theme="light"] {
   /* 낮 */
@@ -15,7 +15,7 @@
   --soft-lo: 0 1px 1px rgba(74,20,48,.05), 0 3px 8px rgba(74,20,48,.07);
   --glow: 0 8px 24px rgba(180,35,79,.24);
   --cover-shadow: 0 10px 26px rgba(74,20,48,.22);
-  --font-display: "Cormorant Garamond", "Gowun Batang", "Noto Serif KR", serif;
+  --font-display: "Velvet Round", "NanumSquareRound", "Noto Sans KR", system-ui, sans-serif;
   /* 설정 아이콘 칸 */
   --t1: #F7DCE4; --i1: #B4234F; --t2: #F7DCE4; --i2: #8E1F45; --t3: #F3E6CF; --i3: #8A5A12; --t4: #F3E6CF; --i4: #8A5A12; --t5: #EADCE6; --i5: #4A1430;
   color-scheme: light;
@@ -35,12 +35,17 @@
   --t1: #3D1A2A; --i1: #F07A9A; --t2: #3D1A2A; --i2: #FF9DB6; --t3: #3A2A1A; --i3: #E2B970; --t4: #3A2A1A; --i4: #E2B970; --t5: #34202C; --i5: #D9B8C8;
   color-scheme: dark;
 }
-html, body { background: var(--bg); }
+/* 글꼴: 나눔스퀘어라운드 (획 끝이 둥근 부드러운 고딕). 앱 안에 넣어 두어 인터넷 없이도 바로 보임 */
+@font-face { font-family: "Velvet Round"; src: url("/fonts/NanumSquareRoundR.woff2") format("woff2"); font-weight: 100 500; font-display: block; }
+@font-face { font-family: "Velvet Round"; src: url("/fonts/NanumSquareRoundB.woff2") format("woff2"); font-weight: 600 700; font-display: block; }
+@font-face { font-family: "Velvet Round"; src: url("/fonts/NanumSquareRoundEB.woff2") format("woff2"); font-weight: 800 900; font-display: block; }
+:root { --font-text: "Velvet Round", "NanumSquareRound", "Noto Sans KR", system-ui, sans-serif; }
+html, body { background: var(--bg); font-family: var(--font-text); letter-spacing: -0.005em; }
 ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
 
-/* ---- 제목: 세리프 */
+/* ---- 제목: 같은 둥근 글꼴의 가장 굵은 굵기 */
 .home-head h1, .cx-head h1, .sheet-head h2, .cx-ctitle, .login h3 {
-  font-family: var(--font-display); font-weight: 700; letter-spacing: -0.01em; }
+  font-family: var(--font-display); font-weight: 800; letter-spacing: -0.02em; }
 .home-head h1 { font-size: 34px; line-height: 40px; margin: 0; }
 .home-head .meta { margin-top: 2px; }
 .shelf-head h2, .set-group-title { font-weight: 600; }

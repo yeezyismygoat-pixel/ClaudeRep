@@ -7,9 +7,19 @@ on:
       - "velvet/**"
       - ".github/workflows/velvet-apk.yml"
   workflow_dispatch:
+    inputs:
+      allow_new_key:
+        description: "서명 키가 지금 올라가 있는 앱과 달라도 올리기 (휴대폰에서 지우고 다시 설치해야 함)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+
+# 두 빌드가 동시에 돌면 서로 다른 서명 키를 만들 수 있으므로 한 번에 하나씩
+concurrency:
+  group: velvet-apk
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -54,6 +64,29 @@ jobs:
               -alias velvet -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=Velvet"
           fi
           keytool -list -v -keystore ~/velvet-signing/velvet.jks -storepass velvet | grep -m1 SHA256
+
+      # 올라가 있는 Velvet.apk 와 서명 키가 다르면 휴대폰에서 업데이트가 안 되므로 올리지 않음
+      - name: Check signing key matches the published app
+        env:
+          ALLOW_NEW_KEY: ${{ inputs.allow_new_key }}
+        run: |
+          new=$(keytool -list -v -keystore ~/velvet-signing/velvet.jks -storepass velvet | grep -m1 'SHA256:' | sed 's/.*SHA256: //' | tr -d ': ' | tr 'A-F' 'a-f')
+          if curl -fsSL -o /tmp/published.apk "https://github.com/${{ github.repository }}/releases/download/velvet-apk/Velvet.apk"; then
+            bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+            old=$("$bt/apksigner" verify --print-certs /tmp/published.apk | grep -m1 'SHA-256 digest' | sed 's/.*: //' | tr -d ' ')
+            echo "올라가 있는 앱의 키: $old"
+            echo "이번 빌드의 키:     $new"
+            if [ -n "$old" ] && [ "$old" != "$new" ]; then
+              if [ "$ALLOW_NEW_KEY" = "true" ]; then
+                echo "::warning::서명 키가 바뀐 버전을 올립니다. 휴대폰에서 이전 앱을 지우고 설치해야 합니다."
+              else
+                echo "::error::서명 키가 지금 올라가 있는 Velvet.apk 와 다릅니다. 이대로 올리면 휴대폰에서 업데이트가 안 되므로 멈춥니다."
+                exit 1
+              fi
+            fi
+          else
+            echo "올라가 있는 앱이 없어 비교하지 않습니다."
+          fi
 
       - name: Build APK
         working-directory: velvet/android
