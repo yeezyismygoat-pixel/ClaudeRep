@@ -1,0 +1,95 @@
+name: VidVault APK
+
+on:
+  push:
+    branches: [vidvault]
+    paths:
+      - "vidvault/**"
+      - ".github/workflows/vidvault-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      # 매번 같은 서명 키를 써야 새 버전을 덮어 설치할 수 있음. VidShelf 와 같은 키여도 패키지(app.vidvault)가 달라 따로 설치됨.
+      # 저장소 비밀값(Secret) VIDSHELF_KEYSTORE_B64 가 있으면 그 키를 씀 (영구).
+      # 없으면 Actions 캐시의 키를 씀 (7일 넘게 빌드가 없으면 사라질 수 있음).
+      - name: Restore signing key (cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/vidshelf-signing
+          key: vidvault-signing-v1
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.VIDSHELF_KEYSTORE_B64 }}
+        run: |
+          mkdir -p ~/vidshelf-signing
+          used_secret=no
+          if [ -n "$KEYSTORE_B64" ]; then
+            # 비밀값을 풀어 보고, 열리지 않으면 무엇이 다른지 알려 준 뒤 이전(캐시) 키로 계속 빌드
+            printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n\t' | base64 -d > /tmp/secret.jks 2>/tmp/b64err || true
+            echo "비밀값 글자 수(공백 제외): $(printf '%s' "$KEYSTORE_B64" | tr -d ' \r\n\t' | wc -c) / 기대값 3432"
+            echo "풀어낸 키 파일 크기: $(wc -c < /tmp/secret.jks) / 기대값 2572"
+            echo "풀어낸 키 지문: $(sha256sum /tmp/secret.jks | cut -c1-16)… / 기대값 47358fa11eae789a…"
+            if keytool -list -keystore /tmp/secret.jks -storepass vidshelf >/dev/null 2>&1; then
+              cp /tmp/secret.jks ~/vidshelf-signing/vidshelf.jks
+              used_secret=yes
+              echo "서명 키: 저장소 비밀값(VIDSHELF_KEYSTORE_B64) 사용"
+            else
+              echo "::warning::VIDSHELF_KEYSTORE_B64 비밀값으로 키를 열 수 없습니다. 파일 내용을 처음부터 끝까지 빠짐없이 붙여 넣었는지 확인하세요. 이번 빌드는 이전 키로 만듭니다."
+            fi
+          fi
+          if [ "$used_secret" = yes ]; then
+            :
+          elif [ -f ~/vidshelf-signing/vidshelf.jks ]; then
+            echo "서명 키: Actions 캐시의 키 사용"
+          else
+            echo "::warning::서명 키가 없어 새로 만듭니다. 이 버전은 이전 앱을 지우고 설치해야 합니다."
+            keytool -genkeypair -keystore ~/vidshelf-signing/vidshelf.jks -storepass vidshelf -keypass vidshelf \
+              -alias vidshelf -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=VidShelf"
+          fi
+          keytool -list -v -keystore ~/vidshelf-signing/vidshelf.jks -storepass vidshelf | grep -m1 SHA256
+
+      - name: Build APK
+        working-directory: vidvault/android
+        run: VIDVAULT_KEYSTORE=$HOME/vidshelf-signing/vidshelf.jks gradle --no-daemon assembleDebug bundleRelease
+
+      - name: Rename
+        run: |
+          cp vidvault/android/app/build/outputs/apk/debug/app-debug.apk VidVault.apk
+          # 묶음 파일 (AAB, 보관용 — 이 앱은 플레이스토어에 올리지 않음)
+          cp vidvault/android/app/build/outputs/bundle/release/app-release.aab VidVault.aab
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VidVault-apk
+          path: |
+            VidVault.apk
+            VidVault.aab
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: vidvault-apk
+          name: VidVault APK
+          body: "VidVault (개인용 성인 보관함) · 폰에 바로 설치: VidVault.apk · VidShelf 와 따로 설치됩니다"
+          files: |
+            VidVault.apk
+            VidVault.aab
+          make_latest: false

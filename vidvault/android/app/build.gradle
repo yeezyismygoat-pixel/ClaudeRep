@@ -1,0 +1,60 @@
+plugins {
+    id "com.android.application"
+}
+
+// CI 에서 고정된 서명 키를 쓰면 새 버전을 덮어 설치할 수 있음 (VIDVAULT_KEYSTORE 가 없으면 기본 디버그 키; VidShelf 와 같은 키 파일을 써도 패키지가 달라 따로 설치됨)
+def stableKeystore = System.getenv("VIDVAULT_KEYSTORE")
+
+android {
+    namespace "app.vidvault"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "app.vidvault"
+        minSdk 29
+        targetSdk 35   // 안드로이드 15
+        versionCode 1
+        versionName "1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // 웹 화면은 vidvault/static 을 그대로 사용
+    sourceSets {
+        main.assets.srcDirs += ["../../static"]
+    }
+
+    signingConfigs {
+        if (stableKeystore) {
+            stable {
+                storeFile file(stableKeystore)
+                storePassword "vidshelf"
+                keyAlias "vidshelf"
+                keyPassword "vidshelf"
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            if (stableKeystore) signingConfig signingConfigs.stable
+        }
+        // 묶음 파일(AAB, 개인 보관용 — 이 앱은 플레이스토어에 올리지 않음). 웹 화면과 이어지는 코드가 이름으로 불리므로 코드 줄이기(난독화)는 쓰지 않음
+        release {
+            minifyEnabled false
+            shrinkResources false
+            if (stableKeystore) signingConfig signingConfigs.stable
+        }
+    }
+    lint { abortOnError false }
+}
+
+dependencies {
+    // 웹 화면에서 재생할 수 없는 형식(MKV, HEVC 등)을 위한 앱 내장 플레이어
+    implementation "androidx.media3:media3-exoplayer:1.4.1"
+    implementation "androidx.media3:media3-ui:1.4.1"
+}

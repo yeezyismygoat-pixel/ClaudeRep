@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 앱 아이콘 앞면: 겹쳐 쌓인 영상 카드(선반) + 분홍 재생 버튼 (VidVault). 108 격자, 가운데 66 안에 그림 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group android:pivotX="54" android:pivotY="54" android:scaleX="0.86" android:scaleY="0.86" android:translateY="1">
+        <path android:fillColor="#F4F2EE" android:fillAlpha="0.28"
+            android:pathData="M42,28h24a5,5 0,0 1,5 5v8h-34v-8a5,5 0,0 1,5 -5z"/>
+        <path android:fillColor="#F4F2EE" android:fillAlpha="0.55"
+            android:pathData="M37,34h34a5,5 0,0 1,5 5v8h-44v-8a5,5 0,0 1,5 -5z"/>
+        <path android:fillColor="#F4F2EE"
+            android:pathData="M34,41h40a7,7 0,0 1,7 7v24a7,7 0,0 1,-7 7h-40a7,7 0,0 1,-7 -7v-24a7,7 0,0 1,7 -7z"/>
+<group android:translateX="-2" android:translateY="1">
+                    <path android:fillColor="#F0619A"
+                android:pathData="M49.5,51.2c0,-1.6 1.7,-2.6 3.1,-1.8l11.2,6.8c1.3,0.8 1.3,2.8 0,3.6l-11.2,6.8c-1.4,0.8 -3.1,-0.2 -3.1,-1.8z"/>
+        </group>
+    </group>
+</vector>
