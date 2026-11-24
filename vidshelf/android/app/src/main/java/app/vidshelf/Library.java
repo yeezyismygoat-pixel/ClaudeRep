@@ -108,6 +108,7 @@ public class Library implements HttpServer.Handler {
         storeFile = new File(ctx.getFilesDir(), "library.json");
         thumbDir = new File(ctx.getCacheDir(), "thumbs");
         load();
+        if (!CLOUD) return;   // 클라우드(MEGA·iCloud) 기능은 뺐음: 링크를 불러오지 않고 인터넷에 연결하지 않음
         JSONArray links = settings().optJSONArray("mega_links");
         for (int i = 0; links != null && i < links.length(); i++) {
             try { megaLinks.add(Mega.parse(links.optString(i))); } catch (Exception ignored) {}
@@ -124,6 +125,9 @@ public class Library implements HttpServer.Handler {
         }, 15, 15, java.util.concurrent.TimeUnit.MINUTES);
     }
 
+    /** 클라우드(MEGA·iCloud) 기능 사용 여부. 뺐으므로 false */
+    static final boolean CLOUD = false;
+
     private final java.util.concurrent.ScheduledExecutorService bg = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
     private volatile long lastMegaRefresh = 0;
 
@@ -132,6 +136,7 @@ public class Library implements HttpServer.Handler {
     // ------------------------------------------------------------------ MEGA
     /** 모든 MEGA 링크의 파일 목록을 다시 받습니다 (네트워크 작업, 잠금 밖에서 실행). */
     public void refreshMega() {
+        if (!CLOUD) return;
         List<Mega.Link> links;
         synchronized (this) { links = new ArrayList<>(megaLinks); }
         lastMegaRefresh = System.currentTimeMillis();
@@ -1814,7 +1819,7 @@ public class Library implements HttpServer.Handler {
                 .put("password_set", passwordSet()).put("data_dir", "앱 내부 저장소")
                 .put("ffmpeg", false).put("ffprobe", false).put("platform", "android")
                 .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
-                .put("mega_supported", true).put("mega", megaJson()).put("icloud", icloudJson())
+                .put("mega_supported", CLOUD).put("mega", megaJson()).put("icloud", icloudJson())
                 .put("server", serverJson()).put("performer_info", true).put("photos", true)
                 .put("fav_sync", android.os.Build.VERSION.SDK_INT >= 30).put("manage_media", canManageMedia(ctx))
                 .put("manage_media_supported", android.os.Build.VERSION.SDK_INT >= 31)
@@ -2225,6 +2230,7 @@ public class Library implements HttpServer.Handler {
             }
         }
 
+        if (!CLOUD && (p0.equals("icloud") || p0.equals("mega"))) { res.error(404, "클라우드 기능이 없습니다"); return; }
         if (p0.equals("icloud")) {
             if (parts.length == 1 && m.equals("GET")) { res.json(200, icloudJson().toString()); return; }
             if (parts.length == 1 && m.equals("POST")) {

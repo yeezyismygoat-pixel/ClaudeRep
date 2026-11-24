@@ -776,9 +776,7 @@ async function pollStatus() {
     const s = await api("status");
     const bar = document.getElementById("jobbar");
     const busy = s.scanning || s.thumb_pending > 0;
-    const quota = megaQuotaText(s);
-    bar.hidden = !busy && !quota;
-    if (!busy && quota) bar.replaceChildren(h("span", { class: "warn" }, ico("warn", "in"), quota));
+    bar.hidden = !busy;
     if (busy) {
       const txt = s.scanning
         ? (s.scan_found || s.scan_new ? `스캔 중… ${s.scan_found}개 발견, 새 영상 ${s.scan_new}개 · ${s.scan_current || ""}` : (s.scan_current || "작업 중…"))
@@ -874,9 +872,7 @@ async function route(ev) {
     if (path === "/performers") { location.replace("#/explore"); return; }
     if (path === "/performer") return await renderPerformer(+params.get("id"));
     if (path === "/settings") return await renderSettings({ section: params.get("section") });
-    if (path === "/mega") return await renderMega(params);
-    if (path === "/cloud") return await renderCloud();
-    if (path === "/icloud") return await renderICloudAlbum(+params.get("a") || 0);
+    if (path === "/mega" || path === "/cloud" || path === "/icloud" || path === "/cup") { location.replace("#/library"); return; }   // 뺀 기능 (클라우드 · 최애 월드컵)
     if (path === "/photos") return await renderMedia(params, "photo");
     if (path === "/shorts") return await renderShorts(params);
     if (path === "/library") return await renderLibraryHub();
@@ -884,7 +880,6 @@ async function route(ev) {
     if (path === "/explore") return await renderExplore(params);
     if (path === "/search") return await renderSearch(params);
     if (path === "/setup") return await renderSetup();
-    if (path === "/cup") return await renderCup(params);
     if (path === "/media") return await renderMedia(params, params.get("type") || "all");
     if (path === "/duplicates") return await renderDuplicates();
     if (path === "/hidden") return await renderHidden();
@@ -2458,10 +2453,7 @@ async function renderVideo(id, params) {
     playNative(v, currentTime());
   };
   video.addEventListener("error", () => {
-    if (mode === "direct" && video.error && (v.source === "mega" || v.source === "icloud")) {
-      api("status").then((st) => { const q = megaQuotaText(st); if (q) toast(q); else goNative("재생하지 못했습니다. 지원하지 않는 형식이거나 연결 문제입니다."); })
-        .catch(() => goNative("재생하지 못했습니다."));
-    } else if (mode === "direct" && video.error && !canTranscode) {
+    if (mode === "direct" && video.error && !canTranscode) {
       goNative("이 영상 형식은 브라우저에서 재생할 수 없습니다");
     } else if (mode === "direct" && video.error) {
       toast("이 형식은 바로 재생할 수 없어 호환 모드로 전환합니다");
@@ -2855,13 +2847,11 @@ async function renderSettings(opts = {}) {
   const [st, status] = await Promise.all([api("settings"), api("status")]);
   const c = status.counts || {};
   const themeName = { system: "시스템 설정", light: "라이트", dark: "다크" }[themePref()] || "시스템 설정";
-  const nCloud = (st.mega || []).length + (st.icloud || []).length;
 
   const SECTIONS = [
     { group: "일반", items: [
       { id: "display", icon: "display", title: "화면과 재생", sub: `${themeName} · 연속 재생 ${autoNextOn() ? "켬" : "끔"}` },
       { id: "library", icon: "folder", title: "라이브러리와 미디어 폴더", sub: `영상 ${(c.total || 0).toLocaleString()}개 · ${st.library_all ? "휴대폰 전체" : `폴더 ${st.library_paths.length}개`}` },
-      st.mega_supported ? { id: "cloud", icon: "cloud", title: "클라우드", sub: nCloud ? `MEGA ${(st.mega || []).length} · iCloud ${(st.icloud || []).length}` : "연결된 곳 없음" } : null,
       st.fav_sync !== undefined ? { id: "favorites", icon: "heart", title: "즐겨찾기 연동", sub: st.fav_sync ? (st.manage_media ? "갤러리와 연동 · 바로 반영" : "갤러리와 연동") : "앱 안에서만" } : null,
     ] },
     { group: "관리", items: [
@@ -2874,10 +2864,8 @@ async function renderSettings(opts = {}) {
 
   // ---- 첫 화면: 항목 목록
   if (!section) {
-    const quota = megaQuotaText(status);
     $app.replaceChildren(h("div", { class: "settings" },
       h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "VidShelf"), h("h1", {}, "설정"))),
-      quota ? h("a", { class: "panel warn set-alert", href: "#/settings?section=cloud" }, ico("warn", "in"), quota) : null,
       ...SECTIONS.map((g) => h("section", { class: "set-group" },
         h("h2", { class: "set-group-title" }, g.group),
         h("div", { class: "lib-list set-list" }, g.items.filter(Boolean).map((it) =>
@@ -2904,10 +2892,6 @@ async function renderSettings(opts = {}) {
   }
   if (section === "favorites") return page(favSyncPanel(st));
   if (section === "backup") return page(backupPanel());
-  if (section === "cloud") {
-    const quota = megaQuotaText(status);
-    return page(quota ? h("div", { class: "panel warn", style: "font-size:14px" }, quota) : null, cloudPanel(st));
-  }
 
   if (section === "library") {
     const paths = st.library_paths.map((p) => p.path);
@@ -2953,7 +2937,7 @@ async function renderSettings(opts = {}) {
         h("button", { class: "btn sm", disabled: !c.missing, onclick: async () => {
           const r = await api("cleanup", { method: "POST" }); toast(`${r.removed}개를 정리했습니다`); reload();
         } }, "지우기")),
-      st.duplicates ? row("중복 영상·사진", "기기와 클라우드, 여러 폴더에 같은 영상·사진이 있는지 찾기", h("a", { class: "btn sm", href: "#/duplicates" }, "찾기")) : null,
+      st.duplicates ? row("중복 영상·사진", "여러 폴더에 같은 영상·사진이 있는지 찾기", h("a", { class: "btn sm", href: "#/duplicates" }, "찾기")) : null,
       st.hidden_count !== undefined ? row("숨긴 영상", `${st.hidden_count}개 · 라이브러리에서 제거했거나 중복이라 숨긴 영상`, h("a", { class: "btn sm", href: "#/hidden" }, "보기")) : null));
   }
 
@@ -3038,7 +3022,7 @@ async function renderPerformer(id) {
       h("div", { class: "row", style: "justify-content:space-between;flex-wrap:nowrap;align-items:flex-start" },
         h("h2", { class: "pf-name" }, p.name), editBtn),
       counts,
-      h("div", { class: "row", style: "margin:8px 0 2px" }, shuffleBtn, h("a", { class: "btn sm", href: `#/cup?performer=${id}` }, ico("trophy", "in"), "월드컵")),
+      h("div", { class: "row", style: "margin:8px 0 2px" }, shuffleBtn),
       facts.length ? h("dl", { class: "info pf-facts" }, ...facts.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)]))
         : hasInfo ? h("p", { class: "meta" }, "등록된 정보가 없습니다. ‘수정’에서 직접 입력할 수 있습니다.") : null,
       null));
@@ -3163,173 +3147,6 @@ async function renderPerformer(id) {
 }
 
 // ---------------------------------------------------------------- 앱 서버 (안드로이드)
-// ---------------------------------------------------------------- MEGA
-/** 클라우드 링크 (MEGA 폴더 · iCloud 공유 앨범) — 입력칸 하나, 링크를 보고 알아서 구분 */
-function cloudPanel(st) {
-  const mega = st.mega || [], icloud = st.icloud || [];
-  const input = h("input", { type: "text", placeholder: "MEGA 폴더 또는 iCloud 공유 앨범 링크", autocomplete: "off", "aria-label": "클라우드 링크" });
-  const msg = h("p", { class: "meta" });
-  const kindOf = (url) => /mega\.(nz|co\.nz)\//i.test(url) ? "mega" : /icloud\.com\/sharedalbum/i.test(url) ? "icloud" : null;
-  const add = async (btn) => {
-    const url = input.value.trim();
-    if (!url) return;
-    const kind = kindOf(url);
-    if (!kind) { msg.textContent = "MEGA 폴더 링크(https://mega.nz/folder/…#…)나 iCloud 공유 앨범 링크(https://www.icloud.com/sharedalbum/#…)만 추가할 수 있습니다."; return; }
-    btn.disabled = true; msg.textContent = kind === "mega" ? "MEGA 폴더를 불러오는 중…" : "iCloud 앨범을 불러오는 중…";
-    try {
-      await api(kind, { method: "POST", body: { url } });
-      toast(kind === "mega" ? "MEGA 폴더를 추가했습니다" : "iCloud 앨범을 추가했습니다");
-      renderSettings();
-    } catch (e) { msg.textContent = e.message; btn.disabled = false; }
-  };
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(addBtn); } });
-  const addBtn = h("button", { class: "btn primary", onclick: (e) => add(e.currentTarget) }, "추가");
-  const item = (kind, l, sub, open, del) => h("li", {},
-    h("span", { class: "p" }, h("span", { class: "src-badge " + kind }, kind === "mega" ? "MEGA" : "iCloud"), " " + l.name,
-      h("div", { class: "meta" }, sub), l.error ? h("div", { class: "warn" }, l.error) : null),
-    h("a", { class: "btn sm", href: open }, "열기"),
-    h("button", { class: "btn sm danger", onclick: async () => {
-      if (!confirm(`‘${l.name}’ 연결을 끊을까요? (클라우드의 파일은 그대로입니다)`)) return;
-      await api(del, { method: "DELETE" }); renderSettings();
-    } }, "제거"));
-  const rows = [
-    ...mega.map((l) => item("mega", l, `파일 ${l.files}개 · 영상 ${l.videos}개`, `#/mega?link=${l.index}`, `mega/${l.index}`)),
-    ...icloud.map((a) => item("icloud", a, `사진 ${a.photos}장 · 영상 ${a.videos}개`, `#/icloud?a=${a.index}`, `icloud/${a.index}`)),
-  ];
-  return h("div", { class: "panel", id: "cloud-settings" }, h("h3", {}, "클라우드 (MEGA · iCloud)"),
-    h("p", { class: "meta" }, "링크를 붙여넣으면 MEGA 인지 iCloud 인지 알아서 구분해 추가합니다."),
-    h("ul", { class: "pathlist" }, rows.length ? rows : h("li", { class: "meta" }, "연결된 클라우드가 없습니다.")),
-    h("div", { class: "taginput" }, input, addBtn),
-    msg,
-    h("details", { class: "cloud-help" }, h("summary", {}, "링크 만드는 방법"),
-      h("p", { class: "meta" }, "MEGA: 앱이나 웹에서 폴더 → 공유 → 링크 복사. 링크에 열쇠(# 뒤 부분)가 있어야 합니다."),
-      h("p", { class: "meta" }, "iCloud: 아이폰 사진 앱 → 앨범 → 공유 앨범 → 사람 아이콘 → ‘공개 웹사이트’ 켜기 → 링크 복사. iCloud Drive 와 일반 사진 보관함은 로그인이 필요해서 지원하지 않습니다.")),
-    rows.length ? h("a", { class: "btn", href: "#/cloud", style: "margin-top:8px;display:inline-block" }, ico("cloud", "in"), "클라우드 파일 보기") : null,
-    mega.length && st.mega_thumbs !== undefined ? megaThumbToggle(st) : null,
-    rows.length && st.mega_refresh_hours !== undefined ? megaRefreshSelect(st) : null,
-    rows.length ? h("button", { class: "btn sm", style: "margin-top:8px", onclick: async (e) => {
-      e.currentTarget.disabled = true; await api("mega/refresh", { method: "POST" }); toast("클라우드 목록을 새로 받았습니다"); renderSettings();
-    } }, "클라우드 목록 새로고침") : null);
-}
-
-function megaRefreshSelect(st) {
-  const sel = h("select", { "aria-label": "MEGA 자동 새로고침 간격", onchange: async () => {
-    await api("settings", { method: "PUT", body: { mega_refresh_hours: +sel.value } }); toast("저장했습니다");
-  } }, [[0, "끄기"], [1, "1시간마다"], [3, "3시간마다"], [6, "6시간마다"], [12, "12시간마다"], [24, "하루마다"]].map(([v, l]) =>
-    h("option", { value: v, selected: v === st.mega_refresh_hours }, l)));
-  return h("div", { class: "row", style: "margin-top:12px" }, h("span", {}, "목록 자동 새로고침"), sel,
-    st.mega_last_refresh ? h("span", { class: "meta" }, `마지막: ${fmtDate(st.mega_last_refresh)}`) : null);
-}
-
-/** MEGA 전송량 한도 안내 문구 (한도에 걸리지 않았으면 null) */
-function megaQuotaText(s) {
-  if (!s || !s.mega_quota_hit) return null;
-  if (s.mega_quota_until) {
-    const min = Math.max(1, Math.round((s.mega_quota_until * 1000 - Date.now()) / 60000));
-    const at = new Date(s.mega_quota_until * 1000).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
-    return `MEGA 전송량 한도에 걸렸습니다. 약 ${min >= 60 ? Math.floor(min / 60) + "시간 " + (min % 60) + "분" : min + "분"} 뒤(${at}쯤) 풀립니다.`;
-  }
-  return `MEGA 전송량 한도에 걸렸습니다 (${new Date(s.mega_quota_hit * 1000).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" })}). 보통 몇 시간 안에 풀립니다.`;
-}
-
-function megaThumbToggle(st) {
-  const box = h("input", { type: "checkbox", id: "mega-thumbs", checked: st.mega_thumbs });
-  box.addEventListener("change", async () => {
-    box.disabled = true;
-    try {
-      await api("settings", { method: "PUT", body: { mega_thumbs: box.checked } });
-      toast(box.checked ? "썸네일이 없는 MEGA 영상의 미리보기를 만듭니다" : "MEGA 썸네일 만들기를 껐습니다");
-    } catch (e) { toast(e.message); }
-    box.disabled = false;
-  });
-  return h("div", { style: "margin-top:10px" },
-    h("label", { class: "row", for: "mega-thumbs" }, box, h("span", {}, "썸네일이 없는 MEGA 영상은 앱이 직접 미리보기 만들기")),
-    h("p", { class: "meta", style: "margin:4px 0 0" }, "영상 앞부분 몇 MB 만 받아서 한 장면을 뽑습니다. 데이터와 MEGA 전송량을 조금 씁니다 (영상 하나에 보통 2~10MB)."),
-    st.mega_thumb_missing ? h("p", { class: "meta", style: "margin:4px 0 0" }, `썸네일이 없는 MEGA 영상: ${st.mega_thumb_missing}개` + (st.mega_thumb_failed ? ` (만들지 못한 영상 ${st.mega_thumb_failed}개)` : "")) : null);
-}
-
-// ---------------------------------------------------------------- 클라우드 파일 (MEGA · iCloud)
-async function renderCloud() {
-  setTab("cloud");
-  const st = await api("settings");
-  const mega = st.mega || [], icloud = st.icloud || [];
-  const row = (href, title, sub, err) => h("a", { href }, h("div", {}, h("div", {}, title), h("div", { class: "meta" }, sub), err ? h("div", { class: "warn" }, err) : null), h("span", {}, ico("next")));
-  $app.replaceChildren(h("div", {},
-    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "MEGA · iCloud"), h("h1", {}, "클라우드 파일"))),
-    h("h2", { class: "pf-sec" }, "MEGA 폴더"),
-    mega.length ? h("div", { class: "lib-list" }, mega.map((l) => row(`#/mega?link=${l.index}`, [ico("cloud", "in"), l.name], `파일 ${l.files}개 · 영상 ${l.videos}개`, l.error)))
-      : h("p", { class: "meta" }, "연결된 MEGA 폴더가 없습니다."),
-    h("h2", { class: "pf-sec" }, "iCloud 공유 앨범"),
-    icloud.length ? h("div", { class: "lib-list" }, icloud.map((a) => row(`#/icloud?a=${a.index}`, " " + a.name, `사진 ${a.photos}장 · 영상 ${a.videos}개`, a.error)))
-      : h("p", { class: "meta" }, "연결된 iCloud 공유 앨범이 없습니다."),
-    h("a", { class: "btn", href: "#/settings?section=cloud", style: "margin-top:16px;display:inline-block" }, "링크 추가·삭제")));
-}
-
-async function renderICloudAlbum(i) {
-  setTab("cloud");
-  const d = await api(`icloud/${i}/items`);
-  const photos = d.items.filter((x) => x.kind === "photo");
-  const grid = h("div", { class: "sqgrid" }, d.items.map((it) => {
-    const isPhoto = it.kind === "photo";
-    const img = h("img", { loading: "lazy", alt: it.title || "", src: isPhoto ? `/photothumb/${it.id}.jpg` : thumbUrl(it.id, 0, 1) });
-    img.onerror = () => (img.hidden = true);
-    return isPhoto
-      ? h("button", { class: "sq", "aria-label": it.title, onclick: () => openViewer(photos, photos.indexOf(it)) }, img)
-      : h("a", { class: "sq", href: `#/v/${it.id}`, "aria-label": it.title }, img, h("span", { class: "sq-dur" }, ico("play", "in"), it.duration ? fmtDur(it.duration) : ""));
-  }));
-  $app.replaceChildren(h("div", {},
-    h("a", { class: "btn sm", href: "#/cloud", style: "margin-bottom:12px;display:inline-block" }, ico("back", "in"), "클라우드 파일"),
-    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, `iCloud 공유 앨범 · ${d.items.length}개`), h("h1", {}, d.name))),
-    d.error ? h("div", { class: "panel warn" }, d.error) : null,
-    d.items.length ? grid : h("div", { class: "empty" }, "이 앨범은 비어 있습니다.")));
-}
-
-
-async function renderMega(params) {
-  setTab("settings");   // MEGA 파일 보기는 설정 안에 있음
-  const links = await api("mega");
-  if (!links.length) {
-    $app.replaceChildren(h("div", { class: "empty" }, h("p", {}, "연결된 MEGA 폴더가 없습니다."),
-      h("a", { class: "btn primary", href: "#/settings" }, "설정에서 MEGA 링크 추가")));
-    return;
-  }
-  const idx = Math.min(links.length - 1, +(params.get("link") || 0));
-  const data = await api(`mega/${idx}/browse?folder=${encodeURIComponent(params.get("folder") || "")}`);
-  const go = (folder) => { location.hash = `#/mega?link=${idx}` + (folder ? `&folder=${folder}` : ""); };
-  const linkChips = links.length > 1 ? h("div", { class: "chips", style: "margin-bottom:10px" }, links.map((l) =>
-    h("a", { class: "chip" + (l.index === idx ? " on" : ""), href: `#/mega?link=${l.index}` }, ico("cloud", "in"), l.name))) : null;
-  const crumbs = h("div", { class: "chips", style: "margin-bottom:12px" }, (data.crumbs || []).map((c, i, arr) =>
-    i === arr.length - 1 ? h("span", { class: "chip on" }, c.name) : h("button", { class: "chip", onclick: () => go(c.handle) }, c.name)));
-  const folders = (data.folders || []).map((f) => h("button", { class: "chip", onclick: () => go(f.handle) }, ico("folder", "in"), f.name));
-  const media = [], others = [];
-  for (const f of data.files || []) {
-    if (f.kind === "video") {
-      const img = h("img", { loading: "lazy", alt: "", hidden: !f.thumb, src: f.thumb ? `/thumbs/${f.id}/0.jpg?v=1` : null });
-      img.onerror = () => (img.hidden = true);
-      media.push(h("a", { class: "card", href: `#/v/${f.id}` },
-        h("div", { class: "thumb" }, img, h("div", { class: "noimg" }, ico("play"))),
-        h("div", { class: "title", title: f.name }, f.name), h("div", { class: "sub" }, h("span", {}, fmtSize(f.size)))));
-    } else if (f.kind === "image") {
-      media.push(h("a", { class: "card", href: f.url, target: "_blank", rel: "noopener" },
-        h("div", { class: "thumb" }, h("img", { loading: "lazy", alt: "", src: f.url, onerror: (e) => (e.target.hidden = true) })),
-        h("div", { class: "title", title: f.name }, f.name), h("div", { class: "sub" }, h("span", {}, fmtSize(f.size)))));
-    } else {
-      others.push(h("li", {},
-        h("span", { class: "p" }, ico(f.kind === "audio" ? "music" : "doc", "in"), f.name, h("div", { class: "meta" }, fmtSize(f.size))),
-        h("a", { class: "btn sm", href: f.url, target: "_blank", rel: "noopener" }, "열기"),
-        h("a", { class: "btn sm", href: f.url + "?dl=1" }, "받기")));
-    }
-  }
-  $app.replaceChildren(h("div", {},
-    h("a", { class: "btn sm", href: "#/cloud", style: "margin-bottom:12px;display:inline-block" }, ico("back", "in"), "클라우드 파일"),
-    linkChips, crumbs,
-    data.error ? h("div", { class: "panel warn" }, data.error) : null,
-    folders.length ? h("div", { class: "chips", style: "margin-bottom:14px" }, folders) : null,
-    media.length ? h("div", { class: "grid" }, media) : null,
-    others.length ? h("div", { class: "panel", style: "margin-top:14px" }, h("h3", {}, "기타 파일"), h("ul", { class: "pathlist" }, others)) : null,
-    !folders.length && !media.length && !others.length ? h("div", { class: "empty" }, "이 폴더는 비어 있습니다.") : null));
-}
-
 // ---------------------------------------------------------------- 숏폼 (2분 이하 영상을 위아래로 넘겨 보기)
 const SHORT_MAX = 120;
 let shortsMuted = false;
@@ -3389,8 +3206,7 @@ async function renderShorts(params) {
         removeItem();
       };
       const formatErr = video.error.code === 3 || video.error.code === 4;   // 3: 디코딩 실패, 4: 지원하지 않는 형식
-      if (v.source === "mega" || v.source === "icloud") api("status").then((st) => { const q = megaQuotaText(st); if (q) show(q); else if (formatErr) unplayable(); else show("재생하지 못했습니다. 연결을 확인하세요."); }).catch(() => show("재생하지 못했습니다."));
-      else if (formatErr) unplayable();
+      if (formatErr) unplayable();
       else show("재생하지 못했습니다.");
     });
     // 하트(즐겨찾기)와 삭제
@@ -3530,7 +3346,6 @@ async function renderShorts(params) {
 async function renderLibraryHub() {
   setTab("library");
   if (!Object.keys(serverCaps).length) serverCaps = await api("settings").catch(() => ({}));
-  const cloudN = (serverCaps.mega || []).length + (serverCaps.icloud || []).length;
   const todoN = h("span", {}, "사람·태그가 없고 ‘정리 완료’ 표시도 안 된 영상·사진");
   api("media?type=all&unorganized=1&per=1").then((d) => { todoN.textContent = d.total ? `${d.total.toLocaleString()}개 남음 · 사람·태그를 붙이거나 ‘정리 완료’로 표시하세요` : "모두 정리했습니다"; }).catch(() => {});
   const row = (href, icon, title, sub) => h("a", { href }, setIcon(icon), h("div", { class: "set-text" }, h("div", { class: "set-title" }, title), sub ? h("div", { class: "meta" }, sub) : null), h("span", { class: "chev", "aria-hidden": "true" }, ico("next")));
@@ -3543,13 +3358,10 @@ async function renderLibraryHub() {
       row("#/stats", "history", "시청 기록 · 통계", "최근 본 영상 · 시청 시간 · 많이 본 사람")),
     h("h2", { class: "set-group-title" }, "파일"),
     h("div", { class: "lib-list set-list" },
-      serverCaps.mega_supported ? row("#/cloud", "cloud", "클라우드 파일", cloudN ? `MEGA ${(serverCaps.mega || []).length} · iCloud ${(serverCaps.icloud || []).length}` : "MEGA · iCloud 링크 연결") : null,
       serverCaps.duplicates ? row("#/duplicates", "dup", "중복 영상·사진", "같은 영상·사진이 여러 곳에 있는지 찾기") : null,
       serverCaps.hidden_count !== undefined ? row("#/hidden", "hidden", "숨긴 영상", `${serverCaps.hidden_count}개`) : null),
-    h("h2", { class: "set-group-title" }, "놀이"),
-    h("div", { class: "lib-list set-list" }, row("#/cup", "trophy", "최애 월드컵", "두 개 중 더 좋은 쪽을 골라 순위 매기기")),
     h("h2", { class: "set-group-title" }, "앱"),
-    h("div", { class: "lib-list set-list" }, row("#/settings", "gear", "설정", "화면 · 폴더 · 클라우드 · 백업"))));
+    h("div", { class: "lib-list set-list" }, row("#/settings", "gear", "설정", "화면 · 폴더 · 백업"))));
 }
 
 /** 탐색: 사람을 큰 카드로 쭉 (장면 3장), 위쪽 검색·필터는 미디어 탭처럼 떠 있음. 태그·나이로 거르기 */
@@ -4135,7 +3947,6 @@ async function renderHome() {
       return h("a", { class: "hchip", href: "#/media" + (p.toString() ? "?" + p : "") }, f.default ? ico("star", "in filled") : null, f.name);
     });
     chips.push(h("a", { class: "hchip", href: "#/media?type=video&unwatched=1" }, "안 본 영상"));
-    chips.push(h("a", { class: "hchip", href: "#/cup" }, ico("trophy", "in"), "최애 월드컵"));
     api("tags").then((tl) => {
       tl.filter((t) => t.count || t.photo_count).sort((a, b) => (b.count + (b.photo_count || 0)) - (a.count + (a.photo_count || 0))).slice(0, 4)
         .forEach((t) => chips.push(h("a", { class: "hchip", href: `#/?tag=${t.id}` }, "#" + t.name)));
@@ -4280,203 +4091,6 @@ async function renderDuplicates() {
       ? h("p", { class: "meta" }, `${groups.length}묶음 · 중복으로 차지하는 크기 약 ${fmtSize(wasted)}. 영상은 파일 크기가, 사진은 파일 크기와 가로·세로가 똑같으면 같은 것으로 봅니다. 남길 영상에서 ‘이것만 남기기’를 누르면 나머지는 숨기고 태그·사람 등 정보는 합쳐집니다. 숨긴 영상은 설정 → 숨긴 영상에서 되돌릴 수 있습니다.`)
       : h("div", { class: "empty" }, "중복 영상·사진이 없습니다."),
     ...groups.map(groupEl)));
-}
-
-/** 최애 월드컵: 두 개 중 더 좋은 쪽을 계속 고르면 우승작과 순위가 나옴 (원하면 결과대로 별점) */
-const CUP_SIZES = [8, 16, 32, 64];
-const cupStage = (n) => (n === 2 ? "결승" : n === 4 ? "4강" : `${n}강`);
-async function renderCup(params) {
-  setTab("library");
-  const people = (await api("performers").catch(() => [])).filter((p) => p.count || p.photo_count).sort((a, b) => (b.count + b.photo_count) - (a.count + a.photo_count));
-  const opt = { kind: "video", performer: "", fav: false, size: 16 };
-  try { Object.assign(opt, JSON.parse(localStorage.getItem("vs-cup-opt") || "{}")); } catch (e) {}
-  if (params.get("performer")) opt.performer = params.get("performer");
-  const saveOpt = () => { try { localStorage.setItem("vs-cup-opt", JSON.stringify({ ...opt, performer: params.get("performer") ? "" : opt.performer })); } catch (e) {} };
-  const history = () => { try { return JSON.parse(localStorage.getItem("vs-cup-history") || "[]"); } catch (e) { return []; } };
-  const thumbOf = (it) => (it.kind === "photo" ? hdSrc(`/photothumb/${it.id}.jpg`) : it.thumbs > 0 ? hdSrc(thumbUrl(it.id, 0, it.thumbs)) : null);
-  const query = (per) => {
-    const q = new URLSearchParams({ type: opt.kind, per: String(per), sort: "random", seed: String(Date.now() % 1e6) });
-    if (opt.performer) q.set("performer", opt.performer);
-    if (opt.fav) q.set("fav", "1");
-    return q;
-  };
-
-  // ---- 시작 화면
-  async function drawSetup() {
-    document.body.classList.remove("nav-hidden");
-    const seg = (items, key, onPick) => h("div", { class: "seg cup-seg" }, ...items.map(([v, l]) =>
-      h("button", { class: opt[key] === v ? "on" : "", onclick: () => { opt[key] = v; saveOpt(); onPick ? onPick() : drawSetup(); } }, l)));
-    const total = h("span", { class: "meta" }, "후보 세는 중…");
-    const sizeBox = h("div", { class: "chips" });
-    const startBtn = h("button", { class: "btn primary cup-start", disabled: true }, "시작");
-    const picked = people.find((p) => String(p.id) === String(opt.performer));
-    const hist = history();
-    $app.replaceChildren(h("div", { class: "cup" },
-      h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "놀이"), h("h1", {}, "최애 월드컵"))),
-      h("p", { class: "meta cup-lead" }, "두 개 중 더 마음에 드는 쪽을 계속 고르세요. 마지막에 남은 하나가 우승이고, 원하면 결과대로 별점을 매길 수 있어요."),
-      h("div", { class: "panel cup-opts" },
-        h("h3", {}, "무엇으로"), seg([["video", "영상"], ["photo", "사진"], ["all", "전체"]], "kind"),
-        h("h3", {}, "누가 나온"),
-        h("div", { class: "chips" }, h("button", { class: "chip" + (!opt.performer ? " on" : ""), onclick: () => { opt.performer = ""; params.delete("performer"); saveOpt(); drawSetup(); } }, "모두"),
-          ...people.slice(0, 14).concat(picked && !people.slice(0, 14).includes(picked) ? [picked] : []).map((p) =>
-            h("button", { class: "chip" + (String(p.id) === String(opt.performer) ? " on" : ""), onclick: () => { opt.performer = String(p.id); saveOpt(); drawSetup(); } }, p.name))),
-        h("label", { class: "cup-toggle" }, h("span", {}, "즐겨찾기 중에서만"),
-          h("button", { class: "switch" + (opt.fav ? " on" : ""), role: "switch", "aria-checked": opt.fav ? "true" : "false", onclick: () => { opt.fav = !opt.fav; saveOpt(); drawSetup(); } })),
-        h("h3", {}, "몇 강"), sizeBox, total),
-      startBtn,
-      hist.length ? h("section", { class: "cup-hist" }, h("h2", {}, "지난 우승"),
-        h("div", { class: "shelf-row favs" }, ...hist.slice(0, 10).map((w) => {
-          const img = h("img", { src: thumbOf(w), loading: "lazy", alt: "" }); img.onerror = () => (img.hidden = true);
-          return h(w.kind === "photo" ? "div" : "a", { class: "sq cup-hist-item", href: w.kind === "photo" ? null : `#/v/${w.id}`, title: w.title },
-            img, h("span", { class: "sq-dur" }, ico("trophy", "in"), cupStage(w.size)));
-        }))) : null));
-    try {
-      const d = await api("media?" + query(1));
-      total.textContent = `후보 ${d.total.toLocaleString()}개`;
-      const can = CUP_SIZES.filter((n) => n <= d.total);
-      if (!can.length) { total.textContent = `후보가 ${d.total}개라 월드컵을 하려면 8개 이상 필요해요`; sizeBox.replaceChildren(); return; }
-      if (!can.includes(opt.size)) opt.size = can[can.length - 1] >= 16 ? 16 : can[can.length - 1];
-      sizeBox.replaceChildren(...CUP_SIZES.map((n) => h("button", { class: "chip" + (opt.size === n ? " on" : ""), disabled: n > d.total,
-        onclick: () => { opt.size = n; saveOpt(); sizeBox.querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c.textContent === cupStage(n))); startBtn.textContent = `${cupStage(n)} 시작`; } }, cupStage(n))));
-      startBtn.disabled = false;
-      startBtn.textContent = `${cupStage(opt.size)} 시작`;
-      startBtn.onclick = async () => {
-        startBtn.disabled = true;
-        const r = await api("media?" + query(Math.max(opt.size, 60))).catch(() => null);
-        if (!r || r.items.length < opt.size) { toast("후보를 불러오지 못했습니다"); startBtn.disabled = false; return; }
-        play(r.items.slice(0, opt.size));
-      };
-    } catch (e) { total.textContent = e.message; }
-  }
-
-  // ---- 대결
-  function play(entries) {
-    document.body.classList.add("nav-hidden");
-    window.scrollTo({ top: 0, behavior: "instant" });
-    let round = entries.slice(), next = [], m = 0;
-    const out = new Map();   // 떨어진 항목 → 떨어진 판 (8 = 8강에서 탈락)
-    const undo = [];
-    const stageEl = h("b"), countEl = h("span", { class: "meta" }), bar = h("i");
-    const arena = h("div", { class: "cup-arena" });
-    const undoBtn = h("button", { class: "btn sm", disabled: true, onclick: () => {
-      const st = undo.pop(); if (!st) return;
-      round = st.round; next = st.next; m = st.m; out.clear(); st.out.forEach(([k, v]) => out.set(k, v));
-      undoBtn.disabled = !undo.length; draw();
-    } }, ico("undo", "in"), "되돌리기");
-    const quit = h("button", { class: "round-btn", "aria-label": "그만하기", onclick: () => { document.body.classList.remove("nav-hidden"); drawSetup(); } }, ico("close"));
-    const banner = h("div", { class: "cup-banner", hidden: true });
-    $app.replaceChildren(h("div", { class: "cup-game" },
-      h("div", { class: "cup-top" }, quit, h("div", { class: "cup-title" }, stageEl, countEl), undoBtn),
-      h("div", { class: "cup-prog" }, bar),
-      arena, banner));
-    const card = (it, side) => {
-      const src = thumbOf(it);
-      const img = src ? h("img", { src, alt: "" }) : h("div", { class: "noimg" }, ico(it.kind === "photo" ? "image" : "play"));
-      if (src) img.onerror = () => img.replaceWith(h("div", { class: "noimg" }, ico("image")));
-      const media = h("div", { class: "cup-media" }, img,
-        it.kind !== "photo" && it.duration ? h("span", { class: "badge" }, fmtDur(it.duration)) : null);
-      if (it.kind !== "photo") {   // 영상은 작은 ▶로 소리 없이 미리보기 (고르는 것과 따로)
-        const pv = h("button", { class: "cup-pv", "aria-label": "미리보기", onclick: (e) => {
-          e.stopPropagation();
-          const old = media.querySelector("video");
-          if (old) { old.remove(); pv.replaceChildren(ico("play")); return; }
-          const v = h("video", { src: `/media/${it.id}`, muted: true, autoplay: true, loop: true, playsinline: true });
-          v.muted = true;
-          v.addEventListener("loadedmetadata", () => { if (isFinite(v.duration) && v.duration > 10) try { v.currentTime = v.duration * 0.2; } catch (er) {} }, { once: true });
-          media.prepend(v); pv.replaceChildren(ico("pause"));
-        } }, ico("play"));
-        media.append(pv);
-      }
-      const sub = [(it.performers || []).join(", "), it.kind === "photo" ? "사진" : ""].filter(Boolean).join(" · ");
-      const el = h("button", { class: "cup-card " + side, onclick: () => pick(it, el) }, media,
-        h("div", { class: "cup-cap" }, h("b", {}, it.title || ""), sub ? h("span", { class: "meta" }, sub) : null));
-      return el;
-    };
-    function draw() {
-      const n = round.length, matches = n / 2;
-      stageEl.textContent = cupStage(n);
-      countEl.textContent = n === 2 ? "" : ` · ${m + 1} / ${matches}`;
-      const totalPicks = entries.length - 1;
-      const picks = entries.length - round.length + m;
-      bar.style.width = `${Math.round((picks / totalPicks) * 100)}%`;
-      arena.replaceChildren(card(round[2 * m], "a"), h("div", { class: "cup-vs", "aria-hidden": "true" }, "VS"), card(round[2 * m + 1], "b"));
-      arena.classList.remove("in"); void arena.offsetWidth; arena.classList.add("in");
-    }
-    let busy = false;
-    function pick(it, el) {
-      if (busy) return;
-      busy = true;
-      try { if (window.VidShelfApp && VidShelfApp.haptic) VidShelfApp.haptic(); } catch (e) {}
-      undo.push({ round: round.slice(), next: next.slice(), m, out: [...out] });
-      undoBtn.disabled = false;
-      const a = round[2 * m], b = round[2 * m + 1], loser = it === a ? b : a;
-      out.set(loser, round.length);
-      next.push(it);
-      arena.querySelectorAll(".cup-card").forEach((c) => c.classList.add(c === el ? "win" : "lose"));
-      arena.querySelectorAll("video").forEach((v) => v.pause());
-      setTimeout(() => {
-        busy = false;
-        m++;
-        if (m < round.length / 2) { draw(); return; }
-        if (next.length === 1) { finish(next[0]); return; }
-        round = next; next = []; m = 0;
-        banner.textContent = `${cupStage(round.length)} 진출!`;
-        banner.hidden = false; banner.classList.remove("show"); void banner.offsetWidth; banner.classList.add("show");
-        setTimeout(() => (banner.hidden = true), 1000);
-        draw();
-      }, 420);
-    }
-    function finish(win) {
-      document.body.classList.remove("nav-hidden");
-      out.set(win, 1);
-      const hist = history();
-      hist.unshift({ id: win.id, kind: win.kind, title: win.title, thumbs: win.thumbs, size: entries.length, at: Date.now() });
-      try { localStorage.setItem("vs-cup-history", JSON.stringify(hist.slice(0, 20))); } catch (e) {}
-      // 떨어진 판별로 묶기: 준우승(2) · 4강 · 8강 …
-      const groups = [];
-      for (let n = 2; n <= entries.length; n *= 2) groups.push([n, entries.filter((x) => out.get(x) === n)]);
-      const starsFor = (x) => { const n = out.get(x); return n === 1 ? 5 : n === 2 ? 4 : n === 4 ? 3 : n === 8 ? 2 : 1; };
-      const open = (x) => { if (x.kind === "photo") openViewer([x], 0); else location.hash = `#/v/${x.id}`; };
-      const src = thumbOf(win);
-      const favBtn = h("button", { class: "btn", onclick: async () => {
-        const kind = win.kind === "photo" ? "photos" : "videos";
-        try { await api(`${kind}/${win.id}`, { method: "PATCH", body: { favorite: true } }); toast("우승작을 즐겨찾기에 넣었습니다"); favBtn.disabled = true; } catch (e) { toast(e.message); }
-      } }, ico("heart", "in"), "즐겨찾기");
-      const rateBtn = h("button", { class: "btn", onclick: () => {
-        let keep = true;
-        const sw = h("button", { class: "switch on", role: "switch", "aria-checked": "true", onclick: () => { keep = !keep; sw.classList.toggle("on", keep); sw.setAttribute("aria-checked", String(keep)); } });
-        const close = openSheet("결과대로 별점 매기기", [
-          h("p", { class: "meta", style: "margin:0" }, "우승 ★5 · 준우승 ★4 · 4강 ★3 · 8강 ★2 · 그 밖 ★1 로 매깁니다."),
-          h("label", { class: "cup-toggle" }, h("span", {}, "이미 별점이 있는 것은 그대로 두기"), sw),
-        ], [h("button", { class: "btn", onclick: () => close() }, "취소"),
-          h("button", { class: "btn primary sheet-go", onclick: () => close(async () => {
-            let n = 0;
-            for (const x of entries) {
-              if (keep && x.rating) continue;
-              try { await api(`${x.kind === "photo" ? "photos" : "videos"}/${x.id}`, { method: "PATCH", body: { rating: starsFor(x) } }); x.rating = starsFor(x); n++; } catch (e) {}
-            }
-            toast(n ? `${n}개에 별점을 매겼습니다` : "새로 매길 항목이 없습니다");
-          }) }, "매기기")]);
-      } }, ico("star", "in"), "별점 매기기");
-      const mini = (x) => {
-        const s2 = thumbOf(x), img = s2 ? h("img", { src: s2, loading: "lazy", alt: "" }) : null;
-        if (img) img.onerror = () => (img.hidden = true);
-        return h("button", { class: "sq cup-mini", title: x.title, onclick: () => open(x) }, img);
-      };
-      $app.replaceChildren(h("div", { class: "cup cup-result" },
-        h("div", { class: "cup-crown" }, ico("trophy", "filled"), h("span", {}, `${cupStage(entries.length)} 우승`)),
-        h("button", { class: "cup-winner", onclick: () => open(win) },
-          src ? h("img", { src, alt: "" }) : h("div", { class: "noimg" }, ico("play")),
-          h("div", { class: "cup-wcap" }, h("b", {}, win.title || ""), h("span", { class: "meta" }, win.kind === "photo" ? "사진 · 눌러서 보기" : "영상 · 눌러서 보기"))),
-        h("div", { class: "cup-actions" }, favBtn, rateBtn, h("button", { class: "btn primary", onclick: () => drawSetup() }, ico("undo", "in"), "다시 하기")),
-        ...groups.filter(([, l]) => l.length).map(([n, l]) => h("section", { class: "cup-rank" },
-          h("h3", {}, n === 2 ? "준우승" : `${cupStage(n)}`, h("span", { class: "meta" }, n === 2 ? "" : ` · ${l.length}개`)),
-          h("div", { class: "cup-grid" }, ...l.map(mini))))));
-      window.scrollTo({ top: 0, behavior: "instant" });
-    }
-    draw();
-  }
-  drawSetup();
 }
 
 /** 가져올 폴더 고르기: 사진·영상이 있는 폴더를 개수와 함께 보여 주고 체크해서 고름 (처음 화면에서 ‘폴더를 골라서’를 고르면 여기로) */

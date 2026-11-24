@@ -13,8 +13,8 @@ android {
         applicationId "app.vidshelf"
         minSdk 29
         targetSdk 35   // 플레이스토어 요구 (안드로이드 15)
-        versionCode 77
-        versionName "10.6"
+        versionCode 78
+        versionName "10.7"
     }
 
     compileOptions {
