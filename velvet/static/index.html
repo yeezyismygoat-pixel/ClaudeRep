@@ -3,16 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#F4F3EF">
-<title>VidShelf</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23e8a33d'/%3E%3Cpath d='M12 9l11 7-11 7z' fill='%230f1115'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<meta name="theme-color" content="#130C11">
+<title>Velvet</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236a1c40'/%3E%3Cpath d='M7 25v-7a3 3 0 0 1 6 0v7z' fill='%23f4e9ec'/%3E%3Cpath d='M13.5 25V12a3 3 0 0 1 6 0v13z' fill='%23f07a9a'/%3E%3Cpath d='M20 25v-9a3 3 0 0 1 6 0v9z' fill='%23e2b970'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Gowun+Batang:wght@400;700&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/velvet.css">
 <script>
 /* 첫 화면이 그려지기 전에 테마 적용 (시스템 / 라이트 / 다크) */
 (function () {
-  var pref = "system";
-  try { pref = localStorage.getItem("vs-theme") || "system"; } catch (e) {}
+  var pref = "dark";
+  try { pref = localStorage.getItem("vs-theme") || "dark"; } catch (e) {}   // Velvet: 밤 테마가 기본
   var sysDark;
   try { sysDark = window.VidShelfApp ? VidShelfApp.isSystemDark() : matchMedia("(prefers-color-scheme: dark)").matches; } catch (e) { sysDark = false; }
   document.documentElement.dataset.theme = pref === "dark" || (pref === "system" && sysDark) ? "dark" : "light";
@@ -25,14 +26,15 @@
   <nav class="tabs" aria-label="메뉴">
     <span class="tab-blob" aria-hidden="true"></span>
     <a href="#/home" draggable="false" data-tab="home" aria-label="홈" title="홈"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path class="b" d="M4 10.4 10.6 5a2.2 2.2 0 0 1 2.8 0L20 10.4V18.6a2 2 0 0 1-2 2h-3.2v-4.4a2.8 2.8 0 0 0-5.6 0v4.4H6a2 2 0 0 1-2-2z"/></svg></a>
+    <a href="#/comics" draggable="false" data-tab="comics" aria-label="만화" title="만화 (e-hentai)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path class="b" d="M12 6.6C10 5 6.9 4.5 3.5 5v13.6c3.4-.5 6.5 0 8.5 1.6 2-1.6 5.1-2.1 8.5-1.6V5C17.1 4.5 14 5 12 6.6z"/><path class="k" d="M12 6.6v13.6"/></svg></a>
     <a href="#/media" draggable="false" data-tab="media" aria-label="미디어" title="미디어 (동영상·사진)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 3.8h9.7a3.3 3.3 0 0 1 3.3 3.3v8.4"/><rect class="b" x="3.5" y="7.3" width="13.6" height="12.9" rx="3.2"/><path class="tp" d="M8.03 11.5Q8.03 10.75 8.69 11.11L12.78 13.39Q13.43 13.75 12.78 14.11L8.69 16.39Q8.03 16.75 8.03 16z"/></svg></a>
     <a href="#/shorts" draggable="false" data-tab="shorts" aria-label="숏폼" title="숏폼 (2분 이하)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect class="b" x="5.8" y="2.6" width="12.4" height="18.8" rx="3.6"/><path class="tp" d="M9.56 9.45Q9.56 8.7 10.22 9.07L14.71 11.63Q15.36 12 14.71 12.37L10.22 14.93Q9.56 15.3 9.56 14.55z"/></svg></a>
-    <a href="#/explore" draggable="false" data-tab="explore" aria-label="탐색" title="탐색 (사람·태그)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle class="b" cx="12" cy="12" r="8.8"/><path class="k fk" d="M15.6 8.4 13.4 13.4 8.4 15.6 10.6 10.6z"/></svg></a>
-    <a href="#/library" draggable="false" data-tab="library" aria-label="설정" title="설정 (시청 기록·파일·설정)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect class="b" x="3.5" y="3.5" width="6.6" height="6.6" rx="2.2"/><rect class="b" x="13.9" y="3.5" width="6.6" height="6.6" rx="2.2"/><rect class="b" x="3.5" y="13.9" width="6.6" height="6.6" rx="2.2"/><rect class="b" x="13.9" y="13.9" width="6.6" height="6.6" rx="2.2"/></svg></a>
+    <a href="#/explore" draggable="false" data-tab="explore" aria-label="탐색" title="탐색 (사람·태그·폴더·보관함)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle class="b" cx="12" cy="12" r="8.8"/><path class="k fk" d="M15.6 8.4 13.4 13.4 8.4 15.6 10.6 10.6z"/></svg></a>
   </nav>
 </header>
 <main id="app"></main>
 <div id="toast" class="toast" hidden></div>
+<script src="/comics.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

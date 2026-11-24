@@ -1,4 +1,4 @@
-/* VidShelf front-end (vanilla JS, no build step) */
+/* Velvet 화면 (VidShelf 를 바탕으로 만화 탭을 더함, 빌드 과정 없는 순수 JS) */
 "use strict";
 
 const $app = document.getElementById("app");
@@ -52,6 +52,7 @@ const ICONS = (() => {
     home: '<path class="b" d="M4 10.4 10.6 5a2.2 2.2 0 0 1 2.8 0L20 10.4V18.6a2 2 0 0 1-2 2h-3.2v-4.4a2.8 2.8 0 0 0-5.6 0v4.4H6a2 2 0 0 1-2-2z"/>',
     media: '<path d="M7.5 3.8h9.7a3.3 3.3 0 0 1 3.3 3.3v8.4"/><rect class="b" x="3.5" y="7.3" width="13.6" height="12.9" rx="3.2"/><path class="tp" d="M8.03 11.5Q8.03 10.75 8.69 11.11L12.78 13.39Q13.43 13.75 12.78 14.11L8.69 16.39Q8.03 16.75 8.03 16z"/>',
     shorts: '<rect class="b" x="5.8" y="2.6" width="12.4" height="18.8" rx="3.6"/><path class="tp" d="M9.56 9.45Q9.56 8.7 10.22 9.07L14.71 11.63Q15.36 12 14.71 12.37L10.22 14.93Q9.56 15.3 9.56 14.55z"/>',
+    comics: '<path class="b" d="M12 6.6C10 5 6.9 4.5 3.5 5v13.6c3.4-.5 6.5 0 8.5 1.6 2-1.6 5.1-2.1 8.5-1.6V5C17.1 4.5 14 5 12 6.6z"/><path class="k" d="M12 6.6v13.6"/>',
     explore: '<circle class="b" cx="12" cy="12" r="8.8"/><path class="k fk" d="M15.6 8.4 13.4 13.4 8.4 15.6 10.6 10.6z"/>',
     apps: '<rect class="b" x="3.5" y="3.5" width="6.6" height="6.6" rx="2.2"/><rect class="b" x="13.9" y="3.5" width="6.6" height="6.6" rx="2.2"/><rect class="b" x="3.5" y="13.9" width="6.6" height="6.6" rx="2.2"/><rect class="b" x="13.9" y="13.9" width="6.6" height="6.6" rx="2.2"/>',
     search: '<circle cx="10.8" cy="10.8" r="6.6"/><path d="M15.8 15.8 20.3 20.3"/>',
@@ -183,10 +184,10 @@ function parseHash() {
   const [path, qs] = raw.split("?");
   return { path, params: new URLSearchParams(qs || "") };
 }
-const TAB_GROUP = { videos: "media", photos: "media", media: "media", tags: "explore", performers: "explore", settings: "library", library: "library", cloud: "library" };
+const TAB_GROUP = { videos: "media", photos: "media", media: "media", tags: "explore", performers: "explore", settings: "explore", library: "explore", cloud: "explore" };
 const SOURCE_LABEL = { mega: "MEGA", icloud: "iCloud", local: "이 기기" };
 function setTab(name) {
-  const t = TAB_GROUP[name] || name;   // 사진·사람·태그·설정은 ‘보관함’ 탭 안에 있음
+  const t = TAB_GROUP[name] || name;   // 사진은 ‘미디어’, 사람·태그·보관함·설정은 ‘탐색’ 탭 안에 있음
   const prev = document.querySelector(".topbar .tabs a.on");
   let changed = false;
   document.querySelectorAll(".tabs a").forEach((a) => { const on = a.dataset.tab === t; if (on !== a.classList.contains("on")) changed = true; a.classList.toggle("on", on); });
@@ -269,7 +270,7 @@ window.addEventListener("resize", () => placeTabBlob(false));
 })();
 
 // ---------------------------------------------------------------- 테마 (시스템 / 라이트 / 다크)
-function themePref() { try { return localStorage.getItem("vs-theme") || "system"; } catch (e) { return "system"; } }
+function themePref() { try { return localStorage.getItem("vs-theme") || "dark"; } catch (e) { return "dark"; } }   // Velvet: 밤 테마가 기본
 function systemDark() {
   try { return window.VidShelfApp ? VidShelfApp.isSystemDark() : matchMedia("(prefers-color-scheme: dark)").matches; }
   catch (e) { return false; }
@@ -279,7 +280,7 @@ function applyTheme() {
   const dark = pref === "dark" || (pref === "system" && systemDark());
   document.documentElement.dataset.theme = dark ? "dark" : "light";
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = dark ? "#111214" : "#EFEDE8";
+  if (meta) meta.content = dark ? "#130C11" : "#F6EFEC";
   try { if (window.VidShelfApp) VidShelfApp.setDark(dark); } catch (e) {}   // 앱의 상태 표시줄 색도 맞춤
 }
 function setThemePref(p) { try { localStorage.setItem("vs-theme", p); } catch (e) {} applyTheme(); }
@@ -773,16 +774,16 @@ function autoMore(moreEl, loadNext) {
 let lastPending = -1;
 async function pollStatus() {
   try {
-    const s = await api("status");
+    const [s, cj] = await Promise.all([api("status"), api("eh/job").catch(() => ({}))]);   // cj: 만화 저장 진행
     const bar = document.getElementById("jobbar");
-    const busy = s.scanning || s.thumb_pending > 0;
+    const busy = s.scanning || s.thumb_pending > 0 || !!cj.job;
     const quota = megaQuotaText(s);
     bar.hidden = !busy && !quota;
     if (!busy && quota) bar.replaceChildren(h("span", { class: "warn" }, ico("warn", "in"), quota));
     if (busy) {
       const txt = s.scanning
         ? (s.scan_found || s.scan_new ? `스캔 중… ${s.scan_found}개 발견, 새 영상 ${s.scan_new}개 · ${s.scan_current || ""}` : (s.scan_current || "작업 중…"))
-        : `미리보기 생성 중… 남은 영상 ${s.thumb_pending}개 · ${s.thumb_current || ""}`;
+        : s.thumb_pending > 0 ? `미리보기 생성 중… 남은 영상 ${s.thumb_pending}개 · ${s.thumb_current || ""}` : cj.job;
       bar.replaceChildren(h("i", { class: "spin" }), h("span", {}, txt));
     }
     // 썸네일이 새로 만들어졌으면 비어 있는 카드 이미지를 다시 불러옴
@@ -816,7 +817,7 @@ function pageIn() {
 document.addEventListener("click", (e) => {
   const a = e.target.closest && e.target.closest(".tabs a[data-tab]");
   if (!a || document.body.classList.contains("selecting")) return;
-  const from = TAB_ORDER.indexOf(currentRootTab() || TAB_GROUP[parseHash().path.slice(1)] || ""), to = TAB_ORDER.indexOf(a.dataset.tab);
+  const from = TAB_ORDER.indexOf(currentRootTab() || TAB_GROUP[parseHash().path.slice(1)] || (parseHash().path.startsWith("/comic") ? "comics" : "")), to = TAB_ORDER.indexOf(a.dataset.tab);
   if (to < 0 || (from === to && currentRootTab())) return;
   if (a.getAttribute("href") === location.hash) return;
   window.__tabNav = from < 0 ? 1 : Math.sign(to - from) || 1;
@@ -879,6 +880,9 @@ async function route(ev) {
     if (path === "/icloud") return await renderICloudAlbum(+params.get("a") || 0);
     if (path === "/photos") return await renderMedia(params, "photo");
     if (path === "/shorts") return await renderShorts(params);
+    if (path === "/comics") return await renderComics(params);
+    if (path === "/comics/settings") return await renderComicSettings();
+    if (path === "/comic") return await renderComic(params);
     if (path === "/library") return await renderLibraryHub();
     if (path === "/stats") return await renderStats();
     if (path === "/explore") return await renderExplore(params);
@@ -1060,16 +1064,16 @@ function onSwipe(el, cb) {
 }
 
 // ---------------------------------------------------------------- 하단 탭 사이를 좌우로 밀어 이동 (갤러리처럼 손가락을 따라옴)
-const TAB_ORDER = ["home", "media", "shorts", "explore", "library"];
-const TAB_HASH = { home: "#/home", media: "#/media", shorts: () => "#/shorts?s=" + (Date.now() % 1000000), explore: "#/explore", library: "#/library" };
+const TAB_ORDER = ["home", "comics", "media", "shorts", "explore"];
+const TAB_HASH = { home: "#/home", comics: "#/comics", media: "#/media", shorts: () => "#/shorts?s=" + (Date.now() % 1000000), explore: "#/explore" };
 /** 지금 화면이 하단 탭의 첫 화면이면 그 탭 이름 (영상 화면·설정 등에서는 밀기 없음) */
 function currentRootTab() {
   const p = parseHash().path;
   if (p === "/home" || (p === "/" && !location.hash)) return "home";
   if (p === "/media" || p === "/" || p === "/photos") return "media";
   if (p === "/shorts") return "shorts";
+  if (p === "/comics") return "comics";
   if (p === "/explore") return "explore";
-  if (p === "/library") return "library";
   return null;
 }
 let tabSwipePending = 0;
@@ -2841,7 +2845,7 @@ function entityCover(e, fallback) {
 // ---------------------------------------------------------------- settings
 /** 설정 아이콘 (선 그림) */
 const SET_ALIAS = { display: "theme", broom: "tidy" };
-const SET_TINT = { trophy: 4, theme: 1, folder: 4, cloud: 3, heart: 2, tidy: 5, backup: 3, lock: 4, info: 1, gear: 1, history: 1, stats: 5, dup: 4, hidden: 2 };
+const SET_TINT = { comics: 2, trophy: 4, theme: 1, folder: 4, cloud: 3, heart: 2, tidy: 5, backup: 3, lock: 4, info: 1, gear: 1, history: 1, stats: 5, dup: 4, hidden: 2 };
 function setIcon(name) {
   const n = SET_ALIAS[name] || name;
   return h("span", { class: "set-ico t" + (SET_TINT[n] || 1) }, ico(n));
@@ -2854,7 +2858,7 @@ async function renderSettings(opts = {}) {
   const reload = () => renderSettings({ section });
   const [st, status] = await Promise.all([api("settings"), api("status")]);
   const c = status.counts || {};
-  const themeName = { system: "시스템 설정", light: "라이트", dark: "다크" }[themePref()] || "시스템 설정";
+  const themeName = { system: "휴대폰 따라", light: "낮", dark: "밤" }[themePref()] || "밤";
   const nCloud = (st.mega || []).length + (st.icloud || []).length;
 
   const SECTIONS = [
@@ -2862,6 +2866,7 @@ async function renderSettings(opts = {}) {
       { id: "display", icon: "display", title: "화면과 재생", sub: `${themeName} · 연속 재생 ${autoNextOn() ? "켬" : "끔"}` },
       { id: "library", icon: "folder", title: "라이브러리와 미디어 폴더", sub: `영상 ${(c.total || 0).toLocaleString()}개 · ${st.library_all ? "휴대폰 전체" : `폴더 ${st.library_paths.length}개`}` },
       st.mega_supported ? { id: "cloud", icon: "cloud", title: "클라우드", sub: nCloud ? `MEGA ${(st.mega || []).length} · iCloud ${(st.icloud || []).length}` : "연결된 곳 없음" } : null,
+      { id: "comics", href: "#/comics/settings", icon: "comics", title: "만화", sub: "e-hentai 로그인 · 저장 공간 · 연결이 안 될 때" },
       st.fav_sync !== undefined ? { id: "favorites", icon: "heart", title: "즐겨찾기 연동", sub: st.fav_sync ? (st.manage_media ? "갤러리와 연동 · 바로 반영" : "갤러리와 연동") : "앱 안에서만" } : null,
     ] },
     { group: "관리", items: [
@@ -2876,16 +2881,15 @@ async function renderSettings(opts = {}) {
   if (!section) {
     const quota = megaQuotaText(status);
     $app.replaceChildren(h("div", { class: "settings" },
-      h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "VidShelf"), h("h1", {}, "설정"))),
+      h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "Velvet"), h("h1", {}, "설정"))),
       quota ? h("a", { class: "panel warn set-alert", href: "#/settings?section=cloud" }, ico("warn", "in"), quota) : null,
       ...SECTIONS.map((g) => h("section", { class: "set-group" },
         h("h2", { class: "set-group-title" }, g.group),
         h("div", { class: "lib-list set-list" }, g.items.filter(Boolean).map((it) =>
-          h("a", { href: `#/settings?section=${it.id}` }, setIcon(it.icon),
+          h("a", { href: it.href || `#/settings?section=${it.id}` }, setIcon(it.icon),
             h("div", { class: "set-text" }, h("div", { class: "set-title" }, it.title), h("div", { class: "meta" }, it.sub)),
             h("span", { class: "chev", "aria-hidden": "true" }, ico("next"))))))),
-      h("p", { class: "meta about-line" }, "VidShelf · ", h("a", { href: "https://yeezyismygoat-pixel.github.io/ClaudeRep/vidshelf/privacy/", target: "_blank", rel: "noopener" }, "개인정보처리방침"),
-        " · 모든 정보는 이 휴대폰 안에만 저장됩니다")));
+      h("p", { class: "meta about-line" }, "Velvet 1.0 · 모든 정보는 이 휴대폰 안에만 저장됩니다 (만화는 e-hentai 에서 받아 옵니다)")));
     return;
   }
 
@@ -3535,6 +3539,7 @@ async function renderLibraryHub() {
   api("media?type=all&unorganized=1&per=1").then((d) => { todoN.textContent = d.total ? `${d.total.toLocaleString()}개 남음 · 사람·태그를 붙이거나 ‘정리 완료’로 표시하세요` : "모두 정리했습니다"; }).catch(() => {});
   const row = (href, icon, title, sub) => h("a", { href }, setIcon(icon), h("div", { class: "set-text" }, h("div", { class: "set-title" }, title), sub ? h("div", { class: "meta" }, sub) : null), h("span", { class: "chev", "aria-hidden": "true" }, ico("next")));
   $app.replaceChildren(h("div", { class: "libhub" },
+    h("div", { class: "home-head" }, h("div", {}, h("div", { class: "meta" }, "탐색"), h("h1", {}, "보관함"))),
     h("h2", { class: "set-group-title" }, "정리"),
     h("div", { class: "lib-list set-list" },
       row("#/media?unorganized=1", "broom", "정리할 항목", todoN)),
@@ -3549,7 +3554,9 @@ async function renderLibraryHub() {
     h("h2", { class: "set-group-title" }, "놀이"),
     h("div", { class: "lib-list set-list" }, row("#/cup", "trophy", "최애 월드컵", "두 개 중 더 좋은 쪽을 골라 순위 매기기")),
     h("h2", { class: "set-group-title" }, "앱"),
-    h("div", { class: "lib-list set-list" }, row("#/settings", "gear", "설정", "화면 · 폴더 · 클라우드 · 백업"))));
+    h("div", { class: "lib-list set-list" },
+      row("#/comics/settings", "comics", "만화 설정", "e-hentai 로그인 · 저장 공간 · 연결이 안 될 때"),
+      row("#/settings", "gear", "설정", "화면 · 폴더 · 클라우드 · 백업"))));
 }
 
 /** 탐색: 사람을 큰 카드로 쭉 (장면 3장), 위쪽 검색·필터는 미디어 탭처럼 떠 있음. 태그·나이로 거르기 */
@@ -3810,7 +3817,8 @@ async function renderExplore(params0) {
   }
 
   $app.replaceChildren(h("div", { class: "explore" },
-    h("div", { class: "home-head media-title" }, h("div", {}, countLine, h("h1", {}, "탐색"))),
+    h("div", { class: "home-head media-title" }, h("div", {}, countLine, h("h1", {}, "탐색")),
+      h("a", { class: "round-btn head-btn", href: "#/library", "aria-label": "보관함 · 설정", title: "보관함 · 설정" }, ico("gear"))),
     h("div", { class: "media-bar" },
       h("div", { class: "media-bar-row" }, typeSeg, filterBtn),
       h("label", { class: "ex-search-box" }, ico("search"), search),
@@ -3951,16 +3959,16 @@ function favSyncPanel(st) {
     st.fav_sync && st.manage_media_supported ? (st.manage_media
       ? h("p", { class: "meta" }, ico("done", "in"), "‘미디어 관리’ 권한이 켜져 있어 확인 창 없이 바로 반영됩니다.")
       : h("div", {}, h("p", { class: "meta" }, "지금은 앱에서 즐겨찾기를 바꿀 때마다 안드로이드가 확인 창을 띄웁니다. 아래 버튼으로 ‘미디어 관리’ 권한을 켜면 묻지 않고 바로 반영됩니다."),
-          h("a", { class: "btn", href: "vidshelf://manage-media" }, "‘미디어 관리’ 권한 켜기"))) : null);
+          h("a", { class: "btn", href: "velvet://manage-media" }, "‘미디어 관리’ 권한 켜기"))) : null);
 }
 
 function themePanel() {
   const seg = h("div", { class: "theme-seg", role: "group", "aria-label": "화면 테마" });
-  const draw = () => seg.replaceChildren(...[["system", "시스템 설정"], ["light", "라이트"], ["dark", "다크"]].map(([v, l]) =>
+  const draw = () => seg.replaceChildren(...[["dark", "밤"], ["light", "낮"], ["system", "휴대폰 따라"]].map(([v, l]) =>
     h("button", { class: themePref() === v ? "on" : "", "aria-pressed": themePref() === v ? "true" : "false", onclick: () => { setThemePref(v); draw(); } }, l)));
   draw();
   return h("div", { class: "panel" }, h("h3", {}, "화면"), seg,
-    h("p", { class: "meta" }, "‘시스템 설정’을 고르면 휴대폰의 다크 모드를 켜고 끌 때 함께 바뀝니다. 이 설정은 기기마다 따로 저장됩니다."));
+    h("p", { class: "meta" }, "Velvet 은 ‘밤’이 기본이에요. ‘휴대폰 따라’를 고르면 휴대폰의 다크 모드를 켜고 끌 때 함께 바뀝니다."));
 }
 
 // ---------------------------------------------------------------- 홈
@@ -3977,7 +3985,7 @@ function shelf(title, moreHref, kind) {
 }
 
 /** 홈 화면 줄 순서·보이기 (이 기기에 저장) */
-const HOME_SECTIONS = [["resume", "이어 보기"], ["recent", "최근 추가된 영상"], ["favs", "즐겨찾기"], ["photos", "최근 사진"], ["albums", "폴더"], ["people", "사람"]];
+const HOME_SECTIONS = [["comics", "이어 읽기 (만화)"], ["resume", "이어 보기"], ["recent", "최근 추가된 영상"], ["favs", "즐겨찾기"], ["photos", "최근 사진"], ["albums", "폴더"], ["people", "사람"]];
 let homeExtra = [];   // 홈에 표시하기로 한 저장된 필터: [["sf:12", "필터 · 공연 즐겨찾기"], …]
 /** 홈에 한 줄로 넣은 폴더 (이 기기에 저장) */
 function homeFolders() { try { return JSON.parse(localStorage.getItem("vs-home-folders") || "[]"); } catch (e) { return []; } }
@@ -4083,9 +4091,11 @@ async function renderHome() {
   const photos = shelf("최근 사진", "#/photos", "photos");
   const people = shelf("사람", "#/explore", "people");
   const albumsSec = shelf("폴더", "#/explore?t=folders", "albums");
-  const secs = { resume, recent, favs, photos, people, albums: albumsSec };
+  const comicsSec = shelf("이어 읽기", "#/comics", "comics");
+  const secs = { comics: comicsSec, resume, recent, favs, photos, people, albums: albumsSec };
   // 갤러리처럼 폴더 줄 + 홈에 넣은 폴더는 각각 한 줄
   const layout0 = homeLayout();
+  if (layout0.some((x) => x.k === "comics" && x.on)) api("eh/recent").then((d) => comicsSec.fill(d.items.slice(0, 12).map((g) => cxCard(g)))).catch(() => comicsSec.fill([]));
   if (layout0.some((x) => x.k === "albums" && x.on)) getAlbums().then((l) => albumsSec.fill(l.slice(0, 14).map(albumCard)));
   homeFolders().forEach((f) => {
     const sec = shelf(folderName(f), folderHref(f), "favs");
@@ -4115,7 +4125,7 @@ async function renderHome() {
   });
   const layout = homeLayout();
   $app.replaceChildren(h("div", { class: "home" },
-    h("div", { class: "home-head" }, h("div", {}, stats, h("h1", {}, "내 보관함"))),
+    h("div", { class: "home-head" }, h("div", {}, h("h1", {}, greeting()), stats)),
     // 검색에서 시작: 검색칸 · 자주 보는 사람 · 바로 가기 칩 · 이어 볼 영상 하나
     h("a", { class: "home-search", href: "#/search" }, ico("search"), "사람, 태그, 제목 검색"),
     quickPeople, quickChips, heroBox,
@@ -4182,6 +4192,12 @@ async function renderHome() {
     h("p", {}, "아직 보여 줄 것이 없습니다."), h("a", { class: "btn primary", href: "#/settings" }, "설정에서 폴더나 MEGA 링크 추가")));
 }
 
+/** 홈 인사: 시간대에 따라 */
+function greeting() {
+  const hr = new Date().getHours();
+  return hr < 5 ? "좋은 밤이에요" : hr < 11 ? "좋은 아침이에요" : hr < 17 ? "좋은 오후예요" : hr < 21 ? "좋은 저녁이에요" : "좋은 밤이에요";
+}
+
 // ---------------------------------------------------------------- 백업 / 복원
 function backupPanel() {
   const file = h("input", { type: "file", accept: ".json,application/json", hidden: true });
@@ -4205,7 +4221,7 @@ function backupPanel() {
     h("p", { class: "meta" }, "태그·별점·즐겨찾기·사람 정보·북마크·메모·클라우드 링크를 파일 하나로 저장합니다. 앱을 지웠다 다시 설치할 때 이 파일로 되살릴 수 있습니다. (비밀번호는 넣지 않습니다)"),
     h("p", { class: "warn" }, "백업 파일에는 MEGA 링크(열쇠 포함)가 들어 있으니 다른 사람에게 보내지 마세요."),
     h("div", { class: "row" },
-      h("a", { class: "btn primary", href: "/api/backup", download: "vidshelf-backup.json" }, "백업 파일 저장 (Download 폴더)"),
+      h("a", { class: "btn primary", href: "/api/backup", download: "velvet-backup.json" }, "백업 파일 저장 (Download 폴더)"),
       h("button", { class: "btn", onclick: () => file.click() }, "백업에서 복원")),
     file, msg);
 }
@@ -4555,7 +4571,7 @@ function renderLogin() {
     if (r.ok) route(); else toast("비밀번호가 틀렸습니다");
   };
   $app.replaceChildren(h("form", { class: "panel login", onsubmit: submit },
-    h("h3", {}, "VidShelf 로그인"), pw, h("button", { class: "btn primary" }, "로그인")));
+    h("h3", {}, "Velvet 로그인"), pw, h("button", { class: "btn primary" }, "로그인")));
   pw.focus();
 }
 

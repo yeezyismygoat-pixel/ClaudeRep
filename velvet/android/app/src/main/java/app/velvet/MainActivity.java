@@ -111,7 +111,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         root = new FrameLayout(this);
-        root.setBackgroundColor(systemDark() ? DARK_BG : LIGHT_BG);
+        root.setBackgroundColor(uiDark() ? DARK_BG : LIGHT_BG);
         setContentView(root);
         // 안드로이드 15부터는 화면이 상태 표시줄·내비게이션 막대 아래까지 그려짐 → 그만큼 직접 비워 둠 (키보드가 올라오면 키보드 높이도)
         if (Build.VERSION.SDK_INT >= 30) {
@@ -124,7 +124,7 @@ public class MainActivity extends Activity {
                 return WindowInsets.CONSUMED;
             });
         }
-        applyBars(systemDark());
+        applyBars(uiDark());
     }
 
     @Override
@@ -202,7 +202,7 @@ public class MainActivity extends Activity {
         s.setAllowContentAccess(false);
         s.setSupportMultipleWindows(false);   // target=_blank 링크도 앱 안에서 열기
         web.addJavascriptInterface(new ThemeBridge(), "VidShelfApp");   // 테마: 시스템 다크 모드 알림, 상태 표시줄 색
-        if (!systemDark()) web.setBackgroundColor(LIGHT_BG);
+        if (!uiDark()) web.setBackgroundColor(LIGHT_BG);
         web.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {   // 화면이 그려지면 아이콘 화면을 부드럽게 걷어 냄
@@ -319,7 +319,7 @@ public class MainActivity extends Activity {
     private void openEhLogin() {
         if (ehBox != null) return;
         if (checkEhCookies()) return;   // 이미 로그인되어 있음
-        boolean dark = systemDark();
+        boolean dark = uiDark();
         int[] c = palette();
         ehBox = new LinearLayout(this);
         ehBox.setOrientation(LinearLayout.VERTICAL);
@@ -434,13 +434,21 @@ public class MainActivity extends Activity {
                 == android.content.res.Configuration.UI_MODE_NIGHT_YES;
     }
 
+    /** 앱이 지금 쓰는 밝기 (Velvet 은 밤 테마가 기본, 웹 화면에서 바꾸면 기억) */
+    private boolean uiDark() {
+        return getPreferences(MODE_PRIVATE).getBoolean("ui_dark", true);
+    }
+
     /** 웹 화면이 부르는 함수들 (앱 안 화면에서만 쓰임). */
     private class ThemeBridge {
         @android.webkit.JavascriptInterface
         public boolean isSystemDark() { return systemDark(); }
 
         @android.webkit.JavascriptInterface
-        public void setDark(boolean dark) { ui.post(() -> applyBars(dark)); }
+        public void setDark(boolean dark) {
+            getPreferences(MODE_PRIVATE).edit().putBoolean("ui_dark", dark).apply();   // 다음에 켤 때 시작 화면도 같은 밝기로
+            ui.post(() -> applyBars(dark));
+        }
 
         /** 웹 화면이 보관한 이미지도 지움 (만화 → 보관 이미지 지우기) */
         @android.webkit.JavascriptInterface
@@ -543,14 +551,14 @@ public class MainActivity extends Activity {
 
     // ---- 처음 화면: 무엇을 가져올지 고르고 사진·영상 접근 허용
     private int[] palette() {   // 배경, 카드, 글자, 흐린 글자, 강조, 강조 위 글자, 옅은 강조, 선
-        return systemDark()
+        return uiDark()
                 ? new int[]{DARK_BG, 0xFF1D141A, 0xFFF4E9EC, 0xFFB9A3AD, 0xFFF07A9A, 0xFF2A0A16, 0xFF3D1A2A, 0xFF3D2A35}
                 : new int[]{LIGHT_BG, 0xFFFFFAF8, 0xFF231119, 0xFF6B5260, 0xFFB4234F, 0xFFFFFFFF, 0xFFF7DCE4, 0xFFE2D3CE};
     }
 
     private void showPermissionScreen() {
         final int[] c = palette();
-        final boolean dark = systemDark();
+        final boolean dark = uiDark();
         android.content.SharedPreferences prefs = getPreferences(MODE_PRIVATE);
         final boolean[] all = {!"pick".equals(prefs.getString("media_choice", "all"))};
 
@@ -725,7 +733,7 @@ public class MainActivity extends Activity {
     /** 켜는 동안: 가운데에 앱 아이콘 (천천히 숨 쉬듯 커졌다 작아짐) */
     private void showSplash() {
         if (web != null || (root.getChildCount() > 0 && "splash".equals(root.getChildAt(0).getTag()))) return;
-        boolean dark = systemDark();
+        boolean dark = uiDark();
         FrameLayout box = new FrameLayout(this);
         box.setTag("splash");
         box.setBackgroundColor(dark ? DARK_BG : LIGHT_BG);
@@ -755,7 +763,7 @@ public class MainActivity extends Activity {
         int[] c = palette();
         LinearLayout box = column();
         box.addView(text("앱을 시작하지 못했습니다", 18, c[2], true));
-        box.addView(text(err, 14, systemDark() ? 0xFFFF9E70 : 0xFFA8400E, false));
+        box.addView(text(err, 14, uiDark() ? 0xFFFF9E70 : 0xFFA8400E, false));
         box.addView(button("다시 시도", v -> {
             ServerService.lastError = null;
             ServerService.start(this);
@@ -767,8 +775,8 @@ public class MainActivity extends Activity {
     private void show(View v) {
         if (web != null) return;
         root.removeAllViews();
-        applyBars(systemDark());   // 앱과 같은 밝기
-        root.setBackgroundColor(systemDark() ? DARK_BG : LIGHT_BG);
+        applyBars(uiDark());   // 앱과 같은 밝기
+        root.setBackgroundColor(uiDark() ? DARK_BG : LIGHT_BG);
         root.addView(v, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
