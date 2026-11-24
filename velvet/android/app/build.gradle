@@ -1,0 +1,60 @@
+plugins {
+    id "com.android.application"
+}
+
+// CI 에서 고정된 서명 키를 쓰면 새 버전을 덮어 설치할 수 있음 (VELVET_KEYSTORE 가 없으면 기본 디버그 키)
+def stableKeystore = System.getenv("VELVET_KEYSTORE")
+
+android {
+    namespace "app.velvet"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "app.velvet"
+        minSdk 29
+        targetSdk 35   // 플레이스토어 요구 (안드로이드 15)
+        versionCode 1
+        versionName "1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // 웹 화면 (velvet/static)
+    sourceSets {
+        main.assets.srcDirs += ["../../static"]
+    }
+
+    signingConfigs {
+        if (stableKeystore) {
+            stable {
+                storeFile file(stableKeystore)
+                storePassword "velvet"
+                keyAlias "velvet"
+                keyPassword "velvet"
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            if (stableKeystore) signingConfig signingConfigs.stable
+        }
+        // 플레이스토어용 (AAB). 웹 화면과 이어지는 코드가 이름으로 불리므로 코드 줄이기(난독화)는 쓰지 않음
+        release {
+            minifyEnabled false
+            shrinkResources false
+            if (stableKeystore) signingConfig signingConfigs.stable
+        }
+    }
+    lint { abortOnError false }
+}
+
+dependencies {
+    // 웹 화면에서 재생할 수 없는 형식(MKV, HEVC 등)을 위한 앱 내장 플레이어
+    implementation "androidx.media3:media3-exoplayer:1.4.1"
+    implementation "androidx.media3:media3-ui:1.4.1"
+}

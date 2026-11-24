@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 만화 그림 서버(e-hentai H@H) 중에는 암호화하지 않은 주소도 있어서 모두 허용 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

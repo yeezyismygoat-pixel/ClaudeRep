@@ -1,0 +1,2750 @@
+package app.velvet;
+
+import android.content.ContentUris;
+import android.content.Context;
+import android.content.res.AssetManager;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.media.MediaMetadataRetriever;
+import android.net.Uri;
+import android.os.ParcelFileDescriptor;
+import android.provider.MediaStore;
+import android.util.Size;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpCookie;
+import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Random;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.Semaphore;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.crypto.Mac;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
+
+/**
+ * 영상 목록(MediaStore) + 사용자 정보(태그·별점 등, JSON 파일) + 웹 API.
+ * API 는 vidshelf/server.py 와 같은 형식이라 같은 웹 화면(vidshelf/static)을 씁니다.
+ */
+public class Library implements HttpServer.Handler {
+
+    static final int N_FRAMES = 8;
+    static final String[] DEFAULT_PATHS = {"DCIM/", "Download/"};
+    private static final Set<String> DIRECT_EXTS = new HashSet<>(java.util.Arrays.asList(
+            "mp4", "m4v", "mov", "mkv", "webm", "3gp", "ogv"));
+
+    private static Library instance;
+
+    public static synchronized Library get(Context ctx) {
+        if (instance == null) instance = new Library(ctx.getApplicationContext());
+        return instance;
+    }
+
+    static class Video {
+        long id;
+        String name, relPath, mime, key;
+        long size, dateAdded, dateModified;
+        double duration;
+        int width, height;
+        Uri uri;
+        boolean sysFav;      // 기기 갤러리(안드로이드)의 즐겨찾기
+        Mega.Link link;      // MEGA 영상이면 설정됨
+        Mega.Node node;
+        ICloud.Album album;  // iCloud 공유 앨범 항목이면 설정됨
+        ICloud.Item item;
+
+        boolean cloud() { return node != null || item != null; }
+        String source() { return node != null ? "mega" : item != null ? "icloud" : "local"; }
+        long taken;          // 사진: 촬영 시각 (초)
+    }
+
+    static final long PHOTO_ID_BASE = 1L << 51;   // 기기 사진 id (영상 id 와 겹치지 않게)
+    private List<Video> allPhotos = new ArrayList<>();
+    private final Map<Long, Video> photoById = new HashMap<>();
+    private static final Set<String> MEGA_IMAGE_EXTS = new HashSet<>(java.util.Arrays.asList(
+            "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp"));
+
+    private final Context ctx;
+    private final File storeFile, thumbDir;
+    private JSONObject store;                         // settings, videos(meta), tags, performers, seq
+    private List<Video> all = new ArrayList<>();      // MediaStore 의 모든 영상
+    private final Map<Long, Video> byId = new HashMap<>();
+    private long lastScan = 0;
+    private final Semaphore frameLock = new Semaphore(2);
+    private final List<Mega.Link> megaLinks = new ArrayList<>();
+    private final List<ICloud.Album> icloudAlbums = new ArrayList<>();
+    private static final Set<String> MEGA_VIDEO_EXTS = new HashSet<>(java.util.Arrays.asList(
+            "mp4", "m4v", "mov", "mkv", "webm", "3gp", "ogv", "avi", "wmv", "flv", "ts", "mpg", "mpeg"));
+
+    private Library(Context ctx) {
+        this.ctx = ctx;
+        storeFile = new File(ctx.getFilesDir(), "library.json");
+        thumbDir = new File(ctx.getCacheDir(), "thumbs");
+        load();
+        JSONArray links = settings().optJSONArray("mega_links");
+        for (int i = 0; links != null && i < links.length(); i++) {
+            try { megaLinks.add(Mega.parse(links.optString(i))); } catch (Exception ignored) {}
+        }
+        loadICloudLinks();
+        new Thread(this::refreshMega).start();
+        // MEGA 목록 자동 새로고침: 15분마다 확인해서 정한 시간이 지났으면 새로 받음
+        bg.scheduleWithFixedDelay(() -> {
+            try {
+                int hours = megaRefreshHours();
+                if (hours > 0 && (!megaLinks.isEmpty() || !icloudAlbums.isEmpty()) && System.currentTimeMillis() - lastMegaRefresh > hours * 3600_000L)
+                    new Thread(this::refreshMega).start();
+            } catch (Exception ignored) {}
+        }, 15, 15, java.util.concurrent.TimeUnit.MINUTES);
+    }
+
+    private final java.util.concurrent.ScheduledExecutorService bg = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+    private volatile long lastMegaRefresh = 0;
+
+    private synchronized int megaRefreshHours() { return settings().optInt("mega_refresh_hours", 6); }
+
+    // ------------------------------------------------------------------ MEGA
+    /** 모든 MEGA 링크의 파일 목록을 다시 받습니다 (네트워크 작업, 잠금 밖에서 실행). */
+    public void refreshMega() {
+        List<Mega.Link> links;
+        synchronized (this) { links = new ArrayList<>(megaLinks); }
+        lastMegaRefresh = System.currentTimeMillis();
+        for (Mega.Link l : links) Mega.load(l);
+        List<ICloud.Album> albums;
+        synchronized (this) { albums = new ArrayList<>(icloudAlbums); }
+        for (ICloud.Album a : albums) ICloud.load(a);   // iCloud 공유 앨범도 함께 새로 받음
+        scan();
+        megaThumbsSoon();
+    }
+
+    // ------------------------------------------------------------------ MEGA 썸네일 직접 만들기
+    private final java.util.concurrent.atomic.AtomicBoolean genRunning = new java.util.concurrent.atomic.AtomicBoolean();
+    private volatile int genPending = 0;
+    private volatile String genCurrent = "";
+    private volatile long genPausedUntil = 0;
+    private static final int GEN_MAX_FAILS = 2;
+
+    private File megaGenFile(Mega.Node n) { return new File(new File(thumbDir, "mega"), n.handle + "-g.jpg"); }
+
+    private boolean megaHasThumb(Mega.Node n) {
+        return n.thumbHandle != null || n.previewHandle != null || megaGenFile(n).length() > 0;
+    }
+
+    private synchronized boolean megaThumbsOn() { return settings().optBoolean("mega_thumbs", true); }
+
+    /** 썸네일을 만들어야 할 MEGA 영상 (MEGA 썸네일 없음, 아직 안 만듦, 실패 횟수 미만). */
+    private synchronized List<Video> megaThumbTodo() {
+        List<Video> out = new ArrayList<>();
+        for (Video v : all) {
+            if (v.node == null || megaHasThumb(v.node)) continue;
+            JSONObject m = meta(v);
+            if (m.optBoolean("hidden", false) || m.optInt("gen_fail", 0) >= GEN_MAX_FAILS) continue;
+            out.add(v);
+        }
+        out.sort(Comparator.comparingLong((Video v) -> v.dateAdded).reversed());   // 최근 영상부터
+        return out;
+    }
+
+    /** 썸네일이 없는 MEGA 영상의 장면을 백그라운드에서 하나씩 뽑습니다. */
+    public void megaThumbsSoon() {
+        if (!megaThumbsOn() || System.currentTimeMillis() < genPausedUntil) return;
+        if (!genRunning.compareAndSet(false, true)) return;
+        new Thread(() -> {
+            try {
+                List<Video> todo = megaThumbTodo();
+                for (int i = 0; i < todo.size(); i++) {
+                    if (!megaThumbsOn()) break;
+                    Video v = todo.get(i);
+                    genPending = todo.size() - i;
+                    genCurrent = v.name;
+                    MegaFrame.Result r;
+                    try {
+                        r = MegaFrame.grab(v.link, v.node);
+                    } catch (MegaFrame.QuotaException e) {
+                        genPausedUntil = System.currentTimeMillis() + 60 * 60 * 1000L;   // 한도에 걸리면 한 시간 쉼
+                        break;
+                    }
+                    synchronized (this) {
+                        JSONObject m = meta(v);
+                        try {
+                            if (r.duration > 0 && m.optDouble("duration", 0) <= 0) m.put("duration", r.duration);
+                            if (r.width > 0 && r.height > 0 && m.optInt("width", 0) <= 0) { m.put("width", r.width); m.put("height", r.height); }
+                            if (r.bitmap == null) m.put("gen_fail", m.optInt("gen_fail", 0) + 1);
+                        } catch (JSONException ignored) {}
+                        save();
+                    }
+                    if (r.bitmap != null) {
+                        File f = megaGenFile(v.node);
+                        f.getParentFile().mkdirs();
+                        File tmp = new File(f.getPath() + ".tmp");
+                        try (FileOutputStream o = new FileOutputStream(tmp)) {
+                            r.bitmap.compress(Bitmap.CompressFormat.JPEG, 80, o);
+                        } catch (IOException ignored) {}
+                        r.bitmap.recycle();
+                        tmp.renameTo(f);
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                genPending = 0;
+                genCurrent = "";
+                genRunning.set(false);
+            }
+        }, "mega-thumbs").start();
+    }
+
+    // ------------------------------------------------------------------ 숨긴 영상
+    private synchronized JSONArray hiddenVideos() throws JSONException {
+        if (lastScan == 0) scan();
+        JSONArray out = new JSONArray();
+        for (Video v : all) {
+            if (!meta(v).optBoolean("hidden", false)) continue;
+            out.put(summary(v).put("filename", v.name).put("folder", v.relPath).put("source", v.source()));
+        }
+        return out;
+    }
+
+    // ------------------------------------------------------------------ 중복 영상: 하나만 남기고 정보 합치기
+    /** others 의 태그·출연자·별점·즐겨찾기·재생 기록·북마크·메모를 keep 에 합치고 others 는 숨김. */
+    private synchronized void mergeInto(Video keep, List<Video> others) throws JSONException {
+        JSONObject k = meta(keep);
+        for (Video o : others) {
+            if (o == keep) continue;
+            JSONObject m = meta(o);
+            for (String f : new String[]{"tags", "performers"}) {
+                Set<Long> ids = new java.util.LinkedHashSet<>();
+                for (JSONArray a : new JSONArray[]{k.optJSONArray(f), m.optJSONArray(f)})
+                    for (int i = 0; a != null && i < a.length(); i++) ids.add(a.optLong(i));
+                k.put(f, new JSONArray(ids));
+            }
+            k.put("rating", Math.max(k.optInt("rating", 0), m.optInt("rating", 0)));
+            if (m.optBoolean("favorite", false)) k.put("favorite", true);
+            k.put("play_count", k.optInt("play_count", 0) + m.optInt("play_count", 0));
+            if (m.optLong("last_played", 0) > k.optLong("last_played", 0)) k.put("last_played", m.optLong("last_played"));
+            if (k.optDouble("resume_pos", 0) <= 0 && m.optDouble("resume_pos", 0) > 0) k.put("resume_pos", m.optDouble("resume_pos"));
+            String d1 = k.optString("details", "").trim(), d2 = m.optString("details", "").trim();
+            if (!d2.isEmpty() && !d1.contains(d2)) k.put("details", d1.isEmpty() ? d2 : d1 + "\n" + d2);
+            JSONArray mk = k.optJSONArray("markers"), om = m.optJSONArray("markers");
+            if (om != null && om.length() > 0) {
+                List<JSONObject> l = new ArrayList<>();
+                Set<Long> secs = new HashSet<>();
+                for (JSONArray a : new JSONArray[]{mk, om})
+                    for (int i = 0; a != null && i < a.length(); i++) {
+                        JSONObject x = a.optJSONObject(i);
+                        if (x != null && secs.add(Math.round(x.optDouble("seconds")))) l.add(x);
+                    }
+                l.sort(Comparator.comparingDouble(o2 -> o2.optDouble("seconds")));
+                k.put("markers", new JSONArray(l));
+            }
+            m.put("hidden", true);
+        }
+        save();
+    }
+
+    // ------------------------------------------------------------------ 백업 / 복원
+    private static final String[] BACKUP_KEYS = {"videos", "tags", "performers", "performer_info", "seq"};
+    private static final String[] BACKUP_SETTINGS = {"library_paths", "library_all", "mega_links", "icloud_links", "mega_thumbs", "mega_refresh_hours"};
+
+    /** 태그·별점·출연자 등 사용자 정보. 비밀번호와 로그인 쿠키는 넣지 않음. */
+    private synchronized JSONObject backupJson() throws JSONException {
+        JSONObject o = new JSONObject().put("app", "velvet").put("backup_version", 1).put("exported_at", System.currentTimeMillis() / 1000);
+        for (String k : BACKUP_KEYS) if (store.has(k)) o.put(k, store.get(k));
+        JSONObject st = new JSONObject();
+        for (String k : BACKUP_SETTINGS) if (settings().has(k)) st.put(k, settings().get(k));
+        return o.put("settings", st);
+    }
+
+    /** 백업을 불러와 지금 정보를 바꿉니다. 돌려주는 값: 불러온 영상 정보 수. */
+    private synchronized int restore(JSONObject b) throws JSONException {
+        if (!"vidshelf".equals(b.optString("app")) && !"velvet".equals(b.optString("app")) || !b.has("videos")) throw new JSONException("Velvet·VidShelf 백업 파일이 아닙니다");
+        for (String k : BACKUP_KEYS) if (b.has(k)) store.put(k, b.get(k));
+        if (!store.has("tags")) store.put("tags", new JSONObject());
+        if (!store.has("performers")) store.put("performers", new JSONObject());
+        long maxId = store.optLong("seq", 1);   // 새로 만들 번호가 기존 번호와 겹치지 않게
+        for (String f : new String[]{"tags", "performers"}) {
+            Iterator<String> it = store.optJSONObject(f).keys();
+            while (it.hasNext()) maxId = Math.max(maxId, Long.parseLong(it.next()) + 1);
+        }
+        store.put("seq", maxId);
+        JSONObject st = b.optJSONObject("settings");
+        if (st != null) for (String k : BACKUP_SETTINGS) if (st.has(k)) settings().put(k, st.get(k));
+        megaLinks.clear();
+        JSONArray il = settings().optJSONArray("icloud_links");
+        icloudAlbums.clear();
+        for (int i = 0; il != null && i < il.length(); i++) {
+            try { icloudAlbums.add(ICloud.parse(il.optString(i))); } catch (Exception ignored) {}
+        }
+        JSONArray links = settings().optJSONArray("mega_links");
+        for (int i = 0; links != null && i < links.length(); i++) {
+            try { megaLinks.add(Mega.parse(links.optString(i))); } catch (Exception ignored) {}
+        }
+        writeNow();
+        return store.optJSONObject("videos").length();
+    }
+
+    /** 파일 크기가 똑같은 영상 묶음 (기기와 MEGA, 여러 폴더에 같은 영상이 있을 때). */
+    private synchronized JSONObject duplicates() throws JSONException {
+        Map<Long, List<Video>> bySize = new HashMap<>();
+        for (Video v : visible()) if (v.size > 1024 * 1024) bySize.computeIfAbsent(v.size, k -> new ArrayList<>()).add(v);
+        List<List<Video>> groups = new ArrayList<>();
+        for (List<Video> g : bySize.values()) if (g.size() > 1) groups.add(g);
+        // 사진: 파일 크기와 가로·세로가 모두 같으면 같은 사진으로 봄
+        Map<String, List<Video>> photoKey = new HashMap<>();
+        for (Video v : visiblePhotos()) if (v.size > 20 * 1024) { int[] wh = dims(v, meta(v)); photoKey.computeIfAbsent(v.size + "x" + wh[0] + "x" + wh[1], k -> new ArrayList<>()).add(v); }
+        Set<Long> photoIdsDup = new HashSet<>();
+        for (List<Video> g : photoKey.values()) if (g.size() > 1) { groups.add(g); for (Video v : g) photoIdsDup.add(v.id); }
+        groups.sort((a, b) -> Long.compare(b.get(0).size, a.get(0).size));
+        JSONArray out = new JSONArray();
+        for (List<Video> g : groups) {
+            boolean mega = false, local = false;
+            Set<String> folders = new HashSet<>();
+            JSONArray items = new JSONArray();
+            g.sort(Comparator.comparing((Video v) -> v.node != null).thenComparing(v -> v.relPath + v.name));   // 기기 영상 먼저
+            for (Video v : g) {
+                if (v.node != null) mega = true; else local = true;
+                folders.add(v.relPath);
+                boolean ph = photoIdsDup.contains(v.id);
+                items.put((ph ? photoSummary(v) : summary(v)).put("kind", ph ? "photo" : "video").put("filename", v.name).put("folder", v.relPath).put("source", v.source()));
+            }
+            String reason = mega && local ? "이 기기 + MEGA" : folders.size() > 1 ? "여러 폴더" : "같은 폴더";
+            out.put(new JSONObject().put("size", g.get(0).size).put("reason", reason).put("items", items));
+        }
+        return new JSONObject().put("groups", out);
+    }
+
+    // ------------------------------------------------------------------ 출연자 자동 지정 · 정보 찾기
+    private volatile String lookupStatus = "";   // (사람 정보 자동 찾기는 없앰 — 항상 비어 있음)
+
+    // ------------------------------------------------------------------ 태그 묶음(상위 태그)·다른 이름
+    private synchronized JSONObject tagInfo(long id) throws JSONException {
+        JSONObject all = store.optJSONObject("tag_info");
+        if (all == null) { all = new JSONObject(); store.put("tag_info", all); }
+        JSONObject o = all.optJSONObject(String.valueOf(id));
+        if (o == null) { o = new JSONObject(); all.put(String.valueOf(id), o); }
+        return o;
+    }
+
+    /** 이 태그와 그 아래(하위) 태그들 모두 */
+    private synchronized Set<Long> tagWithChildren(long id) {
+        Set<Long> out = new HashSet<>();
+        out.add(id);
+        JSONObject all = store.optJSONObject("tag_info");
+        if (all == null) return out;
+        boolean grew = true;
+        while (grew) {
+            grew = false;
+            Iterator<String> it = all.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                JSONObject o = all.optJSONObject(k);
+                long par = o == null ? 0 : o.optLong("parent", 0);
+                if (par != 0 && out.contains(par) && out.add(Long.parseLong(k))) grew = true;
+            }
+        }
+        return out;
+    }
+
+    private static boolean hasAny(JSONArray ids, Set<Long> wanted) {
+        for (int i = 0; ids != null && i < ids.length(); i++) if (wanted.contains(ids.optLong(i))) return true;
+        return false;
+    }
+
+    /** 검색에 쓰는 다른 이름들 (태그 이름·태그 다른 이름·사람 다른 이름) */
+    private synchronized String aliasText(JSONObject m) {
+        StringBuilder sb = new StringBuilder();
+        JSONArray tg = m.optJSONArray("tags");
+        JSONObject tagNames = store.optJSONObject("tags"), ti = store.optJSONObject("tag_info"), pi = store.optJSONObject("performer_info");
+        for (int i = 0; tg != null && i < tg.length(); i++) {
+            String k = String.valueOf(tg.optLong(i));
+            sb.append(' ').append(tagNames.optString(k));
+            JSONObject o = ti == null ? null : ti.optJSONObject(k);
+            if (o != null) sb.append(' ').append(o.optString("aliases"));
+        }
+        JSONArray pf = m.optJSONArray("performers");
+        for (int i = 0; pf != null && i < pf.length(); i++) {
+            JSONObject o = pi == null ? null : pi.optJSONObject(String.valueOf(pf.optLong(i)));
+            if (o != null) sb.append(' ').append(o.optString("aliases"));
+        }
+        return sb.toString();
+    }
+
+    private synchronized JSONObject performerInfo(long id) throws JSONException {
+        JSONObject all = store.optJSONObject("performer_info");
+        if (all == null) { all = new JSONObject(); store.put("performer_info", all); }
+        JSONObject o = all.optJSONObject(String.valueOf(id));
+        if (o == null) { o = new JSONObject(); all.put(String.valueOf(id), o); }
+        return o;
+    }
+
+    private synchronized JSONObject entityJson(String field, long id) throws JSONException {
+        JSONObject o = new JSONObject().put("id", id).put("name", store.optJSONObject(field).optString(String.valueOf(id)));
+        if (field.equals("tags")) {   // 상위 태그·다른 이름
+            JSONObject ti = tagInfo(id);
+            o.put("parent", ti.optLong("parent", 0)).put("aliases", ti.optString("aliases", ""));
+        }
+        if (field.equals("performers")) {
+            JSONObject info = performerInfo(id);
+            for (String k : new String[]{"group", "real_name", "birthdate", "height", "source", "source_url", "aliases"})
+                o.put(k, info.optString(k, ""));
+            o.put("cover_pick", info.optString("cover", ""));   // 직접 고른 대표 그림 ("video:123" / "photo:456")
+            o.put("looked_up", info.has("lookup_at"));
+            o.put("lookup_found", info.optBoolean("lookup_found", false));
+        }
+        return o;
+    }
+
+    private synchronized void saveMegaLinks() {
+        JSONArray a = new JSONArray();
+        for (Mega.Link l : megaLinks) a.put(l.url);
+        try { settings().put("mega_links", a); } catch (JSONException ignored) {}
+        save();
+    }
+
+    private synchronized JSONArray megaJson() throws JSONException {
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < megaLinks.size(); i++) {
+            Mega.Link l = megaLinks.get(i);
+            int files = 0, vids = 0;
+            for (Mega.Node n : l.nodes) if (!n.folder) { files++; if (MEGA_VIDEO_EXTS.contains(ext(n.name))) vids++; }
+            out.put(new JSONObject().put("index", i).put("name", l.name).put("handle", l.handle)
+                    .put("files", files).put("videos", vids).put("loaded", l.loadedAt > 0)
+                    .put("error", l.error == null ? JSONObject.NULL : l.error));
+        }
+        return out;
+    }
+
+    private synchronized JSONObject megaBrowse(int index, String folder) throws JSONException {
+        if (index < 0 || index >= megaLinks.size()) return null;
+        Mega.Link l = megaLinks.get(index);
+        Map<String, Mega.Node> by = l.byHandle;
+        Mega.Node cur = folder == null || folder.isEmpty() ? null : by.get(folder);
+        if (cur == null) {
+            cur = by.get(l.handle);
+            if (cur == null) for (Mega.Node n : l.nodes) if (n.folder && !by.containsKey(n.parent)) { cur = n; break; }
+        }
+        JSONObject o = new JSONObject().put("link", new JSONObject().put("index", index).put("name", l.name))
+                .put("error", l.error == null ? JSONObject.NULL : l.error);
+        if (cur == null) return o.put("folders", new JSONArray()).put("files", new JSONArray()).put("crumbs", new JSONArray());
+        List<JSONObject> crumbs = new ArrayList<>();
+        Mega.Node c = cur;
+        int guard = 0;
+        while (c != null && guard++ < 64) {
+            crumbs.add(0, new JSONObject().put("handle", c.handle).put("name", c.name));
+            c = by.get(c.parent);
+        }
+        List<Mega.Node> folders = new ArrayList<>(), files = new ArrayList<>();
+        for (Mega.Node n : l.nodes) if (cur.handle.equals(n.parent)) (n.folder ? folders : files).add(n);
+        Comparator<Mega.Node> byName = Comparator.comparing(n -> n.name.toLowerCase(Locale.ROOT));
+        folders.sort(byName);
+        files.sort(byName);
+        JSONArray fo = new JSONArray(), fi = new JSONArray();
+        for (Mega.Node n : folders) fo.put(new JSONObject().put("handle", n.handle).put("name", n.name));
+        for (Mega.Node n : files) {
+            String e = ext(n.name);
+            String kind = MEGA_VIDEO_EXTS.contains(e) ? "video" : mimeFor(e).startsWith("image/") ? "image" : mimeFor(e).startsWith("audio/") ? "audio" : "file";
+            fi.put(new JSONObject().put("handle", n.handle).put("name", n.name).put("size", n.size).put("kind", kind)
+                    .put("id", kind.equals("video") ? n.id : JSONObject.NULL).put("thumb", kind.equals("video") ? megaHasThumb(n) : n.thumbHandle != null || n.previewHandle != null)
+                    .put("url", "/mega-file/" + index + "/" + n.handle));
+        }
+        return o.put("folder", new JSONObject().put("handle", cur.handle).put("name", cur.name))
+                .put("crumbs", new JSONArray(crumbs)).put("folders", fo).put("files", fi);
+    }
+
+    static String ext(String name) {
+        int d = name.lastIndexOf('.');
+        return d >= 0 ? name.substring(d + 1).toLowerCase(Locale.ROOT) : "";
+    }
+
+    static String mimeFor(String ext) {
+        switch (ext) {
+            case "mp4": case "m4v": case "mov": case "3gp": return "video/mp4";
+            case "mkv": case "webm": return "video/webm";
+            case "ogv": return "video/ogg";
+            case "avi": return "video/x-msvideo";
+            case "jpg": case "jpeg": return "image/jpeg";
+            case "png": return "image/png";
+            case "gif": return "image/gif";
+            case "webp": return "image/webp";
+            case "heic": return "image/heic";
+            case "mp3": return "audio/mpeg";
+            case "m4a": case "aac": return "audio/mp4";
+            case "ogg": case "opus": return "audio/ogg";
+            case "wav": return "audio/wav";
+            case "flac": return "audio/flac";
+            case "pdf": return "application/pdf";
+            case "txt": case "srt": case "vtt": case "md": return "text/plain; charset=utf-8";
+            default: return "application/octet-stream";
+        }
+    }
+
+    // ------------------------------------------------------------------ store
+    private synchronized void load() {
+        try {
+            if (storeFile.exists()) {
+                byte[] b = readAll(new FileInputStream(storeFile));
+                store = new JSONObject(new String(b, StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) {
+            store = null;
+        }
+        if (store == null) store = new JSONObject();
+        try {
+            if (!store.has("settings")) store.put("settings", new JSONObject());
+            if (!store.has("videos")) store.put("videos", new JSONObject());
+            if (!store.has("tags")) store.put("tags", new JSONObject());
+            if (!store.has("performers")) store.put("performers", new JSONObject());
+            if (!store.has("seq")) store.put("seq", 1);
+            JSONObject st = settings();
+            if (!st.has("library_paths")) st.put("library_paths", new JSONArray(DEFAULT_PATHS));
+            if (!st.has("secret")) st.put("secret", randomHex(32));
+            if (!st.has("app_token")) st.put("app_token", randomHex(32));
+        } catch (JSONException ignored) {
+        }
+        save();
+    }
+
+    private boolean savePending = false;
+
+    /** 저장을 잠시 모아서 한 번에 씀 (재생 위치처럼 자주 바뀌는 값 때문에 파일 전체를 계속 쓰지 않도록). */
+    private synchronized void save() {
+        if (savePending) return;
+        savePending = true;
+        bg.schedule(this::writeNow, 1500, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    private synchronized void writeNow() {
+        savePending = false;
+        try {
+            File tmp = new File(storeFile.getPath() + ".tmp");
+            try (FileOutputStream o = new FileOutputStream(tmp)) {
+                o.write(store.toString().getBytes(StandardCharsets.UTF_8));
+            }
+            if (!tmp.renameTo(storeFile)) {
+                storeFile.delete();
+                tmp.renameTo(storeFile);
+            }
+        } catch (IOException ignored) {
+        }
+    }
+
+    private JSONObject settings() { return store.optJSONObject("settings"); }
+
+    private synchronized long nextId() {
+        long n = store.optLong("seq", 1);
+        try { store.put("seq", n + 1); } catch (JSONException ignored) {}
+        return n;
+    }
+
+    private synchronized JSONObject meta(Video v) {
+        JSONObject vids = store.optJSONObject("videos");
+        JSONObject m = vids.optJSONObject(v.key);
+        if (m == null) {
+            m = new JSONObject();
+            try {
+                vids.put(v.key, m);
+            } catch (JSONException ignored) {}
+        }
+        return m;
+    }
+
+    /** 목록에 넣을 폴더. ‘휴대폰 전체’를 골랐으면 빈 글자 하나(모든 폴더가 여기로 시작) */
+    public synchronized List<String> libraryPaths() {
+        if (settings().optBoolean("library_all", false)) { List<String> all = new ArrayList<>(); all.add(""); return all; }
+        return storedPaths();
+    }
+
+    /** 처음 화면에서 고른 방식: true = 휴대폰 전체, false = 고른 폴더만 */
+    public synchronized void setLibraryAll(boolean on) {
+        try { settings().put("library_all", on); } catch (JSONException ignored) {}
+        save();
+        lastScan = 0;
+    }
+
+    private synchronized List<String> storedPaths() {
+        List<String> out = new ArrayList<>();
+        JSONArray a = settings().optJSONArray("library_paths");
+        if (a != null) for (int i = 0; i < a.length(); i++) out.add(a.optString(i));
+        return out;
+    }
+
+    /** 다른 기기 접속 기능은 없앰 (이 폰 안에서만 열림) */
+    public synchronized boolean lanEnabled() { return false; }
+
+    public synchronized void setLan(boolean on) {
+        try { settings().put("lan", on); } catch (JSONException ignored) {}
+        save();
+    }
+
+    /** 앱 화면(WebView)만 가진 쿠키 값. 앱 밖(브라우저·다른 앱)에서는 비밀번호로만 들어올 수 있음. */
+    public synchronized String appToken() { return settings().optString("app_token"); }
+
+    /** 설정이 바뀐 뒤 서버를 새 설정(접속 범위)으로 다시 엽니다. 진행 중인 응답을 마치도록 잠시 뒤에 실행. */
+    private void restartServerSoon() {
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> ServerService.start(ctx), 500);
+    }
+
+    public synchronized boolean passwordSet() { return settings().has("password_hash"); }
+
+    public synchronized void setPassword(String pw) {
+        try {
+            if (pw == null || pw.isEmpty()) {
+                settings().remove("password_hash");
+                settings().remove("salt");
+            } else {
+                String salt = randomHex(8);
+                settings().put("salt", salt);
+                settings().put("password_hash", hashPassword(pw, salt));
+            }
+        } catch (JSONException ignored) {
+        }
+        save();
+    }
+
+    // ------------------------------------------------------------------ MediaStore scan
+    public synchronized void scan() {
+        List<Video> list = new ArrayList<>();
+        Uri base = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
+        String[] proj = {
+                MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME, MediaStore.Video.Media.RELATIVE_PATH,
+                MediaStore.Video.Media.SIZE, MediaStore.Video.Media.DURATION, MediaStore.Video.Media.WIDTH,
+                MediaStore.Video.Media.HEIGHT, MediaStore.Video.Media.DATE_ADDED, MediaStore.Video.Media.DATE_MODIFIED,
+                MediaStore.Video.Media.MIME_TYPE, android.os.Build.VERSION.SDK_INT >= 30 ? MediaStore.MediaColumns.ORIENTATION : MediaStore.Video.Media._ID,
+                android.os.Build.VERSION.SDK_INT >= 30 ? MediaStore.MediaColumns.IS_FAVORITE : MediaStore.Video.Media._ID};
+        try (Cursor c = ctx.getContentResolver().query(base, proj, null, null, null)) {
+            if (c != null) {
+                while (c.moveToNext()) {
+                    Video v = new Video();
+                    v.id = c.getLong(0);
+                    v.name = nz(c.getString(1));
+                    v.relPath = nz(c.getString(2));
+                    v.size = c.getLong(3);
+                    v.duration = c.getLong(4) / 1000.0;
+                    v.width = c.getInt(5);
+                    v.height = c.getInt(6);
+                    v.dateAdded = c.getLong(7);
+                    v.dateModified = c.getLong(8);
+                    v.mime = c.getString(9);
+                    // 세로로 찍은 영상은 회전 정보가 따로 있어서, 화면비를 맞추려면 가로·세로를 바꿔야 함
+                    if (android.os.Build.VERSION.SDK_INT >= 30 && (c.getInt(10) == 90 || c.getInt(10) == 270)) {
+                        int t = v.width; v.width = v.height; v.height = t;
+                    }
+                    v.uri = ContentUris.withAppendedId(base, v.id);
+                    v.sysFav = android.os.Build.VERSION.SDK_INT >= 30 && c.getInt(11) == 1;
+                    v.key = v.relPath + v.name + "|" + v.size;
+                    list.add(v);
+                }
+            }
+        } catch (SecurityException e) {
+            // 권한 없음 — 빈 목록
+        }
+        for (Mega.Link l : megaLinks) {
+            List<Mega.Node> nodes;
+            synchronized (l) { nodes = new ArrayList<>(l.nodes); }
+            for (Mega.Node n : nodes) {
+                if (n.folder || !MEGA_VIDEO_EXTS.contains(ext(n.name))) continue;
+                Video v = new Video();
+                v.id = n.id;
+                v.name = n.name;
+                v.relPath = "MEGA/" + n.path;
+                v.size = n.size;
+                v.dateAdded = n.ts;
+                v.dateModified = n.ts;
+                v.mime = mimeFor(ext(n.name));
+                v.key = "mega:" + n.handle;
+                v.link = l;
+                v.node = n;
+                list.add(v);
+            }
+        }
+        for (ICloud.Album a : icloudAlbums) addICloud(a, list, true);
+        all = list;
+        byId.clear();
+        for (Video v : list) byId.put(v.id, v);
+        scanPhotos();
+        lastScan = System.currentTimeMillis();
+    }
+
+    private synchronized void scanPhotos() {
+        List<Video> list = new ArrayList<>();
+        Uri base = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+        String[] proj = {
+                MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.RELATIVE_PATH,
+                MediaStore.Images.Media.SIZE, MediaStore.Images.Media.WIDTH, MediaStore.Images.Media.HEIGHT,
+                MediaStore.Images.Media.DATE_ADDED, MediaStore.Images.Media.DATE_TAKEN, MediaStore.Images.Media.MIME_TYPE,
+                MediaStore.Images.Media.ORIENTATION,
+                android.os.Build.VERSION.SDK_INT >= 30 ? MediaStore.MediaColumns.IS_FAVORITE : MediaStore.Images.Media._ID};
+        try (Cursor c = ctx.getContentResolver().query(base, proj, null, null, null)) {
+            if (c != null) {
+                while (c.moveToNext()) {
+                    Video v = new Video();
+                    long mid = c.getLong(0);
+                    v.id = PHOTO_ID_BASE | mid;
+                    v.name = nz(c.getString(1));
+                    v.relPath = nz(c.getString(2));
+                    v.size = c.getLong(3);
+                    v.width = c.getInt(4);
+                    v.height = c.getInt(5);
+                    if (c.getInt(9) == 90 || c.getInt(9) == 270) { int t = v.width; v.width = v.height; v.height = t; }
+                    v.dateAdded = c.getLong(6);
+                    v.taken = c.getLong(7) > 0 ? c.getLong(7) / 1000 : v.dateAdded;
+                    v.mime = c.getString(8);
+                    v.uri = ContentUris.withAppendedId(base, mid);
+                    v.sysFav = android.os.Build.VERSION.SDK_INT >= 30 && c.getInt(10) == 1;
+                    v.key = v.relPath + v.name + "|" + v.size;
+                    list.add(v);
+                }
+            }
+        } catch (SecurityException e) {
+            // 사진 권한 없음 — 빈 목록
+        }
+        for (Mega.Link l : megaLinks) {
+            List<Mega.Node> nodes;
+            synchronized (l) { nodes = new ArrayList<>(l.nodes); }
+            for (Mega.Node n : nodes) {
+                if (n.folder || !MEGA_IMAGE_EXTS.contains(ext(n.name))) continue;
+                Video v = new Video();
+                v.id = n.id;
+                v.name = n.name;
+                v.relPath = "MEGA/" + n.path;
+                v.size = n.size;
+                v.dateAdded = n.ts;
+                v.taken = n.ts;
+                v.mime = mimeFor(ext(n.name));
+                v.key = "mega:" + n.handle;
+                v.link = l;
+                v.node = n;
+                list.add(v);
+            }
+        }
+        for (ICloud.Album a : icloudAlbums) addICloud(a, list, false);
+        allPhotos = list;
+        photoById.clear();
+        for (Video v : list) photoById.put(v.id, v);
+        syncGalleryFavorites();
+    }
+
+    // ------------------------------------------------------------------ 갤러리 즐겨찾기 연동
+    /** 갤러리에서 즐겨찾기를 바꾼 항목은 앱에도 반영. (마지막으로 본 갤러리 값과 다를 때만 — 앱에서 바꾼 값을 덮어쓰지 않도록) */
+    private synchronized void syncGalleryFavorites() {
+        if (android.os.Build.VERSION.SDK_INT < 30) return;
+        boolean changed = false;
+        List<Video> local = new ArrayList<>(all);
+        local.addAll(allPhotos);
+        for (Video v : local) {
+            if (v.cloud() || v.uri == null) continue;
+            JSONObject m = meta(v);
+            boolean seen = m.optBoolean("sys_fav_seen", false);
+            if (v.sysFav == seen && m.has("sys_fav_seen")) continue;
+            try {
+                if (!m.has("sys_fav_seen") && !v.sysFav) { m.put("sys_fav_seen", false); changed = true; continue; }   // 처음: 앱 값 유지
+                m.put("favorite", v.sysFav);
+                m.put("sys_fav_seen", v.sysFav);
+                changed = true;
+            } catch (JSONException ignored) {}
+        }
+        if (changed) save();
+    }
+
+    /** 앱에서 즐겨찾기를 바꾸면 기기 갤러리에도 반영 (안드로이드 11 이상, 기기 파일만). */
+    private void pushGalleryFavorite(Video v, boolean fav) {
+        if (android.os.Build.VERSION.SDK_INT < 30 || v.cloud() || v.uri == null) return;
+        try { meta(v).put("sys_fav_seen", fav); } catch (JSONException ignored) {}
+        v.sysFav = fav;
+        MainActivity.requestFavorite(java.util.Collections.singletonList(v.uri), fav);
+    }
+
+    // ------------------------------------------------------------------ 날짜 (앱에서 고친 날짜가 있으면 그것을 씀)
+    private long added(Video v) {
+        long d = meta(v).optLong("date_override", 0);
+        return d > 0 ? d : v.dateAdded;
+    }
+
+    private long taken(Video v) {
+        long d = meta(v).optLong("date_override", 0);
+        return d > 0 ? d : v.taken;
+    }
+
+    // ------------------------------------------------------------------ 여러 항목 한꺼번에 고치기
+    private synchronized List<Video> batchItems(JSONArray arr) {
+        if (lastScan == 0) scan();
+        List<Video> out = new ArrayList<>();
+        for (int i = 0; arr != null && i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o == null) continue;
+            Video v = "photo".equals(o.optString("kind")) ? photoById.get(o.optLong("id")) : byId.get(o.optLong("id"));
+            if (v != null) out.add(v);
+        }
+        return out;
+    }
+
+    /** 선택한 항목들에 붙은 태그·출연자와 각각 몇 개에 붙어 있는지 */
+    private synchronized JSONObject batchInfo(List<Video> items) throws JSONException {
+        JSONObject out = new JSONObject();
+        for (String field : new String[]{"tags", "performers"}) {
+            Map<Long, Integer> n = new LinkedHashMap<>();
+            for (Video v : items) {
+                JSONArray ids = meta(v).optJSONArray(field);
+                for (int i = 0; ids != null && i < ids.length(); i++) n.merge(ids.optLong(i), 1, Integer::sum);
+            }
+            JSONArray arr = new JSONArray();
+            JSONObject names = store.optJSONObject(field);
+            for (Map.Entry<Long, Integer> e : n.entrySet()) {
+                String name = names.optString(String.valueOf(e.getKey()), "");
+                if (!name.isEmpty()) arr.put(new JSONObject().put("id", e.getKey()).put("name", name).put("count", e.getValue()));
+            }
+            out.put(field, arr);
+        }
+        return out.put("total", items.size());
+    }
+
+    private static final String[] UNDO_KEYS = {"tags", "performers", "date_override", "favorite", "hidden", "organized"};
+    private JSONArray lastUndo = new JSONArray();
+
+    /** 되돌리기: batchApply 가 돌려준 바꾸기 전 상태로 */
+    private synchronized int batchRestore(JSONArray undo) throws JSONException {
+        int n = 0;
+        for (int i = 0; undo != null && i < undo.length(); i++) {
+            JSONObject u = undo.optJSONObject(i);
+            if (u == null) continue;
+            Video v = "photo".equals(u.optString("kind")) ? photoById.get(u.optLong("id")) : byId.get(u.optLong("id"));
+            if (v == null) continue;
+            JSONObject m = meta(v), before = u.optJSONObject("meta");
+            for (String k : UNDO_KEYS) { if (before != null && before.has(k)) m.put(k, before.get(k)); else m.remove(k); }
+            n++;
+        }
+        save();
+        return n;
+    }
+
+    /** 태그·출연자 추가/빼기, 날짜, 즐겨찾기를 한꺼번에 */
+    private synchronized int batchApply(List<Video> items, JSONObject b) throws JSONException {
+        List<Uri> favUris = new ArrayList<>(), delUris = new ArrayList<>();
+        boolean fav = b.optBoolean("favorite", false);
+        lastUndo = new JSONArray();   // 되돌리기용: 바꾸기 전 상태
+        for (Video v : items) {
+            JSONObject m = meta(v);
+            JSONObject before = new JSONObject();
+            for (String k : UNDO_KEYS) if (m.has(k)) before.put(k, m.get(k));
+            lastUndo.put(new JSONObject().put("kind", photoById.get(v.id) == v ? "photo" : "video").put("id", v.id).put("meta", before));
+            if (b.has("organized")) m.put("organized", b.optBoolean("organized"));
+            for (String field : new String[]{"tags", "performers"}) {
+                JSONArray add = b.optJSONArray("add_" + field), remove = b.optJSONArray("remove_" + field);
+                if (add == null && remove == null) continue;
+                Set<Long> ids = new java.util.LinkedHashSet<>();
+                JSONArray cur = m.optJSONArray(field);
+                for (int i = 0; cur != null && i < cur.length(); i++) ids.add(cur.optLong(i));
+                for (int i = 0; remove != null && i < remove.length(); i++) ids.remove(remove.optLong(i));
+                for (int i = 0; add != null && i < add.length(); i++) {
+                    String name = add.optString(i).trim().replaceAll("\\s+", " ");
+                    if (!name.isEmpty()) ids.add(entityId(field, name.length() > 80 ? name.substring(0, 80) : name));
+                }
+                m.put(field, new JSONArray(ids));
+            }
+            if (b.has("date")) {
+                long d = b.optLong("date", 0);
+                if (d > 0) m.put("date_override", d); else m.remove("date_override");
+            }
+            if (b.has("delete")) {   // 실제 파일 삭제: 기기 파일은 안드로이드에 요청, 클라우드 항목은 목록에서만 숨김
+                if (!v.cloud() && v.uri != null) delUris.add(v.uri); else m.put("hidden", true);
+                continue;
+            }
+            if (b.has("favorite")) {
+                m.put("favorite", fav);
+                if (android.os.Build.VERSION.SDK_INT >= 30 && !v.cloud() && v.uri != null) {
+                    m.put("sys_fav_seen", fav);
+                    v.sysFav = fav;
+                    favUris.add(v.uri);
+                }
+            }
+        }
+        save();
+        if (!favUris.isEmpty()) MainActivity.requestFavorite(favUris, fav);   // 갤러리에는 한 번에 요청
+        if (!delUris.isEmpty() && !MainActivity.requestDelete(delUris, "trash".equals(b.optString("delete"))))
+            throw new JSONException("이 기기(안드로이드 10)에서는 앱에서 파일을 지울 수 없습니다. 내 파일 앱에서 지워 주세요.");
+        return items.size();
+    }
+
+    /** 직접 정한 영상 썸네일 파일 (앱 데이터 폴더, 지워지지 않음) */
+    private File coverFile(Video v) {
+        return new File(new File(ctx.getFilesDir(), "covers"), Long.toHexString(v.key.hashCode() & 0xFFFFFFFFL) + "-" + v.key.length() + ".jpg");
+    }
+
+    static boolean canManageMedia(Context ctx) {
+        return android.os.Build.VERSION.SDK_INT >= 31 && MediaStore.canManageMedia(ctx);
+    }
+
+    /** iCloud 공유 앨범의 영상(videos=true) 또는 사진을 목록에 넣음 */
+    private void addICloud(ICloud.Album a, List<Video> list, boolean videos) {
+        List<ICloud.Item> items;
+        synchronized (a) { items = new ArrayList<>(a.items); }
+        for (ICloud.Item it : items) {
+            if (it.video != videos) continue;
+            Video v = new Video();
+            v.id = it.id;
+            v.name = it.name;
+            v.relPath = "iCloud/" + a.name + "/";
+            v.size = it.size;
+            v.width = it.width;
+            v.height = it.height;
+            v.dateAdded = it.ts;
+            v.dateModified = it.ts;
+            v.taken = it.ts;
+            v.mime = it.video ? "video/mp4" : "image/jpeg";
+            v.key = "icloud:" + it.guid;
+            v.album = a;
+            v.item = it;
+            list.add(v);
+        }
+    }
+
+    // ------------------------------------------------------------------ iCloud 공유 앨범
+    private synchronized void loadICloudLinks() {
+        icloudAlbums.clear();
+        JSONArray a = settings().optJSONArray("icloud_links");
+        for (int i = 0; a != null && i < a.length(); i++) {
+            try { icloudAlbums.add(ICloud.parse(a.optString(i))); } catch (Exception ignored) {}
+        }
+    }
+
+    private synchronized void saveICloudLinks() {
+        JSONArray a = new JSONArray();
+        for (ICloud.Album x : icloudAlbums) a.put(x.url);
+        try { settings().put("icloud_links", a); } catch (JSONException ignored) {}
+        save();
+    }
+
+    private synchronized JSONArray icloudJson() throws JSONException {
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < icloudAlbums.size(); i++) {
+            ICloud.Album a = icloudAlbums.get(i);
+            int photos = 0, vids = 0;
+            synchronized (a) { for (ICloud.Item it : a.items) if (it.video) vids++; else photos++; }
+            out.put(new JSONObject().put("index", i).put("name", a.name).put("photos", photos).put("videos", vids)
+                    .put("loaded", a.loadedAt > 0).put("error", a.error == null ? JSONObject.NULL : a.error));
+        }
+        return out;
+    }
+
+    /** iCloud 파일을 앱을 거쳐 보냄 (재생 위치 이동을 위해 Range 그대로 전달) */
+    private void icloudStream(Video v, HttpServer.Request r, HttpServer.Response res, boolean download) throws IOException {
+        java.net.HttpURLConnection c;
+        try {
+            c = ICloud.open(v.album, v.item, v.item.mediaChecksum, r.header("range"));
+        } catch (IOException e) {
+            res.error(502, e.getMessage() == null ? "iCloud 연결 실패" : e.getMessage());
+            return;
+        }
+        try (InputStream in = c.getInputStream()) {
+            int code = c.getResponseCode();
+            long len = c.getContentLengthLong();
+            res.header("Content-Type", v.mime).header("Accept-Ranges", "bytes");
+            String cr = c.getHeaderField("Content-Range");
+            if (cr != null) res.header("Content-Range", cr);
+            if (download) res.header("Content-Disposition", "attachment; filename*=UTF-8''" + java.net.URLEncoder.encode(v.name, "UTF-8").replace("+", "%20"));
+            OutputStream out = res.start(code == 206 ? 206 : 200, len);
+            if (r.method.equals("HEAD")) return;
+            byte[] buf = new byte[128 * 1024];
+            int k;
+            while ((k = in.read(buf)) > 0) out.write(buf, 0, k);
+        }
+    }
+
+    /** iCloud 미리보기 이미지 (작은 사진 / 영상 포스터), 기기에 보관 */
+    private void icloudThumb(Video v, HttpServer.Request r, HttpServer.Response res) throws IOException {
+        int size = v.item.video ? 512 : thumbBucket(r);
+        File f = new File(new File(thumbDir, "icloud"), v.item.guid + (size > 512 ? "-" + size : "") + ".jpg");
+        if (f.length() == 0) {
+            java.net.HttpURLConnection c;
+            try {
+                c = ICloud.open(v.album, v.item, size > 512 ? v.item.mediaChecksum : v.item.thumbChecksum, null);
+            } catch (IOException e) {
+                res.error(502, e.getMessage() == null ? "iCloud 연결 실패" : e.getMessage());
+                return;
+            }
+            byte[] data;
+            try (InputStream in = c.getInputStream()) { data = readAll(in); }
+            if (size > 512) { byte[] d2 = downscale(data, size); if (d2 != null) data = d2; }
+            f.getParentFile().mkdirs();
+            try (FileOutputStream o = new FileOutputStream(f)) { o.write(data); }
+        }
+        res.header("Cache-Control", "max-age=86400");
+        res.send(200, "image/jpeg", readAll(new FileInputStream(f)));
+    }
+
+    private synchronized List<Video> visiblePhotos() {
+        if (lastScan == 0 || System.currentTimeMillis() - lastScan > 60_000) scan();
+        List<String> paths = libraryPaths();
+        List<Video> out = new ArrayList<>();
+        for (Video v : allPhotos) {
+            if (meta(v).optBoolean("hidden", false)) continue;
+            if (!v.cloud()) {
+                boolean in = false;
+                for (String p : paths) if (v.relPath.startsWith(p)) { in = true; break; }
+                if (!in) continue;
+            }
+            out.add(v);
+        }
+        return out;
+    }
+
+    private JSONArray performerNames(JSONObject m) throws JSONException {
+        JSONArray refs = entityRefs(m, "performers"), out = new JSONArray();
+        for (int i = 0; i < refs.length(); i++) out.put(refs.getJSONObject(i).optString("name"));
+        return out;
+    }
+
+    private JSONObject photoSummary(Video v) throws JSONException {
+        JSONObject m = meta(v);
+        int[] wh = dims(v, m);
+        return new JSONObject().put("id", v.id).put("title", title(v)).put("width", wh[0]).put("height", wh[1])
+                .put("size", v.size).put("favorite", m.optBoolean("favorite", false) ? 1 : 0).put("rating", m.optInt("rating", 0))
+                .put("performers", performerNames(m)).put("added_at", added(v)).put("taken", taken(v))
+                .put("source", v.source());
+    }
+
+    private synchronized JSONObject photoDetail(Video v) throws JSONException {
+        return photoSummary(v).put("filename", v.name).put("folder", v.relPath)
+                .put("performer_refs", entityRefs(meta(v), "performers")).put("tags", entityRefs(meta(v), "tags"));
+    }
+
+    private synchronized JSONObject listPhotos(HttpServer.Request r) throws JSONException {
+        String q = nz(r.param("q")).trim().toLowerCase(Locale.ROOT);
+        String[] words = q.isEmpty() ? new String[0] : q.split("\\s+");
+        Set<Long> perfFilter = longs(r.params("performer")), tagFilter = longs(r.params("tag"));
+        boolean fav = "1".equals(r.param("fav"));
+        List<Video> list = new ArrayList<>();
+        for (Video v : visiblePhotos()) {
+            JSONObject m = meta(v);
+            if (fav && !m.optBoolean("favorite", false)) continue;
+            if (!containsAll(m.optJSONArray("performers"), perfFilter) || !containsAll(m.optJSONArray("tags"), tagFilter)) continue;
+            if (words.length > 0) {
+                String hay = (title(v) + " " + v.relPath + v.name + " " + performerNames(m).join(" ")).toLowerCase(Locale.ROOT);
+                boolean ok = true;
+                for (String w : words) if (!hay.contains(w)) { ok = false; break; }
+                if (!ok) continue;
+            }
+            list.add(v);
+        }
+        String sort = r.param("sort") == null ? "taken" : r.param("sort");
+        boolean asc = "asc".equals(r.param("order"));
+        if ("random".equals(sort)) {
+            Collections.shuffle(list, shuffleRandom(r.param("seed")));
+        } else {
+            Comparator<Video> cmp;
+            switch (sort) {
+                case "title": cmp = Comparator.comparing(v -> title(v).toLowerCase(Locale.ROOT)); break;
+                case "size": cmp = Comparator.comparingLong(v -> v.size); break;
+                case "added": cmp = Comparator.comparingLong(v -> added(v)); break;
+                case "rating": cmp = Comparator.comparingInt(v -> meta(v).optInt("rating", 0)); break;
+                default: cmp = Comparator.comparingLong(v -> taken(v));
+            }
+            cmp = cmp.thenComparingLong(v -> v.id);
+            list.sort(asc ? cmp : cmp.reversed());
+        }
+        int page = Math.max(1, parseInt(r.param("page"), 1));
+        int per = Math.min(300, Math.max(1, parseInt(r.param("per"), 60)));
+        JSONArray items = new JSONArray();
+        for (int i = (page - 1) * per; i < Math.min(list.size(), page * per); i++) items.put(photoSummary(list.get(i)));
+        return new JSONObject().put("total", list.size()).put("page", page).put("per", per).put("items", items);
+    }
+
+    /** 미디어 탭 ‘전체’: 영상과 사진을 한 목록으로. type = all | video | photo */
+    private synchronized JSONObject listMedia(HttpServer.Request r) throws JSONException {
+        String type = nz(r.param("type"));
+        String q = nz(r.param("q")).trim().toLowerCase(Locale.ROOT);
+        String[] words = q.isEmpty() ? new String[0] : q.split("\\s+");
+        Set<Long> perfFilter = longs(r.params("performer")), tagFilter = longs(r.params("tag"));
+        boolean fav = "1".equals(r.param("fav")), unwatched = "1".equals(r.param("unwatched"));
+        // 태그는 아래(하위) 태그까지 포함, 빼기 조건, 범위 조건, 정리 안 된 항목
+        List<Set<Long>> tagGroups = new ArrayList<>();
+        for (long t : tagFilter) tagGroups.add(tagWithChildren(t));
+        Set<Long> xTags = new HashSet<>();
+        for (long t : longs(r.params("xtag"))) xTags.addAll(tagWithChildren(t));
+        Set<Long> xPerf = longs(r.params("xperformer"));
+        double minDur = parseInt(r.param("min_dur"), 0), maxDur = parseInt(r.param("max_dur"), 0);
+        long from = parseLong(nz(r.param("from")), 0), to = parseLong(nz(r.param("to")), 0);
+        int minH = parseInt(r.param("min_h"), 0), minRating = parseInt(r.param("min_rating"), 0);
+        boolean unorganized = "1".equals(r.param("unorganized"));
+        Set<String> folderFilter = new HashSet<>(r.params("folder"));   // 갤러리처럼 폴더별로 (그 폴더 바로 안의 파일)
+        List<Video> list = new ArrayList<>();
+        Set<Long> photoIds = new HashSet<>();
+        List<Video> src = new ArrayList<>();
+        if (!type.equals("photo")) src.addAll(visible());
+        if (!type.equals("video")) for (Video p : visiblePhotos()) { src.add(p); photoIds.add(p.id); }
+        for (Video v : src) {
+            if (!folderFilter.isEmpty() && !folderFilter.contains(v.relPath)) continue;
+            JSONObject m = meta(v);
+            if (fav && !m.optBoolean("favorite", false)) continue;
+            if (unwatched && (photoIds.contains(v.id) || m.optInt("play_count", 0) > 0)) continue;
+            if (!containsAll(m.optJSONArray("performers"), perfFilter)) continue;
+            boolean tagOk = true;
+            for (Set<Long> g : tagGroups) if (!hasAny(m.optJSONArray("tags"), g)) { tagOk = false; break; }
+            if (!tagOk) continue;
+            if (!xTags.isEmpty() && hasAny(m.optJSONArray("tags"), xTags)) continue;
+            if (!xPerf.isEmpty() && hasAny(m.optJSONArray("performers"), xPerf)) continue;
+            boolean isPhoto = photoIds.contains(v.id);
+            if (minDur > 0 || maxDur > 0) {
+                if (isPhoto) continue;
+                double d = v.node != null ? m.optDouble("duration", 0) : v.duration;
+                if (d <= 0 || (minDur > 0 && d < minDur) || (maxDur > 0 && d > maxDur)) continue;
+            }
+            if (from > 0 || to > 0) {
+                long when = taken(v) > 0 ? taken(v) : added(v);
+                if ((from > 0 && when < from) || (to > 0 && when > to)) continue;
+            }
+            if (minH > 0) { int[] wh = dims(v, m); if (Math.min(wh[0], wh[1]) < minH) continue; }
+            if (minRating > 0 && m.optInt("rating", 0) < minRating) continue;
+            if (unorganized) {
+                JSONArray tg = m.optJSONArray("tags"), pf = m.optJSONArray("performers");
+                boolean has = (tg != null && tg.length() > 0) || (pf != null && pf.length() > 0);
+                if (has || m.optBoolean("organized", false)) continue;
+            }
+            if (words.length > 0) {
+                String hay = (title(v) + " " + v.relPath + v.name + " " + performerNames(m).join(" ") + aliasText(m)).toLowerCase(Locale.ROOT);
+                boolean ok = true;
+                for (String w : words) if (!hay.contains(w)) { ok = false; break; }
+                if (!ok) continue;
+            }
+            list.add(v);
+        }
+        String sort = r.param("sort") == null ? "added" : r.param("sort");
+        boolean asc = "asc".equals(r.param("order"));
+        if ("random".equals(sort)) {
+            Collections.shuffle(list, shuffleRandom(r.param("seed")));
+        } else {
+            Comparator<Video> cmp;
+            switch (sort) {
+                case "title": cmp = Comparator.comparing(v -> title(v).toLowerCase(Locale.ROOT)); break;
+                case "size": cmp = Comparator.comparingLong(v -> v.size); break;
+                case "rating": cmp = Comparator.comparingInt(v -> meta(v).optInt("rating", 0)); break;
+                case "duration": cmp = Comparator.comparingDouble(v -> v.node != null ? meta(v).optDouble("duration", 0) : v.duration); break;
+                case "plays": cmp = Comparator.comparingInt(v -> meta(v).optInt("play_count", 0)); break;
+                case "played": cmp = Comparator.comparingLong(v -> meta(v).optLong("last_played", 0)); break;
+                default: cmp = Comparator.comparingLong(v -> added(v));
+            }
+            cmp = cmp.thenComparingLong(v -> v.id);
+            list.sort(asc ? cmp : cmp.reversed());
+        }
+        int page = Math.max(1, parseInt(r.param("page"), 1));
+        int per = Math.min(300, Math.max(1, parseInt(r.param("per"), 60)));
+        JSONArray items = new JSONArray();
+        for (int i = (page - 1) * per; i < Math.min(list.size(), page * per); i++) {
+            Video v = list.get(i);
+            boolean photo = photoIds.contains(v.id);
+            items.put((photo ? photoSummary(v) : summary(v)).put("kind", photo ? "photo" : "video"));
+        }
+        return new JSONObject().put("total", list.size()).put("page", page).put("per", per).put("items", items);
+    }
+
+    /** 미리보기 크기: 화면에 크게 보이는 칸(이미지 벽 등)은 ?s=1080 처럼 더 큰 이미지를 요청 */
+    static int thumbBucket(HttpServer.Request r) {
+        int s = parseInt(r.param("s"), 512);
+        return s <= 512 ? 512 : s <= 1080 ? 1080 : 1600;
+    }
+
+    /** 큰 이미지를 긴 변 max 픽셀로 줄여 JPEG 로 (화질을 지키면서 용량은 적당히) */
+    static byte[] downscale(byte[] data, int max) {
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length, o);
+        if (o.outWidth <= 0) return toJpegScaled(decodeSource(android.graphics.ImageDecoder.createSource(java.nio.ByteBuffer.wrap(data)), max));
+        int sample = 1;
+        while (Math.max(o.outWidth, o.outHeight) / (sample * 2) >= max) sample *= 2;
+        o.inJustDecodeBounds = false;
+        o.inSampleSize = sample;
+        Bitmap b = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.length, o);
+        if (b == null) return toJpegScaled(decodeSource(android.graphics.ImageDecoder.createSource(java.nio.ByteBuffer.wrap(data)), max));
+        int w = b.getWidth(), h = b.getHeight(), big = Math.max(w, h);
+        if (big > max) {
+            Bitmap sc = Bitmap.createScaledBitmap(b, w * max / big, h * max / big, true);
+            if (sc != b) { b.recycle(); b = sc; }
+        }
+        return toJpegScaled(b);
+    }
+
+    private void photoThumb(Video v, HttpServer.Request r, HttpServer.Response res) throws Exception {
+        int size = thumbBucket(r);
+        File f = new File(new File(thumbDir, "photos"), Long.toHexString(v.id) + (size > 512 ? "-q" + size : "") + ".jpg");
+        if (!f.exists() || f.length() == 0) {
+            byte[] jpg = null;
+            if (v.node != null) {
+                jpg = Mega.preview(v.link, v.node);
+                if (jpg != null) rememberPreviewSize(v, jpg);
+                // 크게 보여 줄 때 MEGA 미리보기가 작으면 원본을 받아 줄임 (30MB 이하 사진만)
+                boolean small = jpg == null || previewWidth(jpg) < size * 0.7;
+                if (size > 512 && small && v.node.size > 0 && v.node.size < 30L * 1024 * 1024) {
+                    try (InputStream in = Mega.open(v.link, v.node, 0, v.node.size - 1)) {
+                        byte[] big = downscale(readAll(in), size);
+                        if (big != null) jpg = big;
+                    } catch (IOException ignored) {}
+                }
+                if (jpg == null && !webImage(v.name, v.mime) && v.node.size > 0 && v.node.size < 60L * 1024 * 1024) {   // HEIC 등은 받아서 변환
+                    try (InputStream in = Mega.open(v.link, v.node, 0, v.node.size - 1)) { jpg = bytesToJpeg(readAll(in), size); } catch (IOException ignored) {}
+                }
+                if (jpg == null) { megaStream(v.link, v.node, v.mime, r, res, false); return; }   // 썸네일이 없으면 원본
+            } else {
+                Bitmap bmp = null;
+                frameLock.acquire();
+                try {
+                    // 큰 칸용은 원본에서 직접 줄여 만듦 (갤러리 미리보기는 512 정도라 크게 보면 흐림)
+                    if (size > 512) bmp = decodeSource(android.graphics.ImageDecoder.createSource(ctx.getContentResolver(), v.uri), size);
+                    if (bmp == null) bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(size, size), null);
+                } catch (Exception ignored) {
+                } finally {
+                    frameLock.release();
+                }
+                if (bmp == null) {   // 갤러리 미리보기가 없으면 직접 풀어서 줄임 (HEIC 등)
+                    frameLock.acquire();
+                    try { bmp = decodeSource(android.graphics.ImageDecoder.createSource(ctx.getContentResolver(), v.uri), size); } finally { frameLock.release(); }
+                }
+                jpg = toJpegScaled(bmp);
+                if (jpg == null) { res.error(404, "no thumbnail"); return; }
+            }
+            f.getParentFile().mkdirs();
+            try (FileOutputStream o = new FileOutputStream(f)) { o.write(jpg); }
+        }
+        res.header("Cache-Control", "max-age=86400");
+        res.send(200, "image/jpeg", readAll(new FileInputStream(f)));
+    }
+
+    private static int previewWidth(byte[] jpg) {
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        android.graphics.BitmapFactory.decodeByteArray(jpg, 0, jpg.length, o);
+        return Math.max(o.outWidth, o.outHeight);
+    }
+
+    private static final Set<String> WEB_IMAGE = new HashSet<>(java.util.Arrays.asList("jpg", "jpeg", "png", "gif", "webp", "bmp"));
+
+    private final Semaphore fullLock = new Semaphore(1);
+
+    /** 비트맵을 JPEG 로 (HDR·10비트 사진은 일반 색으로 바꾼 뒤). 실패하면 null */
+    static byte[] toJpeg(Bitmap b, int quality) {
+        if (b == null) return null;
+        Bitmap s = b;
+        try {
+            if (b.getConfig() != Bitmap.Config.ARGB_8888) s = b.copy(Bitmap.Config.ARGB_8888, false);
+            if (s == null) return null;
+            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+            boolean ok = s.compress(Bitmap.CompressFormat.JPEG, quality, bo);
+            return ok && bo.size() > 200 ? bo.toByteArray() : null;
+        } catch (Throwable e) {
+            return null;
+        } finally {
+            if (s != null && s != b) s.recycle();
+        }
+    }
+
+    /** 안드로이드 사진 해독기 (HEIC·HEIF·AVIF 포함), 긴 변이 max 를 넘으면 줄임 */
+    static Bitmap decodeSource(android.graphics.ImageDecoder.Source src, int max) {
+        try {
+            return android.graphics.ImageDecoder.decodeBitmap(src, (decoder, info, s) -> {
+                decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE);
+                try { decoder.setTargetColorSpace(android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB)); } catch (Throwable ignored) {}
+                int w = info.getSize().getWidth(), h = info.getSize().getHeight(), big = Math.max(w, h);
+                if (big > max) decoder.setTargetSize(Math.max(1, w * max / big), Math.max(1, h * max / big));
+            });
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /** HEIC 는 영상 코덱으로 만든 사진이라, 사진 해독기가 못 풀면 영상 도구로 한 번 더 */
+    static Bitmap decodeHeif(java.io.FileDescriptor fd, String path, int max) {
+        android.media.MediaMetadataRetriever mr = new android.media.MediaMetadataRetriever();
+        try {
+            if (fd != null) mr.setDataSource(fd); else mr.setDataSource(path);
+            Bitmap b;
+            try { b = mr.getPrimaryImage(); } catch (Throwable e) { b = null; }
+            if (b == null) b = mr.getImageAtIndex(0);
+            if (b == null) return null;
+            int w = b.getWidth(), h = b.getHeight(), big = Math.max(w, h);
+            if (big > max) {
+                Bitmap sc = Bitmap.createScaledBitmap(b, w * max / big, h * max / big, true);
+                if (sc != b) { b.recycle(); b = sc; }
+            }
+            return b;
+        } catch (Throwable e) {
+            return null;
+        } finally {
+            try { mr.release(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /** 받은 사진 데이터(MEGA·iCloud)를 어떤 형식이든 JPEG 로 */
+    byte[] bytesToJpeg(byte[] data, int max) {
+        byte[] out = toJpegScaled(decodeSource(android.graphics.ImageDecoder.createSource(java.nio.ByteBuffer.wrap(data)), max));
+        if (out != null) return out;
+        File tmp = new File(ctx.getCacheDir(), "heif-" + Thread.currentThread().getId() + ".tmp");
+        try {
+            try (FileOutputStream o = new FileOutputStream(tmp)) { o.write(data); }
+            return toJpegScaled(decodeHeif(null, tmp.getAbsolutePath(), max));
+        } catch (IOException e) {
+            return null;
+        } finally {
+            tmp.delete();
+        }
+    }
+
+    private static byte[] toJpegScaled(Bitmap b) {
+        byte[] out = toJpeg(b, 88);
+        if (b != null) b.recycle();
+        return out;
+    }
+
+    static boolean webImage(String name, String mime) {
+        String m = mime == null ? "" : mime.toLowerCase(Locale.ROOT);
+        return WEB_IMAGE.contains(ext(name)) && !m.contains("heic") && !m.contains("heif") && !m.contains("avif");
+    }
+
+    private void photoFull(Video v, HttpServer.Request r, HttpServer.Response res) throws Exception {
+        String mime = v.mime == null ? "image/jpeg" : v.mime;
+        boolean dl = "1".equals(r.param("dl"));
+        boolean webOk = webImage(v.name, mime);
+        if (v.item != null && (webOk || dl)) { icloudStream(v, r, res, dl); return; }
+        if (v.node != null && (webOk || dl)) { megaStream(v.link, v.node, mime, r, res, dl); return; }
+        if (v.node == null && v.item == null && (webOk || dl)) { media(v, r, res); return; }
+        // 웹 화면이 못 보여 주는 형식(HEIC·HEIF·DNG 등)은 JPEG 로 바꿔서 보냄 (한 번 만들면 보관)
+        File f = new File(new File(thumbDir, "photos"), (v.item != null ? "ic-" + v.item.guid : Long.toHexString(v.id)) + "-full2.jpg");
+        if (f.length() == 0) {
+            byte[] jpg = null;
+            fullLock.acquire();   // 큰 사진을 여러 장 동시에 풀면 메모리가 모자라서 한 장씩 (미리보기 만들기와는 따로 줄 섬)
+            try {
+                if (f.length() == 0) {
+                    if (v.item != null || v.node != null) {
+                        byte[] data = null;
+                        try {
+                            if (v.item != null) {
+                                java.net.HttpURLConnection c = ICloud.open(v.album, v.item, v.item.mediaChecksum, null);
+                                try (InputStream in = c.getInputStream()) { data = readAll(in); }
+                            } else if (v.node.size > 0 && v.node.size < 60L * 1024 * 1024) {
+                                try (InputStream in = Mega.open(v.link, v.node, 0, v.node.size - 1)) { data = readAll(in); }
+                            }
+                        } catch (IOException ignored) {}
+                        if (data != null) jpg = bytesToJpeg(data, 2560);
+                    } else {
+                        // 1) 안드로이드 사진 해독기  2) 영상 도구(HEIC)  3) 갤러리가 쓰는 큰 미리보기
+                        jpg = toJpegScaled(decodeSource(android.graphics.ImageDecoder.createSource(ctx.getContentResolver(), v.uri), 2560));
+                        if (jpg == null) {
+                            try (android.os.ParcelFileDescriptor pfd = ctx.getContentResolver().openFileDescriptor(v.uri, "r")) {
+                                if (pfd != null) jpg = toJpegScaled(decodeHeif(pfd.getFileDescriptor(), null, 2560));
+                            } catch (Throwable ignored) {}
+                        }
+                        if (jpg == null) {
+                            Bitmap b = null;
+                            try { b = ctx.getContentResolver().loadThumbnail(v.uri, new Size(2048, 2048), null); } catch (Throwable ignored) {}
+                            jpg = toJpegScaled(b);
+                        }
+                    }
+                    if (jpg == null) { res.error(415, "이 사진 형식을 열 수 없습니다"); return; }
+                    f.getParentFile().mkdirs();
+                    try (FileOutputStream o = new FileOutputStream(f)) { o.write(jpg); }
+                }
+            } finally {
+                fullLock.release();
+            }
+        }
+        res.header("Cache-Control", "max-age=86400");
+        res.send(200, "image/jpeg", readAll(new FileInputStream(f)));
+    }
+
+    private synchronized List<Video> visible() {
+        if (lastScan == 0 || System.currentTimeMillis() - lastScan > 60_000) scan();
+        List<String> paths = libraryPaths();
+        List<Video> out = new ArrayList<>();
+        for (Video v : all) {
+            if (v.cloud()) {   // MEGA·iCloud 영상은 폴더 설정과 관계없이 표시
+                if (!meta(v).optBoolean("hidden", false)) out.add(v);
+                continue;
+            }
+            boolean in = false;
+            for (String p : paths) if (v.relPath.startsWith(p)) { in = true; break; }
+            if (!in) continue;
+            if (meta(v).optBoolean("hidden", false)) continue;
+            out.add(v);
+        }
+        return out;
+    }
+
+    public synchronized int videoCount() { return visible().size(); }
+
+    // ------------------------------------------------------------------ JSON views
+    private String title(Video v) {
+        String t = meta(v).optString("title", "");
+        if (!t.isEmpty()) return t;
+        int dot = v.name.lastIndexOf('.');
+        return dot > 0 ? v.name.substring(0, dot) : v.name;
+    }
+
+    private JSONObject summary(Video v) throws JSONException {
+        JSONObject m = meta(v);
+        JSONObject o = new JSONObject();
+        o.put("id", v.id);
+        o.put("title", title(v));
+        o.put("duration", v.node != null ? m.optDouble("duration", 0) : v.duration);
+        int[] wh = dims(v, m);
+        o.put("width", wh[0]);
+        o.put("height", wh[1]);
+        o.put("size", v.size);
+        o.put("rating", m.optInt("rating", 0));
+        o.put("favorite", m.optBoolean("favorite", false) ? 1 : 0);
+        o.put("source", v.source());
+        if (m.optLong("last_played", 0) > 0) o.put("last_played", m.optLong("last_played"));
+        if (m.optBoolean("organized", false)) o.put("organized", true);
+        o.put("taken", taken(v)).put("added_at", added(v));   // 찍은 날(촬영 당시 나이 계산용)
+        o.put("play_count", m.optInt("play_count", 0));
+        int thumbs = v.node != null ? (megaHasThumb(v.node) ? 1 : 0) : v.item != null ? 1 : N_FRAMES;
+        if (thumbs == 0 && coverFile(v).length() > 0) thumbs = 1;   // 직접 정한 썸네일
+        o.put("thumbs", thumbs);
+        o.put("missing", 0);
+        o.put("resume_pos", m.optDouble("resume_pos", 0));
+        o.put("added_at", added(v));
+        o.put("performers", performerNames(m));
+        return o;
+    }
+
+    /** 화면비: 실제 해상도 → (MEGA) 재생 때 저장한 해상도 → 미리보기 이미지 크기 순. */
+    private static int[] dims(Video v, JSONObject m) {
+        if (v.width > 0 && v.height > 0) return new int[]{v.width, v.height};
+        if (m.optInt("width", 0) > 0 && m.optInt("height", 0) > 0) return new int[]{m.optInt("width"), m.optInt("height")};
+        return new int[]{m.optInt("pw", 0), m.optInt("ph", 0)};
+    }
+
+    /** 미리보기 JPEG 의 크기를 비율 정보로 저장. */
+    private synchronized void rememberPreviewSize(Video v, byte[] jpg) {
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        android.graphics.BitmapFactory.decodeByteArray(jpg, 0, jpg.length, o);
+        if (o.outWidth > 0 && o.outHeight > 0 && o.outWidth != o.outHeight) {   // 정사각형 썸네일은 비율 정보가 아님
+            try {
+                JSONObject m = meta(v);
+                m.put("pw", o.outWidth);
+                m.put("ph", o.outHeight);
+                save();
+            } catch (JSONException ignored) {}
+        }
+    }
+
+    /** 시청 통계: 최근 14일 날짜별 시청 시간, 전체 시청 시간, 많이 본 출연자 */
+    private synchronized JSONObject stats() throws JSONException {
+        JSONObject log = store.optJSONObject("watch_log");
+        JSONArray days = new JSONArray();
+        java.time.LocalDate today = java.time.LocalDate.now();
+        for (int i = 13; i >= 0; i--) {
+            String d = today.minusDays(i).toString();
+            days.put(new JSONObject().put("date", d).put("secs", log == null ? 0 : log.optDouble(d, 0)));
+        }
+        double total = 0;
+        if (log != null) { Iterator<String> it = log.keys(); while (it.hasNext()) total += log.optDouble(it.next(), 0); }
+        Map<Long, double[]> per = new java.util.HashMap<>();   // 출연자 id → {재생 횟수, 본 시간}
+        int videosWatched = 0;
+        for (Video v : visible()) {
+            JSONObject m = meta(v);
+            int plays = m.optInt("play_count", 0);
+            double secs = m.optDouble("watch_secs", 0);
+            if (plays == 0 && secs == 0) continue;
+            videosWatched++;
+            JSONArray ids = m.optJSONArray("performers");
+            for (int i = 0; ids != null && i < ids.length(); i++) {
+                double[] a = per.computeIfAbsent(ids.optLong(i), k -> new double[2]);
+                a[0] += plays; a[1] += secs;
+            }
+        }
+        JSONObject names = store.optJSONObject("performers");
+        List<Map.Entry<Long, double[]>> top = new ArrayList<>(per.entrySet());
+        top.sort((x, y) -> Double.compare(y.getValue()[1] * 1000 + y.getValue()[0], x.getValue()[1] * 1000 + x.getValue()[0]));
+        JSONArray tp = new JSONArray();
+        for (Map.Entry<Long, double[]> e : top) {
+            String name = names == null ? "" : names.optString(String.valueOf(e.getKey()), "");
+            if (name.isEmpty()) continue;
+            tp.put(new JSONObject().put("id", e.getKey()).put("name", name).put("plays", (int) e.getValue()[0]).put("secs", e.getValue()[1]));
+            if (tp.length() >= 10) break;
+        }
+        return new JSONObject().put("days", days).put("total_secs", total).put("videos_watched", videosWatched).put("top_performers", tp);
+    }
+
+    private JSONArray entityRefs(JSONObject m, String field) throws JSONException {
+        JSONArray ids = m.optJSONArray(field);
+        JSONObject names = store.optJSONObject(field);
+        List<JSONObject> out = new ArrayList<>();
+        if (ids != null) for (int i = 0; i < ids.length(); i++) {
+            String id = String.valueOf(ids.optLong(i));
+            if (names.has(id)) out.add(new JSONObject().put("id", Long.parseLong(id)).put("name", names.optString(id)));
+        }
+        out.sort(Comparator.comparing(o -> o.optString("name").toLowerCase(Locale.ROOT)));
+        return new JSONArray(out);
+    }
+
+    private synchronized JSONObject detail(Video v) throws JSONException {
+        JSONObject m = meta(v);
+        JSONObject o = summary(v);
+        o.put("path", v.relPath + v.name);
+        o.put("filename", v.name);
+        o.put("folder", v.relPath);
+        o.put("vcodec", v.mime == null ? JSONObject.NULL : v.mime);
+        o.put("acodec", JSONObject.NULL);
+        o.put("bitrate", v.duration > 0 ? (long) (v.size * 8 / v.duration) : 0);
+        o.put("fps", 0);
+        o.put("details", m.optString("details", ""));
+        o.put("last_played", m.has("last_played") ? m.optLong("last_played") : JSONObject.NULL);
+        o.put("tags", entityRefs(m, "tags"));
+        o.put("performers", entityRefs(m, "performers"));
+        JSONArray markers = m.optJSONArray("markers");
+        o.put("markers", markers == null ? new JSONArray() : markers);
+        String ext = v.name.contains(".") ? v.name.substring(v.name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT) : "";
+        o.put("direct_play", DIRECT_EXTS.contains(ext));
+        o.put("can_transcode", false);
+        o.put("can_delete", false);
+        o.put("source", v.source());
+        return o;
+    }
+
+    private synchronized JSONObject listVideos(HttpServer.Request r) throws JSONException {
+        List<Video> list = new ArrayList<>();
+        String q = nz(r.param("q")).trim().toLowerCase(Locale.ROOT);
+        String[] words = q.isEmpty() ? new String[0] : q.split("\\s+");
+        Set<Long> tagFilter = longs(r.params("tag")), perfFilter = longs(r.params("performer"));
+        boolean fav = "1".equals(r.param("fav")), unwatched = "1".equals(r.param("unwatched"));
+        int minRating = parseInt(r.param("min_rating"), 0);
+        double maxDur = parseInt(r.param("max_dur"), 0);   // 숏폼: 이 길이(초) 이하만
+        if ("1".equals(r.param("missing"))) return new JSONObject().put("total", 0).put("page", 1).put("per", 40).put("items", new JSONArray());
+        for (Video v : visible()) {
+            JSONObject m = meta(v);
+            if (fav && !m.optBoolean("favorite", false)) continue;
+            if (unwatched && m.optInt("play_count", 0) > 0) continue;
+            if (m.optInt("rating", 0) < minRating) continue;
+            if (maxDur > 0) {
+                double d = v.node != null ? m.optDouble("duration", 0) : v.duration;
+                if (d <= 0 || d > maxDur) continue;
+                // 숏폼: 화면에서 바로 재생할 수 없는 형식은 뺌 (재생에 실패한 적이 있는 영상 포함)
+                if (m.optBoolean("no_web", false) || !DIRECT_EXTS.contains(ext(v.name))) continue;
+            }
+            if (!containsAll(m.optJSONArray("tags"), tagFilter) || !containsAll(m.optJSONArray("performers"), perfFilter)) continue;
+            if (words.length > 0) {
+                StringBuilder hay = new StringBuilder(title(v)).append(' ').append(v.relPath).append(v.name).append(' ').append(m.optString("details"));
+                for (String f : new String[]{"tags", "performers"}) {
+                    JSONArray ids = m.optJSONArray(f);
+                    if (ids != null) for (int i = 0; i < ids.length(); i++)
+                        hay.append(' ').append(store.optJSONObject(f).optString(String.valueOf(ids.optLong(i))));
+                }
+                String h = hay.toString().toLowerCase(Locale.ROOT);
+                boolean ok = true;
+                for (String w : words) if (!h.contains(w)) { ok = false; break; }
+                if (!ok) continue;
+            }
+            list.add(v);
+        }
+        String sort = r.param("sort") == null ? "added" : r.param("sort");
+        boolean asc = "asc".equals(r.param("order"));
+        if ("random".equals(sort)) {
+            Collections.shuffle(list, shuffleRandom(r.param("seed")));
+        } else {
+            Comparator<Video> cmp;
+            switch (sort) {
+                case "title": cmp = Comparator.comparing(v -> title(v).toLowerCase(Locale.ROOT)); break;
+                case "duration": cmp = Comparator.comparingDouble(v -> v.duration); break;
+                case "size": cmp = Comparator.comparingLong(v -> v.size); break;
+                case "rating": cmp = Comparator.comparingInt(v -> meta(v).optInt("rating", 0)); break;
+                case "plays": cmp = Comparator.comparingInt(v -> meta(v).optInt("play_count", 0)); break;
+                case "played": cmp = Comparator.comparingLong(v -> meta(v).optLong("last_played", 0)); break;
+                case "mtime": cmp = Comparator.comparingLong(v -> v.dateModified); break;
+                case "resolution": cmp = Comparator.comparingInt(v -> Math.min(v.width, v.height)); break;
+                default: cmp = Comparator.comparingLong(v -> added(v));
+            }
+            cmp = cmp.thenComparingLong(v -> v.id);
+            list.sort(asc ? cmp : cmp.reversed());
+        }
+        int page = Math.max(1, parseInt(r.param("page"), 1));
+        int per = Math.min(200, Math.max(1, parseInt(r.param("per"), 40)));
+        JSONArray items = new JSONArray();
+        for (int i = (page - 1) * per; i < Math.min(list.size(), page * per); i++) items.put(summary(list.get(i)));
+        return new JSONObject().put("total", list.size()).put("page", page).put("per", per).put("items", items);
+    }
+
+    private static boolean containsAll(JSONArray ids, Set<Long> need) {
+        if (need.isEmpty()) return true;
+        Set<Long> have = new HashSet<>();
+        if (ids != null) for (int i = 0; i < ids.length(); i++) have.add(ids.optLong(i));
+        return have.containsAll(need);
+    }
+
+    // ------------------------------------------------------------------ tags / performers
+    private synchronized long entityId(String field, String name) throws JSONException {
+        JSONObject names = store.optJSONObject(field);
+        Iterator<String> it = names.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            if (names.optString(k).equalsIgnoreCase(name)) return Long.parseLong(k);
+        }
+        long id = nextId();
+        names.put(String.valueOf(id), name);
+        return id;
+    }
+
+    private synchronized void setLinks(JSONObject m, String field, JSONArray names) throws JSONException {
+        JSONArray ids = new JSONArray();
+        Set<Long> seen = new HashSet<>();
+        for (int i = 0; i < names.length(); i++) {
+            String n = names.optString(i).trim().replaceAll("\\s+", " ");
+            if (n.isEmpty()) continue;
+            if (n.length() > 80) n = n.substring(0, 80);
+            long id = entityId(field, n);
+            if (seen.add(id)) ids.put(id);
+        }
+        m.put(field, ids);
+    }
+
+    private synchronized JSONArray listEntities(String field) throws JSONException {
+        JSONObject names = store.optJSONObject(field);
+        Map<Long, Integer> counts = new HashMap<>();
+        Map<Long, Video> covers = new HashMap<>();
+        Map<Long, Integer> coverRating = new HashMap<>();
+        boolean perf = field.equals("performers");
+        Map<Long, List<Video>> vidsOf = new HashMap<>();          // 출연자 → 영상 (탐색 화면의 장면 3장용)
+        Map<Long, Set<Long>> tagsOf = new HashMap<>();            // 출연자 → 영상·사진에 붙은 태그
+        Map<Long, Long> latest = new HashMap<>();                 // 출연자 → 가장 최근에 추가된 항목
+        for (Video v : visible()) {
+            JSONObject m = meta(v);
+            JSONArray ids = m.optJSONArray(field);
+            if (ids == null) continue;
+            int rating = m.optInt("rating", 0);
+            for (int i = 0; i < ids.length(); i++) {
+                long id = ids.optLong(i);
+                if (perf) {
+                    vidsOf.computeIfAbsent(id, k -> new ArrayList<>()).add(v);
+                    JSONArray tg = m.optJSONArray("tags");
+                    for (int t = 0; tg != null && t < tg.length(); t++) tagsOf.computeIfAbsent(id, k -> new java.util.HashSet<>()).add(tg.optLong(t));
+                    latest.merge(id, added(v), Math::max);
+                }
+                counts.merge(id, 1, Integer::sum);
+                if (!covers.containsKey(id) || rating > coverRating.get(id)) { covers.put(id, v); coverRating.put(id, rating); }
+            }
+        }
+        Map<Long, Integer> photoCounts = new HashMap<>();
+        Map<Long, Video> photoCovers = new HashMap<>();
+        for (Video v : visiblePhotos()) {
+            JSONArray ids = meta(v).optJSONArray(field);
+            if (ids == null) continue;
+            for (int i = 0; i < ids.length(); i++) {
+                if (perf) {
+                    JSONArray tg = meta(v).optJSONArray("tags");
+                    for (int t = 0; tg != null && t < tg.length(); t++) tagsOf.computeIfAbsent(ids.optLong(i), k -> new java.util.HashSet<>()).add(tg.optLong(t));
+                    latest.merge(ids.optLong(i), added(v), Math::max);
+                }
+                photoCounts.merge(ids.optLong(i), 1, Integer::sum);
+                photoCovers.putIfAbsent(ids.optLong(i), v);
+            }
+        }
+        List<JSONObject> out = new ArrayList<>();
+        Iterator<String> it = names.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            long id = Long.parseLong(k);
+            Video cv = covers.get(id), pc = photoCovers.get(id);
+            JSONObject row = entityJson(field, id);
+            out.add(row
+                    .put("count", counts.getOrDefault(id, 0)).put("cover", cv == null ? JSONObject.NULL : cv.id)
+                    .put("photo_count", photoCounts.getOrDefault(id, 0)).put("photo_cover", pc == null ? JSONObject.NULL : pc.id));
+            if (perf) {
+                String cov = row.optString("cover_pick", "");   // 직접 고른 대표 그림: "video:123" 또는 "photo:456"
+                if (cov.startsWith("video:")) row.put("cover", parseLong(cov.substring(6), 0)).put("photo_cover", JSONObject.NULL);
+                else if (cov.startsWith("photo:")) row.put("cover", JSONObject.NULL).put("photo_cover", parseLong(cov.substring(6), 0));
+                List<Video> vs = vidsOf.getOrDefault(id, new ArrayList<>());   // 별점 높은 순 → 최근 순으로 3개
+                vs.sort((a, b) -> {
+                    int r = Integer.compare(meta(b).optInt("rating", 0), meta(a).optInt("rating", 0));
+                    return r != 0 ? r : Long.compare(added(b), added(a));
+                });
+                JSONArray frames = new JSONArray();
+                for (int i = 0; i < Math.min(3, vs.size()); i++) frames.put(vs.get(i).id);
+                row.put("frames", frames).put("tags", new JSONArray(tagsOf.getOrDefault(id, new java.util.HashSet<>()))).put("latest", latest.getOrDefault(id, 0L));
+            }
+        }
+        out.sort(Comparator.comparing(o -> o.optString("name").toLowerCase(Locale.ROOT)));
+        return new JSONArray(out);
+    }
+
+    private synchronized void replaceEntity(String field, long from, Long to) throws JSONException {
+        JSONObject vids = store.optJSONObject("videos");
+        Iterator<String> it = vids.keys();
+        while (it.hasNext()) {
+            JSONObject m = vids.optJSONObject(it.next());
+            JSONArray ids = m == null ? null : m.optJSONArray(field);
+            if (ids == null) continue;
+            JSONArray n = new JSONArray();
+            Set<Long> seen = new HashSet<>();
+            for (int i = 0; i < ids.length(); i++) {
+                long id = ids.optLong(i);
+                if (id == from) { if (to == null) continue; id = to; }
+                if (seen.add(id)) n.put(id);
+            }
+            m.put(field, n);
+        }
+        store.optJSONObject(field).remove(String.valueOf(from));
+    }
+
+    // ------------------------------------------------------------------ folders
+    private synchronized Set<String> allFolders() {
+        if (lastScan == 0) scan();
+        Set<String> out = new TreeSet<>();
+        for (Video v : all) if (!v.cloud()) out.add(v.relPath);
+        for (Video v : allPhotos) if (!v.cloud()) out.add(v.relPath);
+        // 영상·사진이 없는 폴더도 보이도록: 기기의 모든 미디어 파일이 있는 폴더 + 기본 폴더
+        try (Cursor c = ctx.getContentResolver().query(MediaStore.Files.getContentUri("external"),
+                new String[]{MediaStore.MediaColumns.RELATIVE_PATH}, null, null, null)) {
+            if (c != null) while (c.moveToNext()) { String rp = c.getString(0); if (rp != null && !rp.isEmpty()) out.add(rp); }
+        } catch (Exception ignored) {}
+        for (String d : new String[]{"DCIM/", "Pictures/", "Movies/", "Download/", "Documents/", "Music/", "Recordings/"}) out.add(d);
+        // 중간 폴더도 모두 포함 (예: DCIM/Camera/ 가 있으면 DCIM/)
+        List<String> withParents = new ArrayList<>(out);
+        for (String f : withParents) {
+            int i = f.indexOf('/');
+            while (i > 0 && i < f.length() - 1) { out.add(f.substring(0, i + 1)); i = f.indexOf('/', i + 1); }
+        }
+        return out;
+    }
+
+    private synchronized JSONObject browse(String path) throws JSONException {
+        path = nz(path);
+        if (!path.isEmpty() && !path.endsWith("/")) path += "/";
+        Set<String> children = new TreeSet<>();
+        for (String f : allFolders()) {
+            if (!f.startsWith(path) || f.equals(path)) continue;
+            String rest = f.substring(path.length());
+            int slash = rest.indexOf('/');
+            children.add(path + (slash >= 0 ? rest.substring(0, slash + 1) : rest));
+        }
+        JSONArray dirs = new JSONArray();
+        for (String c : children) {
+            String name = c.substring(path.length()).replaceAll("/$", "");
+            dirs.put(new JSONObject().put("name", name).put("path", c));
+        }
+        String parent;
+        if (path.isEmpty()) parent = null;
+        else {
+            String p = path.substring(0, path.length() - 1);
+            parent = p.contains("/") ? p.substring(0, p.lastIndexOf('/') + 1) : "";
+        }
+        JSONObject o = new JSONObject().put("path", path).put("dirs", dirs);
+        o.put("parent", parent == null ? JSONObject.NULL : parent);
+        return o;
+    }
+
+    /** 갤러리의 앨범처럼: 목록에 보이는 사진·영상을 폴더별로 묶음 (최근에 추가된 폴더 먼저, 대표 그림은 가장 최근 항목) */
+    private synchronized JSONArray albums() throws JSONException {
+        class Alb { int videos, photos; long latest = -1; Video cover; boolean coverPhoto; String source; }
+        java.util.Map<String, Alb> m = new java.util.LinkedHashMap<>();
+        for (int pass = 0; pass < 2; pass++) {
+            for (Video v : pass == 0 ? visible() : visiblePhotos()) {
+                Alb a = m.computeIfAbsent(v.relPath, k -> new Alb());
+                if (pass == 0) a.videos++; else a.photos++;
+                long t = added(v);
+                if (t > a.latest) { a.latest = t; a.cover = v; a.coverPhoto = pass == 1; a.source = v.source(); }
+            }
+        }
+        List<java.util.Map.Entry<String, Alb>> list = new ArrayList<>(m.entrySet());
+        list.sort((x, y) -> Long.compare(y.getValue().latest, x.getValue().latest));
+        JSONArray out = new JSONArray();
+        for (java.util.Map.Entry<String, Alb> e : list) {
+            Alb a = e.getValue();
+            String path = e.getKey(), trimmed = path.replaceAll("/+$", "");
+            String name = trimmed.isEmpty() ? "내장 메모리" : trimmed.substring(trimmed.lastIndexOf('/') + 1);
+            JSONObject cover = a.cover == null ? null : (a.coverPhoto ? photoSummary(a.cover) : summary(a.cover)).put("kind", a.coverPhoto ? "photo" : "video");
+            out.put(new JSONObject().put("path", path).put("name", name).put("videos", a.videos).put("photos", a.photos)
+                    .put("latest", a.latest).put("source", a.source).put("cover", cover));
+        }
+        return out;
+    }
+
+    /** 사진·영상이 들어 있는 기기 폴더와 개수 (많은 순). 처음 화면의 ‘폴더 고르기’용 */
+    private synchronized JSONArray mediaFolders() throws JSONException {
+        if (lastScan == 0) scan();
+        java.util.Map<String, int[]> m = new java.util.HashMap<>();
+        for (Video v : all) if (!v.cloud()) m.computeIfAbsent(v.relPath, k -> new int[2])[0]++;
+        for (Video v : allPhotos) if (!v.cloud()) m.computeIfAbsent(v.relPath, k -> new int[2])[1]++;
+        List<java.util.Map.Entry<String, int[]>> list = new ArrayList<>(m.entrySet());
+        list.sort((a, b) -> (b.getValue()[0] + b.getValue()[1]) - (a.getValue()[0] + a.getValue()[1]));
+        JSONArray out = new JSONArray();
+        for (java.util.Map.Entry<String, int[]> e : list)
+            out.put(new JSONObject().put("path", e.getKey()).put("videos", e.getValue()[0]).put("photos", e.getValue()[1]));
+        return out;
+    }
+
+    private synchronized JSONObject settingsJson() throws JSONException {
+        Set<String> folders = allFolders();
+        List<String> paths = storedPaths();
+        JSONArray lp = new JSONArray();
+        for (String p : paths) {
+            boolean exists = false;
+            for (String f : folders) if (f.startsWith(p)) { exists = true; break; }
+            lp.put(new JSONObject().put("path", p).put("exists", exists));
+        }
+        Set<String> top = new TreeSet<>();
+        for (String f : folders) {
+            int s = f.indexOf('/');
+            String t = s >= 0 ? f.substring(0, s + 1) : f;
+            if (!t.isEmpty() && !paths.contains(t)) top.add(t);
+        }
+        return new JSONObject().put("library_paths", lp).put("library_all", settings().optBoolean("library_all", false)).put("suggestions", new JSONArray(top))
+                .put("password_set", passwordSet()).put("data_dir", "앱 내부 저장소")
+                .put("ffmpeg", false).put("ffprobe", false).put("platform", "android")
+                .put("example_path", "DCIM/Camera/").put("lan", lanEnabled())
+                .put("mega_supported", true).put("mega", megaJson()).put("icloud", icloudJson())
+                .put("server", serverJson()).put("performer_info", true).put("photos", true)
+                .put("fav_sync", android.os.Build.VERSION.SDK_INT >= 30).put("manage_media", canManageMedia(ctx))
+                .put("manage_media_supported", android.os.Build.VERSION.SDK_INT >= 31)
+                .put("duplicates", true).put("backup", true).put("mega_refresh_hours", megaRefreshHours())
+                .put("mega_last_refresh", lastMegaRefresh / 1000).put("hidden_count", hiddenCount()).put("mega_thumbs", megaThumbsOn())
+                .put("mega_thumb_missing", megaThumbMissing()[0]).put("mega_thumb_failed", megaThumbMissing()[1]);
+    }
+
+    private synchronized int hiddenCount() {
+        int n = 0;
+        for (Video v : all) if (meta(v).optBoolean("hidden", false)) n++;
+        return n;
+    }
+
+    /** {썸네일 없는 MEGA 영상 수, 그중 만들기에 실패한 수} */
+    private synchronized int[] megaThumbMissing() {
+        int missing = 0, failed = 0;
+        for (Video v : all) {
+            if (v.node == null || megaHasThumb(v.node)) continue;
+            missing++;
+            if (meta(v).optInt("gen_fail", 0) >= GEN_MAX_FAILS) failed++;
+        }
+        return new int[]{missing, failed};
+    }
+
+    private JSONObject serverJson() throws JSONException {
+        boolean lan = lanEnabled() && passwordSet();
+        JSONArray addrs = new JSONArray();
+        return new JSONObject().put("secure_folder", ServerService.userId() != 0).put("port", ServerService.port)
+                .put("lan", lan).put("lan_addresses", addrs);
+    }
+
+    // ------------------------------------------------------------------ auth
+    static String hashPassword(String pw, String salt) {
+        try {
+            PBEKeySpec spec = new PBEKeySpec(pw.toCharArray(), salt.getBytes(StandardCharsets.UTF_8), 100_000, 256);
+            byte[] h = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).getEncoded();
+            return hex(h);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private synchronized String authToken() {
+        String ph = settings().optString("password_hash", "");
+        if (ph.isEmpty()) return null;
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(settings().optString("secret").getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            return hex(mac.doFinal(ph.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean authed(HttpServer.Request r) {
+        String cookie = r.header("cookie");
+        if (cookie == null) return false;
+        String app = appToken(), tok = authToken();
+        for (String part : cookie.split(";")) {
+            String p = part.trim();
+            // 이 앱 화면만 아는 무작위 열쇠(앱 안 WebView 에만 넣어 둠). 같은 폰의 다른 앱은 이 값을 몰라 접근할 수 없음
+            if (!app.isEmpty() && p.startsWith("vs_app=") && MessageDigest.isEqual(p.substring(7).getBytes(), app.getBytes())) return true;
+        }
+        return false;
+    }
+
+    // ------------------------------------------------------------------ HTTP routing
+    @Override
+    public void handle(HttpServer.Request r, HttpServer.Response res) throws Exception {
+        String path = r.path;
+        if (path.startsWith("/api/eh/") || path.startsWith("/eh/")) {   // 만화 탭
+            if (!authed(r)) { res.error(401, "login required"); return; }
+            Comics.get(ctx).handle(r, res);
+            return;
+        }
+        if (path.startsWith("/api/")) {
+            if (!path.equals("/api/login") && !path.equals("/api/auth") && !authed(r)) { res.error(401, "login required"); return; }
+            api(r, res, path.substring(5));
+            return;
+        }
+        if (path.startsWith("/mega-file/")) {
+            if (!authed(r)) { res.error(401, "login required"); return; }
+            String[] p = path.split("/");
+            Mega.Link l;
+            Mega.Node n;
+            synchronized (this) {
+                int i = parseInt(p.length > 2 ? p[2] : "", -1);
+                l = i >= 0 && i < megaLinks.size() ? megaLinks.get(i) : null;
+                n = l == null || p.length < 4 ? null : l.byHandle.get(p[3]);
+            }
+            if (n == null || n.folder) { res.error(404, "not found"); return; }
+            megaStream(l, n, mimeFor(ext(n.name)), r, res, "1".equals(r.param("dl")));
+            return;
+        }
+        if (path.startsWith("/photo/") || path.startsWith("/photothumb/")) {
+            if (!authed(r)) { res.error(401, "login required"); return; }
+            String[] p = path.split("/");
+            Video v;
+            synchronized (this) {
+                if (lastScan == 0) scan();
+                v = photoById.get(parseLong(p.length > 2 ? p[2].replace(".jpg", "") : "", -1));
+            }
+            if (v == null) { res.error(404, "not found"); return; }
+            if (path.startsWith("/photo/")) photoFull(v, r, res);
+            else if (v.item != null) icloudThumb(v, r, res); else photoThumb(v, r, res);
+            return;
+        }
+        if (path.startsWith("/media/") || path.startsWith("/thumbs/") || path.startsWith("/transcode/")) {
+            if (!authed(r)) { res.error(401, "login required"); return; }
+            String[] p = path.split("/");
+            if (path.startsWith("/transcode/")) { res.error(404, "이 앱에서는 실시간 변환을 지원하지 않습니다"); return; }
+            Video v;
+            synchronized (this) {
+                if (lastScan == 0) scan();
+                v = byId.get(parseLong(p.length > 2 ? p[2] : "", -1));
+            }
+            if (v == null) { res.error(404, "not found"); return; }
+            if (path.startsWith("/thumbs/") && (p.length <= 3 || p[3].startsWith("0.")) && coverFile(v).length() > 0) {   // 직접 정한 썸네일
+                res.header("Cache-Control", "no-cache");
+                res.send(200, "image/jpeg", readAll(new FileInputStream(coverFile(v))));
+                return;
+            }
+            if (path.startsWith("/media/") && v.item != null) icloudStream(v, r, res, "1".equals(r.param("dl")));
+            else if (v.item != null) icloudThumb(v, r, res);
+            else if (path.startsWith("/media/") && v.node != null) megaStream(v.link, v.node, v.mime, r, res, "1".equals(r.param("dl")));
+            else if (path.startsWith("/media/")) media(v, r, res);
+            else if (v.node != null) megaThumb(v, parseInt(p.length > 3 ? p[3].replace(".jpg", "") : "0", 0), r, res);
+            else thumb(v, parseInt(p.length > 3 ? p[3].replace(".jpg", "") : "0", 0), r, res);
+            return;
+        }
+        staticFile(path, res);
+    }
+
+    private void staticFile(String path, HttpServer.Response res) throws IOException {
+        String name = path.equals("/") || path.isEmpty() ? "index.html" : path.substring(1);
+        if (name.contains("..")) name = "index.html";
+        AssetManager am = ctx.getAssets();
+        byte[] body;
+        try {
+            body = readAll(am.open(name));
+        } catch (IOException e) {
+            name = "index.html";
+            body = readAll(am.open(name));
+        }
+        String type = name.endsWith(".js") ? "text/javascript; charset=utf-8"
+                : name.endsWith(".css") ? "text/css; charset=utf-8"
+                : name.endsWith(".woff2") ? "font/woff2"
+                : name.endsWith(".svg") ? "image/svg+xml" : "text/html; charset=utf-8";
+        if (name.endsWith(".woff2")) { res.header("Cache-Control", "max-age=31536000"); res.send(200, type, body); return; }
+        res.header("Cache-Control", "no-cache");
+        res.send(200, type, body);
+    }
+
+    private void api(HttpServer.Request r, HttpServer.Response res, String path) throws Exception {
+        String[] parts = path.split("/");
+        String m = r.method;
+        String p0 = parts.length > 0 ? parts[0] : "";
+
+        if (p0.equals("auth")) {
+            res.json(200, new JSONObject().put("required", true).put("ok", authed(r)).put("password_set", authToken() != null).toString());
+            return;
+        }
+        if (p0.equals("login") && m.equals("POST")) {   // 비밀번호 로그인은 쓰지 않음 (다른 앱이 비밀번호를 맞혀 들어오는 것을 막음)
+            if (true) { res.error(403, "이 앱에서는 비밀번호 로그인을 쓰지 않습니다"); return; }
+            JSONObject b = body(r);
+            String ph = settings().optString("password_hash", "");
+            if (!ph.isEmpty() && MessageDigest.isEqual(hashPassword(b.optString("password"), settings().optString("salt")).getBytes(), ph.getBytes())) {
+                res.header("Set-Cookie", "vs_auth=" + authToken() + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000");
+                res.json(200, "{\"ok\":true}");
+            } else res.error(403, "비밀번호가 틀렸습니다");
+            return;
+        }
+
+        if (p0.equals("videos")) {
+            if (parts.length == 1 && m.equals("GET")) { res.json(200, listVideos(r).toString()); return; }
+            Video v;
+            synchronized (this) {
+                if (lastScan == 0) scan();
+                v = byId.get(parseLong(parts.length > 1 ? parts[1] : "", -1));
+            }
+            if (v == null) { res.error(404, "not found"); return; }
+            JSONObject meta = meta(v);
+            String action = parts.length > 2 ? parts[2] : "";
+            synchronized (this) {
+                if (action.isEmpty()) {
+                    if (m.equals("GET")) { res.json(200, detail(v).toString()); return; }
+                    if (m.equals("PATCH")) {
+                        JSONObject b = body(r);
+                        if (b.has("title")) meta.put("title", b.optString("title"));
+                        if (b.has("rating")) meta.put("rating", Math.max(0, Math.min(5, b.optInt("rating"))));
+                        if (b.has("favorite")) { meta.put("favorite", b.optBoolean("favorite")); pushGalleryFavorite(v, b.optBoolean("favorite")); }
+                        if (b.has("details")) meta.put("details", b.optString("details"));
+                        if (b.has("tags")) setLinks(meta, "tags", b.optJSONArray("tags"));
+                        if (b.has("performers")) setLinks(meta, "performers", b.optJSONArray("performers"));
+                        save();
+                        res.json(200, detail(v).toString());
+                        return;
+                    }
+                    if (m.equals("DELETE")) {
+                        if ("1".equals(r.param("file"))) { res.error(400, "이 앱에서는 파일 삭제를 지원하지 않습니다. 내 파일 앱에서 지워 주세요."); return; }
+                        meta.put("hidden", true);
+                        save();
+                        res.json(200, "{\"ok\":true}");
+                        return;
+                    }
+                }
+                if (action.equals("unhide") && m.equals("POST")) {
+                    meta.remove("hidden");
+                    save();
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
+                if (action.equals("watched") && m.equals("POST")) {   // 본 시간(초) 쌓기: 영상별 + 날짜별
+                    double secs = Math.min(3600, Math.max(0, body(r).optDouble("secs", 0)));
+                    if (secs > 0) {
+                        meta.put("watch_secs", meta.optDouble("watch_secs", 0) + secs);
+                        JSONObject log = store.optJSONObject("watch_log");
+                        if (log == null) { log = new JSONObject(); store.put("watch_log", log); }
+                        String day = java.time.LocalDate.now().toString();
+                        log.put(day, log.optDouble(day, 0) + secs);
+                        save();
+                    }
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
+                if (action.equals("unplayable") && m.equals("POST")) {   // 화면에서 바로 재생할 수 없는 형식 → 숏폼에서 뺌
+                    meta.put("no_web", true);
+                    save();
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
+                if (action.equals("play") && m.equals("POST")) {
+                    meta.put("play_count", meta.optInt("play_count", 0) + 1);
+                    meta.put("last_played", System.currentTimeMillis() / 1000);
+                    save();
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
+                if (action.equals("progress") && m.equals("POST")) {
+                    JSONObject pb = body(r);
+                    meta.put("resume_pos", pb.optDouble("pos", 0));
+                    if (pb.optDouble("duration", 0) > 0) meta.put("duration", pb.optDouble("duration"));
+                    if (pb.optInt("width", 0) > 0 && pb.optInt("height", 0) > 0) { meta.put("width", pb.optInt("width")); meta.put("height", pb.optInt("height")); }
+                    save();
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
+                if (action.equals("cover")) {   // 영상 썸네일 직접 정하기 (화면에서 고른 장면 JPEG) / 되돌리기
+                    File f = coverFile(v);
+                    if (m.equals("DELETE")) {
+                        f.delete();
+                        meta.remove("cover_at");
+                        save();
+                        res.json(200, "{\"ok\":true}");
+                        return;
+                    }
+                    String img = body(r).optString("image", "");
+                    int comma = img.indexOf(',');
+                    byte[] jpg;
+                    try {
+                        jpg = android.util.Base64.decode(comma >= 0 ? img.substring(comma + 1) : img, android.util.Base64.DEFAULT);
+                    } catch (IllegalArgumentException e) {
+                        jpg = new byte[0];
+                    }
+                    if (jpg.length < 100) { res.error(400, "이미지를 받지 못했습니다"); return; }
+                    f.getParentFile().mkdirs();
+                    try (FileOutputStream o = new FileOutputStream(f)) { o.write(jpg); }
+                    meta.put("cover_at", System.currentTimeMillis() / 1000);
+                    save();
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
+                if (action.equals("thumbs") && m.equals("POST")) {
+                    if (v.node != null) {
+                        megaGenFile(v.node).delete();
+                        meta.remove("gen_fail");
+                        save();
+                        megaThumbsSoon();
+                    }
+                    File d = new File(thumbDir, String.valueOf(v.id));
+                    File[] fs = d.listFiles();
+                    if (fs != null) for (File f : fs) f.delete();
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
+                if (action.equals("markers") && m.equals("POST")) {
+                    JSONObject b = body(r);
+                    JSONArray mk = meta.optJSONArray("markers");
+                    if (mk == null) mk = new JSONArray();
+                    List<JSONObject> l = new ArrayList<>();
+                    for (int i = 0; i < mk.length(); i++) l.add(mk.optJSONObject(i));
+                    String t = b.optString("title", "");
+                    l.add(new JSONObject().put("id", nextId()).put("seconds", b.optDouble("seconds", 0))
+                            .put("title", t.length() > 200 ? t.substring(0, 200) : t));
+                    l.sort(Comparator.comparingDouble(o -> o.optDouble("seconds")));
+                    meta.put("markers", new JSONArray(l));
+                    save();
+                    res.json(200, meta.optJSONArray("markers").toString());
+                    return;
+                }
+            }
+        }
+        if (p0.equals("markers") && parts.length == 2 && m.equals("DELETE")) {
+            long id = parseLong(parts[1], -1);
+            synchronized (this) {
+                JSONObject vids = store.optJSONObject("videos");
+                Iterator<String> it = vids.keys();
+                while (it.hasNext()) {
+                    JSONObject mm = vids.optJSONObject(it.next());
+                    JSONArray mk = mm == null ? null : mm.optJSONArray("markers");
+                    if (mk == null) continue;
+                    JSONArray n = new JSONArray();
+                    for (int i = 0; i < mk.length(); i++) if (mk.optJSONObject(i).optLong("id") != id) n.put(mk.optJSONObject(i));
+                    mm.put("markers", n);
+                }
+                save();
+            }
+            res.json(200, "{\"ok\":true}");
+            return;
+        }
+
+        if (p0.equals("photos")) {
+            if (parts.length == 1 && m.equals("GET")) { res.json(200, listPhotos(r).toString()); return; }
+            Video v;
+            synchronized (this) {
+                if (lastScan == 0) scan();
+                v = photoById.get(parseLong(parts.length > 1 ? parts[1] : "", -1));
+            }
+            if (v == null) { res.error(404, "not found"); return; }
+            synchronized (this) {
+                if (m.equals("GET")) { res.json(200, photoDetail(v).toString()); return; }
+                if (m.equals("PATCH")) {
+                    JSONObject b = body(r), meta = meta(v);
+                    if (b.has("favorite")) { meta.put("favorite", b.optBoolean("favorite")); pushGalleryFavorite(v, b.optBoolean("favorite")); }
+                    if (b.has("rating")) meta.put("rating", Math.max(0, Math.min(5, b.optInt("rating"))));
+                    if (b.has("performers")) setLinks(meta, "performers", b.optJSONArray("performers"));
+                    if (b.has("tags")) setLinks(meta, "tags", b.optJSONArray("tags"));
+                    if (b.has("organized")) meta.put("organized", b.optBoolean("organized"));
+                    save();
+                    res.json(200, photoDetail(v).toString());
+                    return;
+                }
+                if (m.equals("DELETE")) {   // 목록에서 숨기기 (파일은 그대로)
+                    meta(v).put("hidden", true);
+                    save();
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
+            }
+        }
+        if (p0.equals("performers") && parts.length >= 2) {
+            if (parts.length == 2 && m.equals("PATCH")) {
+                JSONObject b = body(r);
+                JSONObject info = b.optJSONObject("info");
+                if (info != null) {
+                    long id = parseLong(parts[1], -1);
+                    synchronized (this) {
+                        if (!store.optJSONObject("performers").has(String.valueOf(id))) { res.error(404, "not found"); return; }
+                        JSONObject cur = performerInfo(id);
+                        for (String k : new String[]{"group", "real_name", "birthdate", "height", "aliases", "cover"})
+                            if (info.has(k)) cur.put(k, info.optString(k, "").trim());
+                        save();
+                    }
+                    if (!b.has("name")) { res.json(200, entityJson("performers", id).toString()); return; }
+                }
+            }
+        }
+        if (p0.equals("tags") || p0.equals("performers")) {
+            String field = p0;
+            synchronized (this) {
+                if (parts.length == 1 && m.equals("GET")) { res.json(200, listEntities(field).toString()); return; }
+                long id = parseLong(parts[1], -1);
+                JSONObject names = store.optJSONObject(field);
+                String key = String.valueOf(id);
+                if (!names.has(key)) { res.error(404, "not found"); return; }
+                if (m.equals("GET")) { res.json(200, entityJson(field, id).toString()); return; }
+                if (m.equals("PATCH")) {
+                    JSONObject pb = body(r);
+                    if (field.equals("tags") && (pb.has("parent") || pb.has("aliases"))) {   // 상위 태그·다른 이름
+                        JSONObject ti = tagInfo(id);
+                        if (pb.has("parent")) {
+                            long par = pb.optLong("parent", 0);
+                            if (par == id || (par != 0 && tagWithChildren(id).contains(par))) { res.error(400, "자기 자신이나 그 아래 태그를 상위 태그로 정할 수 없습니다"); return; }
+                            if (par == 0) ti.remove("parent"); else ti.put("parent", par);
+                        }
+                        if (pb.has("aliases")) ti.put("aliases", pb.optString("aliases", "").trim());
+                        save();
+                        if (!pb.has("name")) { res.json(200, entityJson(field, id).toString()); return; }
+                    }
+                    String nn = pb.optString("name", "").trim().replaceAll("\\s+", " ");
+                    if (nn.isEmpty()) { res.error(400, "이름이 비어 있습니다"); return; }
+                    Long other = null;
+                    Iterator<String> it = names.keys();
+                    while (it.hasNext()) {
+                        String k = it.next();
+                        if (!k.equals(key) && names.optString(k).equalsIgnoreCase(nn)) other = Long.parseLong(k);
+                    }
+                    if (other != null) {
+                        replaceEntity(field, id, other);
+                        save();
+                        res.json(200, new JSONObject().put("id", other).put("merged", true).toString());
+                    } else {
+                        names.put(key, nn);
+                        save();
+                        res.json(200, new JSONObject().put("id", id).toString());
+                    }
+                    return;
+                }
+                if (m.equals("DELETE")) {
+                    replaceEntity(field, id, null);
+                    save();
+                    res.json(200, "{\"ok\":true}");
+                    return;
+                }
+            }
+        }
+
+        if (p0.equals("icloud")) {
+            if (parts.length == 1 && m.equals("GET")) { res.json(200, icloudJson().toString()); return; }
+            if (parts.length == 1 && m.equals("POST")) {
+                ICloud.Album a;
+                try {
+                    a = ICloud.parse(body(r).optString("url"));
+                } catch (IllegalArgumentException e) {
+                    res.error(400, e.getMessage());
+                    return;
+                }
+                synchronized (this) {
+                    for (ICloud.Album x : icloudAlbums) if (x.token.equals(a.token)) { res.error(400, "이미 추가된 앨범입니다"); return; }
+                }
+                ICloud.load(a);   // 네트워크 — 잠금 밖
+                if (a.error != null) { res.error(400, a.error); return; }
+                synchronized (this) { icloudAlbums.add(a); }
+                saveICloudLinks();
+                scan();
+                res.json(200, icloudJson().toString());
+                return;
+            }
+            int idx = parts.length > 1 ? parseInt(parts[1], -1) : -1;
+            if (parts.length == 2 && m.equals("DELETE")) {
+                synchronized (this) { if (idx >= 0 && idx < icloudAlbums.size()) icloudAlbums.remove(idx); }
+                saveICloudLinks();
+                scan();
+                res.json(200, icloudJson().toString());
+                return;
+            }
+            if (parts.length == 3 && parts[2].equals("items") && m.equals("GET")) {   // 앨범 안 사진·영상
+                JSONArray items = new JSONArray();
+                synchronized (this) {
+                    if (idx < 0 || idx >= icloudAlbums.size()) { res.error(404, "not found"); return; }
+                    ICloud.Album a = icloudAlbums.get(idx);
+                    if (lastScan == 0) scan();
+                    List<Video> vs = new ArrayList<>();
+                    for (Video v : all) if (v.album == a) vs.add(v);
+                    for (Video v : allPhotos) if (v.album == a) vs.add(v);
+                    vs.sort(Comparator.comparingLong((Video v) -> v.dateAdded).reversed());
+                    for (Video v : vs) items.put((v.item.video ? summary(v) : photoSummary(v)).put("kind", v.item.video ? "video" : "photo"));
+                    res.json(200, new JSONObject().put("name", a.name).put("error", a.error == null ? JSONObject.NULL : a.error).put("items", items).toString());
+                }
+                return;
+            }
+        }
+        if (p0.equals("mega")) {
+            if (parts.length == 1 && m.equals("GET")) { res.json(200, megaJson().toString()); return; }
+            if (parts.length == 1 && m.equals("POST")) {
+                Mega.Link l;
+                try {
+                    l = Mega.parse(body(r).optString("url"));
+                } catch (IllegalArgumentException e) {
+                    res.error(400, e.getMessage());
+                    return;
+                }
+                synchronized (this) {
+                    for (Mega.Link x : megaLinks) if (x.handle.equals(l.handle)) { res.error(400, "이미 추가된 폴더입니다"); return; }
+                }
+                Mega.load(l);   // 네트워크 — 잠금 밖
+                if (l.error != null && l.nodes.isEmpty()) { res.error(400, l.error); return; }
+                synchronized (this) { megaLinks.add(l); }
+                saveMegaLinks();
+                scan();
+                megaThumbsSoon();
+                res.json(200, megaJson().toString());
+                return;
+            }
+            if (parts.length == 2 && parts[1].equals("refresh") && m.equals("POST")) {
+                refreshMega();
+                res.json(200, megaJson().toString());
+                return;
+            }
+            int idx = parts.length > 1 ? parseInt(parts[1], -1) : -1;
+            if (parts.length == 2 && m.equals("DELETE")) {
+                synchronized (this) { if (idx >= 0 && idx < megaLinks.size()) megaLinks.remove(idx); }
+                saveMegaLinks();
+                scan();
+                res.json(200, megaJson().toString());
+                return;
+            }
+            if (parts.length == 3 && parts[2].equals("browse")) {
+                JSONObject b = megaBrowse(idx, r.param("folder"));
+                if (b == null) res.error(404, "not found"); else res.json(200, b.toString());
+                return;
+            }
+        }
+        if (p0.equals("settings")) {
+            if (m.equals("PUT")) {
+                JSONObject b = body(r);
+                synchronized (this) {
+                    if (b.has("library_paths")) {
+                        JSONArray in = b.optJSONArray("library_paths");
+                        List<String> out = new ArrayList<>();
+                        for (int i = 0; in != null && i < in.length(); i++) {
+                            String s = in.optString(i).trim().replace('\\', '/');
+                            s = s.replaceFirst("^/+", "").replaceFirst("^storage/emulated/\\d+/", "");
+                            if (!s.isEmpty() && !s.endsWith("/")) s += "/";
+                            if (!s.isEmpty() && !out.contains(s)) out.add(s);
+                        }
+                        settings().put("library_paths", new JSONArray(out));
+                        lastScan = 0;
+                    }
+                    if (b.has("library_all")) { settings().put("library_all", b.optBoolean("library_all")); lastScan = 0; }
+                    save();
+                }
+                if (b.has("mega_refresh_hours")) {
+                    synchronized (this) { settings().put("mega_refresh_hours", Math.max(0, Math.min(168, b.optInt("mega_refresh_hours")))); save(); }
+                }
+                if (b.has("mega_thumbs")) {
+                    synchronized (this) { settings().put("mega_thumbs", b.optBoolean("mega_thumbs")); save(); }
+                    if (b.optBoolean("mega_thumbs")) { genPausedUntil = 0; megaThumbsSoon(); }
+                }
+                if (b.has("password")) {
+                    setPassword(b.optString("password"));
+                }
+            }
+            res.json(200, settingsJson().toString());
+            return;
+        }
+        if (p0.equals("duplicates") && m.equals("GET")) { res.json(200, duplicates().toString()); return; }
+        if (p0.equals("duplicates") && parts.length == 2 && parts[1].equals("keep") && m.equals("POST")) {
+            JSONObject b = body(r);
+            synchronized (this) {
+                if (lastScan == 0) scan();
+                Map<Long, Video> pool = "photo".equals(b.optString("kind")) ? photoById : byId;   // 사진 중복도 같은 방식
+                Video keep = pool.get(b.optLong("keep", -1));
+                JSONArray oa = b.optJSONArray("others");
+                List<Video> others = new ArrayList<>();
+                for (int i = 0; oa != null && i < oa.length(); i++) { Video o = pool.get(oa.optLong(i)); if (o != null) others.add(o); }
+                if (keep == null || others.isEmpty()) { res.error(400, "영상을 찾지 못했습니다"); return; }
+                mergeInto(keep, others);
+            }
+            res.json(200, "{\"ok\":true}");
+            return;
+        }
+        if (p0.equals("media") && m.equals("GET")) { res.json(200, listMedia(r).toString()); return; }
+        if (p0.equals("batch") && parts.length == 2 && parts[1].equals("restore") && m.equals("POST")) {
+            res.json(200, new JSONObject().put("restored", batchRestore(body(r).optJSONArray("undo"))).toString());
+            return;
+        }
+        if (p0.equals("batch") && m.equals("POST")) {   // 여러 항목 한꺼번에: /api/batch/info 또는 /api/batch
+            JSONObject b = body(r);
+            List<Video> items = batchItems(b.optJSONArray("items"));
+            if (items.isEmpty()) { res.error(400, "선택한 항목을 찾지 못했습니다"); return; }
+            if (parts.length == 2 && parts[1].equals("info")) { res.json(200, batchInfo(items).toString()); return; }
+            try {
+                int n = batchApply(items, b);
+                res.json(200, new JSONObject().put("updated", n).put("undo", lastUndo).toString());
+            } catch (JSONException e) {
+                res.error(400, e.getMessage());
+            }
+            return;
+        }
+        if (p0.equals("stats") && m.equals("GET")) { res.json(200, stats().toString()); return; }
+        if (p0.equals("saved_filters")) {   // 저장된 필터: 이름 + 종류(전체/동영상/사진) + 조건
+            JSONArray list;
+            synchronized (this) {
+                list = store.optJSONArray("saved_filters");
+                if (list == null) { list = new JSONArray(); store.put("saved_filters", list); }
+                if (m.equals("POST") && parts.length == 3 && parts[2].equals("home")) {   // 홈 화면 줄로 보이기/숨기기
+                    long id = parseLong(parts[1], -1);
+                    boolean on = body(r).optBoolean("on", true);
+                    for (int i = 0; i < list.length(); i++) {
+                        JSONObject o = list.optJSONObject(i);
+                        if (o != null && o.optLong("id") == id) { if (on) o.put("home", true); else o.remove("home"); }
+                    }
+                    save();
+                } else if (m.equals("POST") && parts.length == 3 && parts[2].equals("default")) {   // 기본 필터 지정/해제 (하나만)
+                    long id = parseLong(parts[1], -1);
+                    boolean on = body(r).optBoolean("on", true);
+                    for (int i = 0; i < list.length(); i++) {
+                        JSONObject o = list.optJSONObject(i);
+                        if (o == null) continue;
+                        if (on && o.optLong("id") == id) o.put("default", true); else o.remove("default");
+                    }
+                    save();
+                } else if (m.equals("POST")) {
+                    JSONObject b = body(r);
+                    String name = b.optString("name", "").trim();
+                    if (name.isEmpty()) { res.error(400, "이름을 입력하세요"); return; }
+                    if (name.length() > 40) name = name.substring(0, 40);
+                    JSONArray out = new JSONArray();
+                    boolean wasDefault = false, wasHome = false;
+                    for (int i = 0; i < list.length(); i++) {   // 같은 이름은 덮어씀 (기본 필터·홈 표시는 유지)
+                        JSONObject o = list.optJSONObject(i);
+                        if (o == null) continue;
+                        if (!o.optString("name").equals(name)) out.put(o);
+                        else { wasDefault = o.optBoolean("default", false); wasHome = o.optBoolean("home", false); }
+                    }
+                    JSONObject nf = new JSONObject();
+                    if (wasDefault) nf.put("default", true);
+                    if (wasHome) nf.put("home", true);
+                    out.put(nf.put("id", System.currentTimeMillis()).put("name", name)
+                            .put("type", b.optString("type", "all")).put("params", b.optString("params", "")));
+                    store.put("saved_filters", out);
+                    list = out;
+                    save();
+                } else if (m.equals("DELETE") && parts.length == 2) {
+                    long id = parseLong(parts[1], -1);
+                    JSONArray out = new JSONArray();
+                    for (int i = 0; i < list.length(); i++) {
+                        JSONObject o = list.optJSONObject(i);
+                        if (o != null && o.optLong("id") != id) out.put(o);
+                    }
+                    store.put("saved_filters", out);
+                    list = out;
+                    save();
+                }
+            }
+            res.json(200, list.toString());
+            return;
+        }
+        if (p0.equals("hidden") && m.equals("GET")) { res.json(200, hiddenVideos().toString()); return; }
+        if (p0.equals("backup") && m.equals("GET")) {
+            String day = new java.text.SimpleDateFormat("yyyyMMdd-HHmm", Locale.ROOT).format(new java.util.Date());
+            res.header("Content-Disposition", "attachment; filename=\"velvet-backup-" + day + ".json\"");
+            res.send(200, "application/json; charset=utf-8", backupJson().toString().getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        if (p0.equals("restore") && m.equals("POST")) {
+            int n;
+            try {
+                n = restore(new JSONObject(r.bodyText()));
+            } catch (JSONException e) {
+                res.error(400, e.getMessage() != null && (e.getMessage().startsWith("VidShelf") || e.getMessage().startsWith("Velvet")) ? e.getMessage() : "백업 파일을 읽지 못했습니다");
+                return;
+            }
+            new Thread(this::refreshMega).start();
+            res.json(200, new JSONObject().put("videos", n).toString());
+            return;
+        }
+        if (p0.equals("browse")) { res.json(200, browse(r.param("path")).toString()); return; }
+        if (p0.equals("folders")) { res.json(200, mediaFolders().toString()); return; }
+        if (p0.equals("albums")) { res.json(200, albums().toString()); return; }
+        if (p0.equals("scan") && m.equals("POST")) {
+            scan();
+            res.json(200, "{\"started\":true}");
+            return;
+        }
+        if (p0.equals("status")) {
+            JSONObject counts;
+            synchronized (this) {
+                long bytes = 0, favs = 0;
+                double secs = 0;
+                List<Video> vis = visible();
+                for (Video v : vis) {
+                    bytes += v.size;
+                    secs += v.duration;
+                    if (meta(v).optBoolean("favorite", false)) favs++;
+                }
+                counts = new JSONObject().put("total", vis.size()).put("bytes", bytes).put("seconds", secs).put("missing", 0).put("favorites", favs);
+            }
+            String job = lookupStatus;
+            res.json(200, new JSONObject().put("scanning", !job.isEmpty()).put("scan_found", 0).put("scan_new", 0)
+                    .put("scan_current", job)
+                    .put("mega_quota_hit", Mega.quotaHitAt > 0 && System.currentTimeMillis() - Mega.quotaHitAt < 6 * 3600_000L ? Mega.quotaHitAt / 1000 : 0)
+                    .put("mega_quota_until", Mega.quotaUntil > System.currentTimeMillis() ? Mega.quotaUntil / 1000 : 0)
+                    .put("thumb_pending", genPending).put("thumb_current", genCurrent).put("last_scan", lastScan / 1000)
+                    .put("counts", counts).toString());
+            return;
+        }
+        if (p0.equals("cleanup") && m.equals("POST")) {
+            int removed = 0;
+            synchronized (this) {
+                scan();
+                Set<String> keys = new HashSet<>();
+                for (Video v : all) keys.add(v.key);
+                JSONObject vids = store.optJSONObject("videos");
+                List<String> drop = new ArrayList<>();
+                Iterator<String> it = vids.keys();
+                while (it.hasNext()) { String k = it.next(); if (!keys.contains(k)) drop.add(k); }
+                for (String k : drop) vids.remove(k);
+                removed = drop.size();
+                save();
+            }
+            res.json(200, new JSONObject().put("removed", removed).toString());
+            return;
+        }
+        if (p0.equals("random")) {
+            List<Video> vis = visible();
+            res.json(200, vis.isEmpty() ? "{}" : new JSONObject().put("id", vis.get(new Random().nextInt(vis.size())).id).toString());
+            return;
+        }
+        res.error(404, "unknown endpoint");
+    }
+
+    // ------------------------------------------------------------------ media streaming
+    private static final Pattern RANGE = Pattern.compile("bytes=(\\d*)-(\\d*)");
+
+    private void media(Video v, HttpServer.Request r, HttpServer.Response res) throws IOException {
+        try (ParcelFileDescriptor pfd = ctx.getContentResolver().openFileDescriptor(v.uri, "r")) {
+            if (pfd == null) { res.error(404, "not found"); return; }
+            long size = pfd.getStatSize() > 0 ? pfd.getStatSize() : v.size;
+            long start = 0, end = size - 1;
+            int status = 200;
+            String range = r.header("range");
+            if (range != null) {
+                Matcher mt = RANGE.matcher(range);
+                if (mt.find()) {
+                    if (!mt.group(1).isEmpty()) {
+                        start = Long.parseLong(mt.group(1));
+                        if (!mt.group(2).isEmpty()) end = Math.min(Long.parseLong(mt.group(2)), size - 1);
+                    } else if (!mt.group(2).isEmpty()) {
+                        start = Math.max(0, size - Long.parseLong(mt.group(2)));
+                    }
+                    if (start >= size) {
+                        res.header("Content-Range", "bytes */" + size);
+                        res.start(416, 0);
+                        return;
+                    }
+                    status = 206;
+                }
+            }
+            String type = v.mime == null ? "video/mp4" : v.mime;
+            if (type.contains("matroska")) type = "video/webm";   // Chrome 은 mkv 를 webm 으로 알리면 대부분 재생
+            if (type.equals("video/quicktime")) type = "video/mp4";
+            long len = end - start + 1;
+            res.header("Content-Type", type).header("Accept-Ranges", "bytes");
+            if (status == 206) res.header("Content-Range", "bytes " + start + "-" + end + "/" + size);
+            OutputStream out = res.start(status, len);
+            if (r.method.equals("HEAD")) return;
+            try (FileInputStream in = new FileInputStream(pfd.getFileDescriptor())) {
+                FileChannel ch = in.getChannel();
+                ch.position(start);
+                byte[] buf = new byte[256 * 1024];
+                long remaining = len;
+                while (remaining > 0) {
+                    int n = in.read(buf, 0, (int) Math.min(buf.length, remaining));
+                    if (n < 0) break;
+                    out.write(buf, 0, n);
+                    remaining -= n;
+                }
+            }
+        }
+    }
+
+    private void megaStream(Mega.Link l, Mega.Node n, String mime, HttpServer.Request r, HttpServer.Response res, boolean download) throws IOException {
+        long size = n.size, start = 0, end = size - 1;
+        int status = 200;
+        String range = r.header("range");
+        if (range != null) {
+            Matcher mt = RANGE.matcher(range);
+            if (mt.find()) {
+                if (!mt.group(1).isEmpty()) {
+                    start = Long.parseLong(mt.group(1));
+                    if (!mt.group(2).isEmpty()) end = Math.min(Long.parseLong(mt.group(2)), size - 1);
+                } else if (!mt.group(2).isEmpty()) start = Math.max(0, size - Long.parseLong(mt.group(2)));
+                if (start >= size) {
+                    res.header("Content-Range", "bytes */" + size);
+                    res.start(416, 0);
+                    return;
+                }
+                status = 206;
+            }
+        }
+        if (mime.contains("matroska")) mime = "video/webm";
+        if (size == 0) { res.header("Content-Type", mime); res.start(200, 0); return; }
+        InputStream in;
+        try {
+            in = Mega.open(l, n, start, end);
+        } catch (IOException e) {
+            res.error(502, e.getMessage() == null ? "MEGA 연결 실패" : e.getMessage());
+            return;
+        }
+        try (InputStream src = in) {
+            long len = end - start + 1;
+            res.header("Content-Type", mime).header("Accept-Ranges", "bytes");
+            if (status == 206) res.header("Content-Range", "bytes " + start + "-" + end + "/" + size);
+            if (download) res.header("Content-Disposition", "attachment; filename*=UTF-8''" + java.net.URLEncoder.encode(n.name, "UTF-8").replace("+", "%20"));
+            OutputStream out = res.start(status, len);
+            if (r.method.equals("HEAD")) return;
+            byte[] buf = new byte[128 * 1024];
+            long remaining = len;
+            while (remaining > 0) {
+                int k = src.read(buf, 0, (int) Math.min(buf.length, remaining));
+                if (k < 0) break;
+                out.write(buf, 0, k);
+                remaining -= k;
+            }
+        }
+    }
+
+    private void megaThumb(Video v, int n, HttpServer.Request r, HttpServer.Response res) throws IOException {
+        if (n != 0) { res.error(404, "no frame"); return; }
+        if (v.node.thumbHandle == null && v.node.previewHandle == null) {   // 앱이 직접 만든 썸네일
+            File g = megaGenFile(v.node);
+            if (g.length() == 0) { res.error(404, "no thumbnail"); return; }
+            res.header("Cache-Control", r.param("v") != null && !"x".equals(r.param("v")) ? "max-age=86400" : "no-cache");
+            res.send(200, "image/jpeg", readAll(new FileInputStream(g)));
+            return;
+        }
+        File f = new File(new File(thumbDir, "mega"), v.node.handle + "-p.jpg");
+        if (!f.exists() || f.length() == 0) {
+            byte[] jpg = Mega.preview(v.link, v.node);
+            if (jpg == null) { res.error(404, "no thumbnail"); return; }
+            rememberPreviewSize(v, jpg);
+            f.getParentFile().mkdirs();
+            try (FileOutputStream o = new FileOutputStream(f)) { o.write(jpg); }
+        }
+        res.header("Cache-Control", "max-age=86400");
+        res.send(200, "image/jpeg", readAll(new FileInputStream(f)));
+    }
+
+    // ------------------------------------------------------------------ thumbnails
+    private void thumb(Video v, int n, HttpServer.Request r, HttpServer.Response res) throws Exception {
+        n = Math.max(0, Math.min(N_FRAMES - 1, n));
+        int size = n == 0 ? Math.max(640, thumbBucket(r)) : 640;
+        File dir = new File(thumbDir, String.valueOf(v.id));
+        File f = new File(dir, n + (size > 640 ? "-q" + size : "") + ".jpg");
+        if (!f.exists() || f.length() == 0) {
+            Bitmap bmp = null;
+            frameLock.acquire();
+            try {
+                if (n == 0) {
+                    try {
+                        bmp = ctx.getContentResolver().loadThumbnail(v.uri, new Size(size, size), null);   // 비율 유지 (세로 영상도)
+                        // 갤러리 미리보기가 요청보다 많이 작으면(흐림) 영상에서 직접 한 장 뽑음
+                        if (bmp != null && size > 640 && Math.max(bmp.getWidth(), bmp.getHeight()) < size * 0.7) { bmp.recycle(); bmp = null; }
+                    } catch (Exception ignored) {
+                    }
+                }
+                if (bmp == null) bmp = frame(v, n == 0 ? 0.2 : (n - 0.5) / (N_FRAMES - 1), n == 0 ? size : 480);
+            } finally {
+                frameLock.release();
+            }
+            if (bmp == null) { res.error(404, "no frame"); return; }
+            dir.mkdirs();
+            try (FileOutputStream o = new FileOutputStream(f)) {
+                bmp.compress(Bitmap.CompressFormat.JPEG, size > 640 ? 85 : 75, o);
+            }
+            bmp.recycle();
+        }
+        byte[] body = readAll(new FileInputStream(f));
+        res.header("Cache-Control", r.param("v") != null ? "max-age=86400" : "no-cache");
+        res.send(200, "image/jpeg", body);
+    }
+
+    private Bitmap frame(Video v, double frac) { return frame(v, frac, 480); }
+
+    private Bitmap frame(Video v, double frac, int max) {
+        MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+        try {
+            mmr.setDataSource(ctx, v.uri);
+            double dur = v.duration;
+            if (dur <= 0) {
+                String d = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                dur = d == null ? 0 : Long.parseLong(d) / 1000.0;
+            }
+            long us = (long) (dur * frac * 1_000_000);
+            Bitmap b = mmr.getScaledFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, max, max);
+            if (b == null) b = mmr.getFrameAtTime(us);
+            return b;
+        } catch (Exception e) {
+            return null;
+        } finally {
+            try { mmr.release(); } catch (Exception ignored) {}
+        }
+    }
+
+    // ------------------------------------------------------------------ utils
+    private static JSONObject body(HttpServer.Request r) {
+        try {
+            String s = r.bodyText();
+            return s.isEmpty() ? new JSONObject() : new JSONObject(s);
+        } catch (JSONException e) {
+            return new JSONObject();
+        }
+    }
+
+    static byte[] readAll(InputStream in) throws IOException {
+        try (InputStream i = in) {
+            ByteArrayOutputStream b = new ByteArrayOutputStream();
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = i.read(buf)) > 0) b.write(buf, 0, n);
+            return b.toByteArray();
+        }
+    }
+
+    private static String nz(String s) { return s == null ? "" : s; }
+
+    /** 무작위 순서용. 비슷한 숫자(예: 연속된 시각)를 넣어도 완전히 다른 순서가 나오도록 섞어서 씀 */
+    private static Random shuffleRandom(String seed) {
+        long z = parseLong(seed, 7) + 0x9E3779B97F4A7C15L;   // SplitMix64
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return new Random(z ^ (z >>> 31));
+    }
+
+    private static int parseInt(String s, int d) {
+        try { return Integer.parseInt(s.trim()); } catch (Exception e) { return d; }
+    }
+
+    private static long parseLong(String s, long d) {
+        try { return Long.parseLong(s.trim()); } catch (Exception e) { return d; }
+    }
+
+    private static Set<Long> longs(List<String> l) {
+        Set<Long> out = new HashSet<>();
+        for (String s : l) { long v = parseLong(s, -1); if (v >= 0) out.add(v); }
+        return out;
+    }
+
+    static String hex(byte[] b) {
+        StringBuilder sb = new StringBuilder();
+        for (byte x : b) sb.append(String.format("%02x", x));
+        return sb.toString();
+    }
+
+    static String randomHex(int bytes) {
+        byte[] b = new byte[bytes];
+        new SecureRandom().nextBytes(b);
+        return hex(b);
+    }
+}
