@@ -4013,7 +4013,7 @@ function backupPanel() {
     file.value = "";
   });
   return h("div", { class: "panel" }, h("h3", {}, "백업 / 복원"),
-    h("p", { class: "meta" }, "태그·별점·즐겨찾기·사람 정보·북마크·메모·클라우드 링크를 파일 하나로 저장합니다. 앱을 지웠다 다시 설치할 때 이 파일로 되살릴 수 있습니다. (비밀번호는 넣지 않습니다)"),
+    h("p", { class: "meta" }, "태그·별점·즐겨찾기·사람 정보·북마크·메모를 파일 하나로 저장합니다. 앱을 지웠다 다시 설치할 때 이 파일로 되살릴 수 있습니다. (비밀번호는 넣지 않습니다)"),
     h("p", { class: "warn" }, "백업 파일에는 MEGA 링크(열쇠 포함)가 들어 있으니 다른 사람에게 보내지 마세요."),
     h("div", { class: "row" },
       h("a", { class: "btn primary", href: "/api/backup", download: "vidshelf-backup.json" }, "백업 파일 저장 (Download 폴더)"),
