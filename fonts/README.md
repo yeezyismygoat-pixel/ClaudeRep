@@ -5,7 +5,7 @@ Canva에서 PPTX를 불러오면 같은 이름의 글꼴로 바로 연결돼요.
 
 | 역할 | Canva 글꼴 이름 | 파일 |
 |---|---|---|
-| 제목, 표지 훅, 샘플 카드 곡명, 팔로우 버튼 | Jua (주아) | Jua-Regular.ttf |
+| 제목, 표지 훅, 샘플·게스트 카드 이름, 팔로우 버튼 | Sunflower (Bold) | Sunflower-Bold.ttf |
 | 본문, 말풍선, 보조 정보 | Noto Sans KR (Regular) | NotoSansKR-Regular.ttf |
 | 강조, 라벨, 곡 제목, 7장 제목 | Noto Sans KR (Bold) | NotoSansKR-Bold.ttf |
 | 타일러 인용 | Nanum Myeongjo (Bold) | NanumMyeongjo-Bold.ttf |
