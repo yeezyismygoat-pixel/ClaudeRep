@@ -1,18 +1,14 @@
-# #002 IGOR 덱 폰트 (Canva 업로드용)
+# #002 IGOR 덱 폰트 (Canva용)
 
-Canva는 PPTX 안에 넣은 폰트를 쓰지 않고, 같은 이름의 폰트를 자기 라이브러리에서 찾습니다.
-Canva에서 아래 폰트가 검색되지 않으면 이 폴더의 파일을 **브랜드 키트 → 글꼴 업로드**(Canva Pro 이상)로 올리세요.
-업로드하면 덱에 적힌 이름 그대로 연결됩니다.
+덱의 모든 글자는 **Canva 글꼴 목록에 있는 Google 무료 글꼴** 세 가지만 씁니다.
+Canva에서 PPTX를 불러오면 같은 이름의 글꼴로 바로 연결돼요. 혹시 글꼴이 바뀌어 보이면 이 폴더의 파일을 **브랜드 키트 → 글꼴 업로드**(Canva Pro)로 올리세요.
 
-| 파일 | Canva에 표시될 이름 | 덱에서 쓰는 곳 |
+| 역할 | Canva 글꼴 이름 | 파일 |
 |---|---|---|
-| NanumSquareRoundEB.ttf | NanumSquareRound ExtraBold | 제목, 표지 훅, 샘플 카드 곡명, 팔로우 버튼 |
-| Pretendard-Regular.ttf / Pretendard-Bold.ttf | Pretendard | 본문 / 본문 강조 |
-| Pretendard-Medium.ttf | Pretendard Medium | 말풍선, 보조 정보, 페이지 번호 |
-| Pretendard-SemiBold.ttf | Pretendard SemiBold | 라벨, 곡 제목 |
-| Pretendard-ExtraBold.ttf | Pretendard ExtraBold | 7장 플레이리스트 제목 |
-| NanumMyeongjoBold.ttf | NanumMyeongjo (Bold) | 타일러 인용 |
+| 제목, 표지 훅, 샘플 카드 곡명, 팔로우 버튼 | Jua (주아) | Jua-Regular.ttf |
+| 본문, 말풍선, 보조 정보 | Noto Sans KR (Regular) | NotoSansKR-Regular.ttf |
+| 강조, 라벨, 곡 제목, 7장 제목 | Noto Sans KR (Bold) | NotoSansKR-Bold.ttf |
+| 타일러 인용 | Nanum Myeongjo (Bold) | NanumMyeongjo-Bold.ttf |
 
-라이선스: 세 글꼴 모두 SIL Open Font License 1.1 (상업적 사용 가능, 폰트 파일 자체 판매 금지).
-- Pretendard: https://github.com/orioncactus/pretendard
-- 나눔스퀘어라운드, 나눔명조: 네이버 나눔글꼴 (https://hangeul.naver.com)
+라이선스: 모두 SIL Open Font License 1.1 (OFL-*.txt 참고). 출처: Google Fonts (github.com/google/fonts).
+Noto Sans KR 파일은 Google Fonts의 가변 글꼴에서 Regular(400)·Bold(700)를 고정 굵기로 뽑은 것입니다.
