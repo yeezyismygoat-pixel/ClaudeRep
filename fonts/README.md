@@ -1,14 +1,14 @@
-# #002 IGOR 덱 폰트 (Canva용)
+# #002 IGOR 덱 폰트
 
-덱의 모든 글자는 **Canva 글꼴 목록에 있는 Google 무료 글꼴** 세 가지만 씁니다.
-Canva에서 PPTX를 불러오면 같은 이름의 글꼴로 바로 연결돼요. 혹시 글꼴이 바뀌어 보이면 이 폴더의 파일을 **브랜드 키트 → 글꼴 업로드**(Canva Pro)로 올리세요.
+모든 글꼴은 PPTX 안에 내장돼 있어서, 글꼴이 없는 PC의 PowerPoint에서 열어도 그대로 보여요.
+(Canva 편집은 고려하지 않은 버전이에요.)
 
-| 역할 | Canva 글꼴 이름 | 파일 |
+| 역할 | 글꼴 | 파일 |
 |---|---|---|
-| 제목, 표지 훅, 샘플·게스트 카드 이름, 팔로우 버튼 | Sunflower (Bold) | Sunflower-Bold.ttf |
-| 본문, 말풍선, 보조 정보 | Noto Sans KR (Regular) | NotoSansKR-Regular.ttf |
-| 강조, 라벨, 곡 제목, 7장 제목 | Noto Sans KR (Bold) | NotoSansKR-Bold.ttf |
-| 타일러 인용 | Nanum Myeongjo (Bold) | NanumMyeongjo-Bold.ttf |
+| 제목, 표지 훅, 샘플 카드 곡 이름, "IGOR는 누구?" | Sunflower Bold | Sunflower-Bold.ttf (이 폴더) |
+| 본문, 말풍선(iOS 문자 느낌), 라벨 | Pretendard (Medium·SemiBold·ExtraBold) | github.com/orioncactus/pretendard |
+| 2장 아래 문구, 타일러 인용 | Nanum Myeongjo Bold | NanumMyeongjo-Bold.ttf (이 폴더) |
+| 10장 팔로우 문구 | 210 키위바나나 | YSJ가 올린 수정본에 있던 글꼴 (재배포 안 함) |
 
-라이선스: 모두 SIL Open Font License 1.1 (OFL-*.txt 참고). 출처: Google Fonts (github.com/google/fonts).
-Noto Sans KR 파일은 Google Fonts의 가변 글꼴에서 Regular(400)·Bold(700)를 고정 굵기로 뽑은 것입니다.
+라이선스: Sunflower, Nanum Myeongjo, Pretendard 모두 SIL Open Font License 1.1 (이 폴더의 OFL-*.txt, Pretendard는 원 저장소 LICENSE 참고).
+210 키위바나나는 YSJ 쪽 파일에서 가져와 덱에만 내장했어요. 사용 조건은 210 글꼴 약관을 따르세요.
